@@ -109,6 +109,16 @@ func (t alertTexts) probe(kind, e string) string {
 	return t.pick(fmt.Sprintf("کاوش %s به پورت خودِ تونل ناموفق: %s", kind, e), fmt.Sprintf("%s probe to the tunnel's own port failed: %s", kind, e))
 }
 
+func (t alertTexts) frontFallback(path string, fallbacks, fails int64) string {
+	return t.pick(fmt.Sprintf("مسیر %s از Reality به tls برگشت (%d بار بازگشت، %d شکست reality) — شاید Reality مسدود شده یا کلیدها ناهمخوان‌اند", path, fallbacks, fails),
+		fmt.Sprintf("path %s fell back from reality to tls (%d fallbacks, %d reality failures) — reality blocked or a key mismatch?", path, fallbacks, fails))
+}
+
+func (t alertTexts) realityTarget(target, e string) string {
+	return t.pick(fmt.Sprintf("هدف Reality %s در دسترس نیست: %s — کاوشگرها به‌جای سایت واقعی به بن‌بست می‌خورند", target, e),
+		fmt.Sprintf("reality target %s is down: %s — probes get a dead end instead of the real site", target, e))
+}
+
 func (t alertTexts) test() string {
 	return t.pick("پیام آزمایشی hs2 alert — ارسال کار می‌کند", "hs2 alert test message — delivery works")
 }

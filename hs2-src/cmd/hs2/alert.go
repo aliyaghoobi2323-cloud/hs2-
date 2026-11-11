@@ -387,6 +387,17 @@ func collectAlertSnap(cfg alertCfg, cfgPath, unit string, now time.Time) alertSn
 	if (cfg.Probe == "tcp" || cfg.Probe == "tls") && listensHere(fc) {
 		s.ProbeMs, s.ProbeErr = probeOwn(cfg.Probe, fc.Addr)
 	}
+	if ts := realityTargetsOf(fc); len(ts) > 0 && s.Active == "active" {
+		s.TargetErr = map[string]string{}
+		for _, t := range ts {
+			s.TargetErr[t] = ""
+			if c, err := net.DialTimeout("tcp", t, 4*time.Second); err != nil {
+				s.TargetErr[t] = err.Error()
+			} else {
+				c.Close()
+			}
+		}
+	}
 	return s
 }
 

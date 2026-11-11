@@ -142,6 +142,7 @@ type fakeOps struct {
 	mu        sync.Mutex
 	t         time.Time
 	restarts  int
+	reloads   int
 	isActive  func(restarts int) bool
 	panic     bool
 	link      int
@@ -152,6 +153,7 @@ type fakeOps struct {
 }
 
 func (f *fakeOps) restart(string) error { f.mu.Lock(); f.restarts++; f.mu.Unlock(); return nil }
+func (f *fakeOps) reload(string) error  { f.mu.Lock(); f.reloads++; f.mu.Unlock(); return nil }
 func (f *fakeOps) active(string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

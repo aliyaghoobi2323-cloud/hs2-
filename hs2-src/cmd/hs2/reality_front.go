@@ -3,15 +3,12 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -148,13 +145,23 @@ func tunnelDialer(fc fileConfig, key []byte) engine.LinkDialer {
 	return d
 }
 
-// realityCmd: hs2 reality keygen | check-target host:443 [sni]
+const realityUsage = "usage: hs2 reality keygen | check-target host[:443] [server_name] | targets [--add h,h] | status -u U | front -u U --ip IP tls|reality|both [--target host:443] | rotate-key -u U (--ip IP|--all)"
+
+// realityCmd: hs2 reality keygen | check-target | targets | status | front | rotate-key
 func realityCmd(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: hs2 reality keygen | hs2 reality check-target host:443 [server_name]")
+		fmt.Println(realityUsage)
 		os.Exit(2)
 	}
 	switch args[0] {
+	case "front", "rotate-key":
+		os.Exit(realityFrontCmd(args[0], args[1:]))
+	case "status":
+		os.Exit(realityStatusCmd(args[1:]))
+	case "targets":
+		os.Exit(realityTargetsCmd(args[1:]))
+	case "--supported":
+		fmt.Println("front rotate-key status targets check-target keygen")
 	case "keygen":
 		priv, pub, err := tlscarrier.RealityKeygen()
 		must(err)
@@ -162,91 +169,9 @@ func realityCmd(args []string) {
 		rand.Read(sid)
 		fmt.Printf("private_key: %s   (listening side only, never share)\npublic_key:  %s   (dialing side)\nshort_id:    %s\n", priv, pub, hex.EncodeToString(sid))
 	case "check-target":
-		if len(args) < 2 {
-			fmt.Println("usage: hs2 reality check-target host:443 [server_name]")
-			os.Exit(2)
-		}
-		target := args[1]
-		if !strings.Contains(target, ":") {
-			target += ":443"
-		}
-		host, _, _ := net.SplitHostPort(target)
-		sni := host
-		if len(args) > 2 {
-			sni = args[2]
-		}
-		os.Exit(checkTarget(target, sni))
+		os.Exit(realityCheckTargetCmd(args[1:]))
 	default:
-		fmt.Println("usage: hs2 reality keygen | hs2 reality check-target host:443 [server_name]")
+		fmt.Println(realityUsage)
 		os.Exit(2)
 	}
-}
-
-// checkTarget reports what matters for a reality target: TLS 1.3, X25519,
-// ALPN h2, the certificate's names, a redirect, handshake time, and whether
-// it sits on a multi-tenant CDN.
-func checkTarget(target, sni string) int {
-	bad := 0
-	if cdn := multiTenantCDN(sni); cdn != "" {
-		fmt.Printf("BAD   %s looks like %s (multi-tenant CDN)\n", sni, cdn)
-		bad++
-	}
-	t0 := time.Now()
-	d := &net.Dialer{Timeout: 8 * time.Second}
-	c, err := tls.DialWithDialer(d, "tcp", target, &tls.Config{ServerName: sni, NextProtos: []string{"h2", "http/1.1"},
-		CurvePreferences: []tls.CurveID{tls.X25519}, MinVersion: tls.VersionTLS12, InsecureSkipVerify: true})
-	if err != nil {
-		fmt.Printf("BAD   TLS to %s (sni %s): %v\n", target, sni, err)
-		return 1
-	}
-	defer c.Close()
-	hs := time.Since(t0)
-	cs := c.ConnectionState()
-	if cs.Version == tls.VersionTLS13 {
-		fmt.Println("OK    TLS 1.3")
-	} else {
-		fmt.Printf("BAD   TLS version %x (need 1.3)\n", cs.Version)
-		bad++
-	}
-	fmt.Println("OK    X25519 accepted (offered alone)")
-	fmt.Printf("INFO  ALPN %q\n", cs.NegotiatedProtocol)
-	if len(cs.PeerCertificates) > 0 {
-		crt := cs.PeerCertificates[0]
-		fmt.Printf("INFO  cert SANs %v, issuer %q, chain %d certs\n", crt.DNSNames, crt.Issuer.CommonName, len(cs.PeerCertificates))
-		if err := crt.VerifyHostname(sni); err != nil {
-			fmt.Printf("BAD   certificate does not cover %s (%v)\n", sni, err)
-			bad++
-		} else {
-			fmt.Printf("OK    certificate covers %s\n", sni)
-		}
-		inter := x509.NewCertPool()
-		for _, x := range cs.PeerCertificates[1:] {
-			inter.AddCert(x)
-		}
-		if _, err := crt.Verify(x509.VerifyOptions{DNSName: sni, Intermediates: inter}); err != nil {
-			fmt.Printf("WARN  chain does not verify against the system roots: %v\n", err)
-		} else {
-			fmt.Println("OK    chain verifies against the system roots")
-		}
-	}
-	fmt.Printf("INFO  handshake %v\n", hs.Round(time.Millisecond))
-	c.SetDeadline(time.Now().Add(8 * time.Second))
-	if cs.NegotiatedProtocol != "h2" {
-		fmt.Fprintf(c, "HEAD / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n", sni)
-		b := make([]byte, 2048)
-		n, _ := c.Read(b)
-		head := string(b[:n])
-		if i := strings.Index(head, "\r\n"); i > 0 {
-			fmt.Printf("INFO  HTTP %s\n", head[:i])
-		}
-		for _, l := range strings.Split(head, "\r\n") {
-			if strings.HasPrefix(strings.ToLower(l), "location:") {
-				fmt.Printf("INFO  redirect %s\n", strings.TrimSpace(l[9:]))
-			}
-		}
-	}
-	if bad > 0 {
-		return 1
-	}
-	return 0
 }

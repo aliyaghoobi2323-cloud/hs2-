@@ -32,7 +32,7 @@ import (
 )
 
 // alertRuleNames are the alert kinds `disable=` / `hs2 alert rule` accept.
-var alertRuleNames = []string{"unit", "restart", "panic", "dead", "links", "ipcut", "flap", "rtt", "psi", "cert", "probe"}
+var alertRuleNames = []string{"unit", "restart", "panic", "dead", "links", "ipcut", "flap", "rtt", "psi", "cert", "probe", "fallback", "rtarget"}
 
 // summaryItemNames are the parts of the daily summary, in order.
 var summaryItemNames = []string{"users", "mbit", "rtt", "cuts", "restarts", "alerts"}

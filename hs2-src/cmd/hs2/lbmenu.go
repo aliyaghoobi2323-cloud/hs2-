@@ -818,7 +818,12 @@ func withOwnList(b []byte, fc fileConfig, f func([]lbIP) ([]lbIP, error)) ([]byt
 	}
 	lb.Enabled = true
 	m["lb"] = lb
-	return marshalConfig(m)
+	out, err := marshalConfig(m)
+	if err != nil {
+		return nil, err
+	}
+	// lbIP's front never marshals its private key: keep the file's.
+	return keepPrivateKeys(b, out), nil
 }
 
 func loadConfigMap(b []byte) (map[string]any, error) {
@@ -842,7 +847,7 @@ func lbChangeCmd(sub string, args []string) int {
 	sni := fs.String("sni", "", "add-ip: SNI on this IP (TLS)")
 	cert := fs.String("cert", "", "add-ip: certificate on this IP (listening side)")
 	key := fs.String("key", "", "add-ip: key on this IP")
-	front := fs.String("front", "tls", "add-ip: front on this IP (tls; reality arrives in M5)")
+	front := fs.String("front", "tls", "add-ip: front on this IP (tls; then hs2 reality front … for reality / both)")
 	equal := fs.Bool("equal", false, "weights: split equally")
 	hours := fs.Float64("hours", 0, "park: hours")
 	sweep := fs.Bool("sweep", false, "park: restore expired parks (the timer)")
@@ -884,7 +889,7 @@ func lbChangeCmd(sub string, args []string) int {
 			return 1
 		}
 		if *front != "tls" {
-			fmt.Println(tr("ERROR: --front: only tls for now (Reality per IP arrives in menu M5)", "خطا: --front: فعلاً فقط tls (Reality برای هر IP در M5 می‌آید)"))
+			fmt.Println(tr("ERROR: --front: add the IP with tls, then switch it with zero downtime: hs2 reality front -u U --ip IP reality --target HOST:443", "خطا: --front: IP را با tls اضافه کنید، سپس بدون قطعی عوض کنید: hs2 reality front -u U --ip IP reality --target HOST:443"))
 			return 1
 		}
 		if (*cert == "") != (*key == "") {

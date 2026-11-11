@@ -66,6 +66,10 @@ type applyState struct {
 	Bilateral  []string `json:"bilateral,omitempty"`
 	Timer      string   `json:"timer,omitempty"`
 	Summary    string   `json:"summary,omitempty"`
+	// Reload (menu M5): the change is applied (and rolled back) with a
+	// reload (SIGHUP: lb section and per-IP fronts) instead of a restart,
+	// so established links keep running.
+	Reload bool `json:"reload,omitempty"`
 }
 
 func (s *applyState) live() bool {
@@ -75,6 +79,7 @@ func (s *applyState) live() bool {
 // sysOps is everything the state machine does to the host (tests fake it).
 type sysOps interface {
 	restart(unit string) error
+	reload(unit string) error
 	active(unit string) bool
 	panicked(unit string, since time.Time) bool
 	links(cfg string, since time.Time) int
@@ -92,6 +97,15 @@ func (realOps) restart(u string) error {
 	out, err := exec.Command("systemctl", "restart", u).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemctl restart %s: %v %s", u, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+func (realOps) reload(u string) error {
+	out, err := exec.Command("systemctl", "reload", u).CombinedOutput()
+	if err != nil {
+		if o2, e2 := exec.Command("systemctl", "kill", "-s", "HUP", "--kill-who=main", u).CombinedOutput(); e2 != nil {
+			return fmt.Errorf("systemctl reload %s: %v %s / kill -HUP: %v %s", u, err, strings.TrimSpace(string(out)), e2, strings.TrimSpace(string(o2)))
+		}
 	}
 	return nil
 }
@@ -281,6 +295,8 @@ type applyReq struct {
 	// (file name -> content; nil = unchanged). Presets, feature toggles and
 	// CPUAffinity are drop-ins; a rollback restores the snapshot's set.
 	NewDropins map[string]string
+	// Reload: apply with a reload instead of a restart (see applyState.Reload).
+	Reload bool
 }
 
 // startApply does the caller's part: snapshot, write, hand over to the
@@ -339,7 +355,7 @@ func startApply(ops sysOps, r applyReq) (applyState, []diffEntry, error) {
 		*s = applyState{Unit: cleanUnit(r.Unit), Cfg: r.Cfg, State: stRestarting, From: from.N, To: to.N,
 			Started: now.Unix(), Deadline: now.Add(r.Within).Unix(), HealthGate: r.HealthGate,
 			Reason: r.Reason, Who: who, TTY: tty, Bilateral: bilateralOf(d), Summary: diffSummary(d),
-			Timer: "hs2-apply-expire-" + cleanUnit(r.Unit) + "-" + ts}
+			Timer: "hs2-apply-expire-" + cleanUnit(r.Unit) + "-" + ts, Reload: r.Reload && r.NewDropins == nil}
 		st = *s
 		return nil
 	})
@@ -377,7 +393,11 @@ func runWorker(ops sysOps, unit string) {
 		return
 	}
 	since := ops.now()
-	if err := ops.restart(st.Unit); err != nil {
+	act := ops.restart
+	if st.Reload {
+		act = ops.reload
+	}
+	if err := act(st.Unit); err != nil {
 		doRollback(ops, st.Unit, "restart failed: "+err.Error())
 		return
 	}
@@ -454,7 +474,7 @@ func doRollback(ops sysOps, unit, why string) {
 		return
 	}
 	res := tr("rolled back", "برگردانده شد")
-	if err := restoreVersion(ops, st.Unit, st.Cfg, st.From, "rollback-"+strconv.Itoa(st.From)); err != nil {
+	if err := restoreVersionMode(ops, st.Unit, st.Cfg, st.From, "rollback-"+strconv.Itoa(st.From), st.Reload); err != nil {
 		res = "rollback FAILED: " + err.Error()
 		withState(unit, func(s *applyState) error { s.State, s.Detail = stFailed, why+"; "+res; return nil })
 	}
@@ -464,6 +484,12 @@ func doRollback(ops sysOps, unit, why string) {
 
 // restoreVersion writes version n back (config + drop-ins) and restarts.
 func restoreVersion(ops sysOps, unit, cfg string, n int, reason string) error {
+	return restoreVersionMode(ops, unit, cfg, n, reason, false)
+}
+
+// restoreVersionMode: restoreVersion that reloads instead of restarting when
+// reload is set and the drop-ins did not change.
+func restoreVersionMode(ops sysOps, unit, cfg string, n int, reason string, reload bool) error {
 	v, err := findVersion(unit, n)
 	if err != nil {
 		return err
@@ -479,8 +505,12 @@ func restoreVersion(ops sysOps, unit, cfg string, n int, reason string) error {
 		return err
 	} else if changed {
 		ops.daemonReload()
+		reload = false
 	}
 	saveVersion(unit, b, readDropins(unit), reason, ops.now())
+	if reload {
+		return ops.reload(unit)
+	}
 	return ops.restart(unit)
 }
 

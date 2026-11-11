@@ -17,25 +17,27 @@ import (
 // alertStatus is the part of the daemon's status JSON the rules read. Only the
 // fields used here; an older/newer daemon simply leaves some empty.
 type alertStatus struct {
-	Role     string            `json:"role"`
-	Links    int               `json:"links"`
-	Target   int               `json:"target"`
-	Serving  *int              `json:"serving,omitempty"`
-	Users    int               `json:"users"`
-	Phase    string            `json:"phase"`
-	Retiring int               `json:"retiring,omitempty"`
-	Mbit     float64           `json:"mbit"`
-	PeakMbit float64           `json:"peak_mbit,omitempty"`
-	CertDays *int              `json:"cert_days,omitempty"`
-	PID      int               `json:"pid"`
-	Updated  int64             `json:"updated"`
-	RTTp50   float64           `json:"obs_ctrl_rtt_p50_ms,omitempty"`
-	RTTp99   float64           `json:"obs_ctrl_rtt_p99_ms,omitempty"`
-	Paths    []alertPath       `json:"lb_paths,omitempty"`
-	Total    *alertPath        `json:"lb_total,omitempty"`
-	Restarts *int              `json:"restarts,omitempty"` // if a daemon ever reports them
-	Panics   *int              `json:"panics,omitempty"`
-	Extra    map[string]string `json:"-"`
+	Role     string      `json:"role"`
+	Links    int         `json:"links"`
+	Target   int         `json:"target"`
+	Serving  *int        `json:"serving,omitempty"`
+	Users    int         `json:"users"`
+	Phase    string      `json:"phase"`
+	Retiring int         `json:"retiring,omitempty"`
+	Mbit     float64     `json:"mbit"`
+	PeakMbit float64     `json:"peak_mbit,omitempty"`
+	CertDays *int        `json:"cert_days,omitempty"`
+	PID      int         `json:"pid"`
+	Updated  int64       `json:"updated"`
+	RTTp50   float64     `json:"obs_ctrl_rtt_p50_ms,omitempty"`
+	RTTp99   float64     `json:"obs_ctrl_rtt_p99_ms,omitempty"`
+	Paths    []alertPath `json:"lb_paths,omitempty"`
+	Total    *alertPath  `json:"lb_total,omitempty"`
+	Restarts *int        `json:"restarts,omitempty"` // if a daemon ever reports them
+	Panics   *int        `json:"panics,omitempty"`
+	// menu M5: the dialing side's per-path fronts ("both" fallback state)
+	FrontPaths []frontPathStatus `json:"front_paths,omitempty"`
+	Extra      map[string]string `json:"-"`
 }
 
 type alertPath struct {
@@ -95,6 +97,9 @@ type alertSnap struct {
 	CertDays  int          // -1 = no cert / unknown
 	ProbeMs   float64      // light probe, ms (0 = not run)
 	ProbeErr  string       // light probe failure
+	// TargetErr (menu M5): the listening side's reality / both targets ->
+	// "" reachable, else the dial error (nil = none configured / not checked).
+	TargetErr map[string]string
 }
 
 type panicLine struct {
@@ -147,7 +152,8 @@ type alertState struct {
 	Day       alertDay                `json:"day"`
 	LastSum   string                  `json:"last_summary"` // YYYY-MM-DD
 	LastCheck int64                   `json:"last_check"`
-	Recent    []string                `json:"recent,omitempty"` // last messages (for the menu)
+	Recent    []string                `json:"recent,omitempty"`   // last messages (for the menu)
+	FrontFB   map[string]int64        `json:"front_fb,omitempty"` // "both" path -> fallbacks counter seen last
 }
 
 type activeAlert struct {
@@ -194,6 +200,9 @@ func (st *alertState) fill(now time.Time) {
 	}
 	if st.RTTAt == nil {
 		st.RTTAt = map[string]int64{}
+	}
+	if st.FrontFB == nil {
+		st.FrontFB = map[string]int64{}
 	}
 	if st.Day.Since == 0 {
 		st.Day.Since = now.Unix()
@@ -410,6 +419,29 @@ func evalAlerts(cfg alertCfg, st *alertState, s alertSnap) []alertMsg {
 		} else {
 			keep("probe")
 		}
+	}
+
+	// 6. reality front (menu M5): a "both" path that fell back to tls (or
+	// whose fallback counter jumps), and a reality target that is down.
+	if s.Status != nil && active {
+		for _, p := range s.Status.FrontPaths {
+			if p.Both == nil {
+				continue
+			}
+			prev, had := st.FrontFB[p.Path]
+			st.FrontFB[p.Path] = p.Both.Fallbacks
+			spike := had && p.Both.Fallbacks-prev >= 2
+			cond("fallback:"+p.Path, p.Both.Mode == "tls" || spike, 1, sevWarn, tx.frontFallback(p.Path, p.Both.Fallbacks, p.Both.RealityFail))
+		}
+	} else {
+		keep("fallback:")
+	}
+	if s.TargetErr != nil {
+		for t, e := range s.TargetErr {
+			cond("rtarget:"+t, e != "", 2, sevWarn, tx.realityTarget(t, e))
+		}
+	} else {
+		keep("rtarget:")
 	}
 
 	// Keys that are active but were not evaluated at all this round (a path

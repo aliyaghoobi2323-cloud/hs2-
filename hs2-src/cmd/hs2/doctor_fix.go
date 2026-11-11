@@ -30,7 +30,7 @@ import (
 )
 
 // doctorCats are the categories the menu can run one by one.
-var doctorCats = []string{"network", "cpu", "tunnel", "reality", "panel"}
+var doctorCats = []string{"network", "cpu", "tunnel", "front", "reality", "panel"}
 
 // fixAction is one safe automatic fix attached to a finding.
 type fixAction struct {

@@ -147,8 +147,9 @@ func runDeep(env *deepEnv) []finding {
 	t0 := time.Now()
 
 	var wg sync.WaitGroup
-	var pathF, xuiF, hs2F, realF, monF []finding
-	wg.Add(5)
+	var pathF, xuiF, hs2F, realF, monF, frontF []finding
+	wg.Add(6)
+	go func() { defer wg.Done(); frontF = doctorFrontFindings(statuses) }()
 	go func() { defer wg.Done(); pathF = checkPaths(env, statuses) }()
 	go func() { defer wg.Done(); xuiF = checkXUI(env) }()
 	go func() { defer wg.Done(); hs2F = checkHS2Health(env, statuses) }()
@@ -178,6 +179,7 @@ func runDeep(env *deepEnv) []finding {
 	out = append(out, setCat(monF, "tunnel")...)
 	out = append(out, setCat(checkCerts(env, time.Now()), "tunnel")...)
 	out = append(out, setCat(pathF, "network")...)
+	out = append(out, setCat(frontF, "front")...)
 	out = append(out, setCat(realF, "reality")...)
 	out = append(out, setCat(xuiF, "panel")...)
 	return out

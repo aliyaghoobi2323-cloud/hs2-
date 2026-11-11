@@ -617,6 +617,12 @@ func joinUpdate(s tunnelSpec, within time.Duration, yes, dry bool) int {
 
 // safeApplyNew: diff, bilateral warning, SSH guard, then M1's safe apply.
 func safeApplyNew(unit, path string, cur, nb []byte, reason string, within time.Duration, yes, dry bool) int {
+	return safeApplyMode(unit, path, cur, nb, reason, within, yes, dry, false)
+}
+
+// safeApplyMode: safeApplyNew that applies (and rolls back) with a reload
+// instead of a restart when reload is set (menu M5: per-IP fronts).
+func safeApplyMode(unit, path string, cur, nb []byte, reason string, within time.Duration, yes, dry, reload bool) int {
 	d, err := semanticDiff(cur, nb, nil, nil)
 	if err != nil {
 		fmt.Println("ERROR: " + err.Error())
@@ -659,7 +665,10 @@ func safeApplyNew(unit, path string, cur, nb []byte, reason string, within time.
 			return 3
 		}
 	}
-	st, _, err := startApply(realOps{}, applyReq{Unit: unit, Cfg: path, Reason: reason, New: nb, Within: within, HealthGate: true})
+	if reload {
+		fmt.Println(tr("Applied with a reload: established links keep running, new links use the change.", "با reload اعمال می‌شود: لینک‌های برقرار ادامه می‌دهند، لینک‌های تازه تغییر را می‌گیرند."))
+	}
+	st, _, err := startApply(realOps{}, applyReq{Unit: unit, Cfg: path, Reason: reason, New: nb, Within: within, HealthGate: true, Reload: reload})
 	if err != nil {
 		fmt.Println("ERROR: " + err.Error())
 		return 1
