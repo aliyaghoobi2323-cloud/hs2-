@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -168,7 +169,7 @@ func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, erro
 // keeps a dial's SYNs close together (the kernel spaces a hanging connect's
 // retransmits 1, 2, 4 s apart), for a caller that retries anyway.
 func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration) (*Carrier, error) {
-	return dialTLS(addr, sni, sharedKey, bindIP, connect, nil)
+	return dialTLS(addr, sni, sharedKey, bindIP, connect, nil, nil)
 }
 
 // ErrTargetAnswered: a tls dial to a reality-capable listener got the
@@ -181,7 +182,7 @@ var ErrTargetAnswered = errors.New("tlscarrier: tls dial answered by the reality
 // dialTLS is DialFromTimeout; targetNames (the path's reality server_names,
 // nil for a plain tls path) make a certificate for one of them that is not
 // for sni fail the handshake with ErrTargetAnswered.
-func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, targetNames []string) (*Carrier, error) {
+func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, targetNames []string, peerNames func() []string) (*Carrier, error) {
 	d := net.Dialer{Timeout: connect}
 	if bindIP != "" {
 		ip := net.ParseIP(bindIP)
@@ -209,6 +210,16 @@ func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Dur
 	cfg := &utls.Config{ServerName: sni, InsecureSkipVerify: true}
 	if len(targetNames) > 0 {
 		cfg.VerifyPeerCertificate = targetCertCheck(sni, targetNames)
+	} else if peerNames != nil {
+		// rel47: a plain tls path to a peer known to run reality on some IP
+		// (announced or remembered names, read when the certificate arrives:
+		// a dial sent just before the first announcement still gets them).
+		cfg.VerifyPeerCertificate = func(raw [][]byte, ch [][]*x509.Certificate) error {
+			if n := peerNames(); len(n) > 0 {
+				return targetCertCheck(sni, n)(raw, ch)
+			}
+			return nil
+		}
 	}
 	u, err := newClientConn(wrapBatch(raw), cfg, addr, clientHello)
 	if err != nil {
@@ -233,12 +244,56 @@ func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Dur
 		raw.Close()
 		return nil, err
 	}
-	if err := readServerProof(u, sharedKey, nonce, ekm); err != nil {
+	stop := watchPeerNames(u, raw, sni, targetNames, peerNames)
+	err = readServerProof(u, sharedKey, nonce, ekm)
+	if stop() {
+		raw.Close()
+		return nil, ErrTargetAnswered
+	}
+	if err != nil {
 		raw.Close()
 		return nil, err
 	}
 	raw.SetDeadline(time.Time{})
 	return &Carrier{conn: u}, nil
+}
+
+// watchPeerNames (rel47): a plain tls dial whose certificate arrived before
+// the peer's reality names were known (the first announcement lands while
+// the dial waits for its proof) re-checks the leaf against them every 100 ms
+// and ends the wait at once when it turns out to be the target's. stop ends
+// the watch and reports whether it fired.
+func watchPeerNames(u *utls.UConn, raw net.Conn, sni string, targetNames []string, peerNames func() []string) (stop func() bool) {
+	if len(targetNames) > 0 || peerNames == nil {
+		return func() bool { return false }
+	}
+	pc := u.ConnectionState().PeerCertificates
+	if len(pc) == 0 {
+		return func() bool { return false }
+	}
+	leaf := [][]byte{pc[0].Raw}
+	var fired atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(100 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if n := peerNames(); len(n) > 0 && errors.Is(targetCertCheck(sni, n)(leaf, nil), ErrTargetAnswered) {
+					fired.Store(true)
+					raw.SetDeadline(time.Now()) // ends the proof read
+					return
+				}
+			}
+		}
+	}()
+	return func() bool {
+		close(done)
+		return fired.Load()
+	}
 }
 
 // clientEKM exports the channel-binding secret of a finished uTLS handshake.

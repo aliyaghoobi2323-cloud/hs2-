@@ -358,3 +358,63 @@ func TestLBStartGraceFastFailBackoff(t *testing.T) {
 		t.Fatalf("pool %d/%d did not grow on the good paths", st[0].Links, st[1].Links)
 	}
 }
+
+// rel47: both sides starting, the dialer ~1 s ahead. Every address refuses
+// until the peer listens; those failures must not put the non-primary paths
+// into the start back-off, or the redial burst lands every start link on the
+// primary (lab: [100,0,2] at 6 s, the primary overloaded and cut).
+func TestLBPeerNotUpYetNoBackoff(t *testing.T) {
+	paths := append(twoPaths(34, 33), LBPath{Local: "10.0.0.3", Remote: "10.1.0.3", Addr: "10.1.0.3:443", Weight: 33})
+	lb, _ := NewLB(paths, nil)
+	clock := time.Unix(1e9, 0)
+	lb.now = func() time.Time { return clock }
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	// the peer is not listening yet: the start burst (45 dials in flight at
+	// once, as the pool dials them, so they spread over the paths) is refused
+	// and then the one retrying slot's dials, ~1 s in all
+	for k := 0; k < 20; k++ {
+		clock = clock.Add(50 * time.Millisecond)
+		var in []int
+		burst := 1
+		if k == 0 {
+			burst = 45
+		}
+		lb.mu.Lock()
+		for c := 0; c < burst; c++ {
+			i, _ := lb.acquireLocked()
+			in = append(in, i)
+		}
+		lb.mu.Unlock()
+		for _, i := range in {
+			lb.result(i, false, nil, refused)
+		}
+	}
+	if st := lb.Stats(); st[1].Fails <= lbGraceFreeFails || st[2].Fails <= lbGraceFreeFails {
+		t.Fatalf("setup: the refused dials did not spread: %+v", st)
+	}
+	n := map[string]int{}
+	for k := 0; k < 100; k++ { // the peer is up: the redial burst, 100 links in ~1 s
+		clock = clock.Add(10 * time.Millisecond)
+		lb.dialVia(func(p LBPath) (any, error) { n[p.Local]++; return new(int), nil })
+	}
+	for _, l := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
+		if n[l] < 25 {
+			t.Fatalf("start links per path %v: %s got %d of 100 (back-off from before the peer listened)", n, l, n[l])
+		}
+	}
+	// a path that fails AFTER the peer is reachable still backs off
+	bad := 0
+	for k := 0; k < 300; k++ {
+		clock = clock.Add(10 * time.Millisecond)
+		lb.dialVia(func(p LBPath) (any, error) {
+			if p.Local == "10.0.0.3" {
+				bad++
+				return nil, errors.New("EOF")
+			}
+			return new(int), nil
+		})
+	}
+	if bad > 15 {
+		t.Fatalf("%d dials to a failing path in 3 s with the peer up, want the start back-off (<= 15)", bad)
+	}
+}

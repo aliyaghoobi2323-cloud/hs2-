@@ -402,7 +402,10 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 			if !wasCool {
 				b.log("lb: path %s cooled for %s after %d failed dial(s): %v — its share goes to the other paths", p.Name(), fmtDur(cd), b.fails[i], err)
 			}
-		} else if !p.Primary && b.fails[i] > lbGraceFreeFails && i < len(b.backoff) {
+		} else if !p.Primary && b.fails[i] > lbGraceFreeFails && i < len(b.backoff) && !b.upAt.IsZero() {
+			// rel47: only once the peer has been reachable (a dial worked on
+			// some path). Before that every path refuses alike (the peer is
+			// not listening yet): see the reset at upAt below.
 			d := lbGraceBackoff << min(b.fails[i]-lbGraceFreeFails-1, 16)
 			if d > lbGraceBackoffMax || d <= 0 {
 				d = lbGraceBackoffMax
@@ -421,6 +424,22 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 	}
 	if b.upAt.IsZero() {
 		b.upAt = b.now()
+		// rel47: failures from before the peer was reachable at all say
+		// nothing about a path (both sides starting: every address refused
+		// alike). Lab (reverse, 3 paths, the kharej up ~1 s before Iran):
+		// ~50 refused dials in that second spread over the paths put the two
+		// non-primary ones past lbGraceFreeFails into a 4 s back-off; the
+		// redial burst then took all 100 start links to the primary
+		// ([100,0,2] at 6 s, [100,25,34] at the end of a 65 s run; the
+		// primary overloaded and was cut, call p99 6 s). Start them clean.
+		for j := range b.paths {
+			if j != i && b.until[j].IsZero() {
+				b.fails[j] = 0
+				if j < len(b.backoff) {
+					b.backoff[j] = time.Time{}
+				}
+			}
+		}
 	}
 	if link != nil {
 		if b.auto2On() && b.links[i] == 1 { // the path's first link (a new path, or one that emptied)

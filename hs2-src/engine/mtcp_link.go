@@ -308,6 +308,8 @@ type mtcpDialer struct {
 	// path's profile (nil: tls, today's front).
 	front   tlscarrier.Dialer
 	profile *tlscarrier.FrontProfile
+	// peerNames (rel47, optional): tlscarrier.DialPath.PeerTargetNames.
+	peerNames func() []string
 }
 
 // smux tuning, shared by both ends of a link.
@@ -350,7 +352,7 @@ func newSmuxConfig() *smux.Config {
 }
 
 func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
-	car, err := d.front.DialFront(ctx, tlscarrier.DialPath{Addr: d.addr, SNI: d.sni, BindIP: d.bindIP, Key: d.sharedKey, Profile: d.profile})
+	car, err := d.front.DialFront(ctx, tlscarrier.DialPath{Addr: d.addr, SNI: d.sni, BindIP: d.bindIP, Key: d.sharedKey, Profile: d.profile, PeerTargetNames: d.peerNames})
 	if err != nil {
 		return nil, err
 	}
@@ -406,3 +408,13 @@ func FailingDialer(err error) LinkDialer { return failingDialer{err} }
 type failingDialer struct{ err error }
 
 func (f failingDialer) DialLink(context.Context) (Link, error) { return nil, f.err }
+
+// WithPeerTargetNames gives an mtcp link dialer the peer's reality server_names
+// (tlscarrier.DialPath.PeerTargetNames, rel47); other dialers are returned as
+// they are.
+func WithPeerTargetNames(d LinkDialer, names func() []string) LinkDialer {
+	if m, ok := d.(*mtcpDialer); ok {
+		m.peerNames = names
+	}
+	return d
+}

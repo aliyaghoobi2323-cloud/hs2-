@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
@@ -45,6 +46,10 @@ type lbRuntime struct {
 	// public profiles, used until the first announcement of this run.
 	frontsPath string
 	fronts     map[string]*tlscarrier.FrontProfile
+	// targetNames (rel47): the reality server_names of the peer's fronts
+	// (the announcement, else the remembered ones), for the plain tls paths'
+	// certificate check (tlscarrier.DialPath.PeerTargetNames). Read lock-free.
+	targetNames atomic.Pointer[[]string]
 }
 
 var (
@@ -278,6 +283,7 @@ func (rt *lbRuntime) applyAdvert(adv []engine.LBAdvertIP) {
 	defer rt.mu.Unlock()
 	rt.peer = append([]engine.LBAdvertIP(nil), adv...)
 	rt.rebuildLocked("the other server's announcement")
+	rt.setTargetNames(advertFronts(adv))
 	if m := advertFronts(adv); !frontsEqual(m, rt.fronts) {
 		if err := savePeerFronts(rt.frontsPath, lbPeerKey(rt.fc), "announcement", m); err != nil {
 			rt.logf("front: could not remember the announced fronts in %s: %v (a restart before the next announcement may not reach a pure reality IP)", rt.frontsPath, err)
@@ -299,6 +305,9 @@ func (rt *lbRuntime) loadFrontsLocked(why string) {
 	}
 	prev := rt.fronts
 	rt.fronts = m
+	if rt.peer == nil {
+		rt.setTargetNames(m)
+	}
 	if rt.peer == nil && !frontsEqual(m, prev) {
 		rt.rebuildLocked("remembered fronts (" + why + ")")
 	}
@@ -515,4 +524,37 @@ func checkLBAdvert(d *doctorReport, cfgPath string) {
 	if ls.lbStatus.Rejected != "" {
 		d.warn("lb addresses", "the other server's announcement was rejected: "+ls.lbStatus.Rejected)
 	}
+}
+
+// setTargetNames keeps the reality/both server_names of m (rel47).
+func (rt *lbRuntime) setTargetNames(m map[string]*tlscarrier.FrontProfile) {
+	var n []string
+	seen := map[string]bool{}
+	for _, f := range m {
+		if f == nil {
+			continue
+		}
+		if k := f.NormKind(); k != tlscarrier.FrontReality && k != tlscarrier.FrontBoth {
+			continue
+		}
+		for _, s := range f.ServerNames {
+			if s != "" && !seen[strings.ToLower(s)] {
+				seen[strings.ToLower(s)] = true
+				n = append(n, s)
+			}
+		}
+	}
+	rt.targetNames.Store(&n)
+}
+
+// lbPeerTargetNames: the current peer's reality server_names (nil: none known).
+func lbPeerTargetNames() []string {
+	rt := curLB()
+	if rt == nil {
+		return nil
+	}
+	if p := rt.targetNames.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
