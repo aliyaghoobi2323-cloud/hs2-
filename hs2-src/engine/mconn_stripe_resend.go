@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// HS2_MCONN_STRIPE_RESEND (default on; 0 = the old rule): a striping
+// HS2_MCONN_STRIPE_RESEND (default OFF, lab only; 1 = on): a striping
 // connection survives the death of one of its subs.
 //
 // A stripe puts each chunk on ONE sub. When a link dies (reset, ss -K, a
@@ -27,8 +27,14 @@ import (
 //
 // Not covered (unchanged): the connection's last sub dying (no live sub to
 // resend on), and bytes older than stripeKeepAge still unread by the peer.
+//
+// Status (rel46, docs/reality-architecture.md §11.6): off by default. In the
+// lab u8 it ends the resets (no errMConnLost) but not the freeze: a
+// connection whose subs all die still ends ("every sub died"), and some
+// survivors stall a few seconds after the kill with a gap the resend did not
+// fill — for a real app a hang until mGapTimeout, worse than the old reset.
 
-var stripeResend = envBoolDefault("HS2_MCONN_STRIPE_RESEND", true)
+var stripeResend = envBoolDefault("HS2_MCONN_STRIPE_RESEND", false)
 
 const (
 	// stripeKeepAge: how long a written chunk is kept for a resend. A link
