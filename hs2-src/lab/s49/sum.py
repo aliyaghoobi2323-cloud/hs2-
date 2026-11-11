@@ -1,7 +1,7 @@
 import json,os,re,sys,statistics as st
 D=sys.argv[1]; g={}
 for n in sorted(os.listdir(D)):
-    m=re.match(r"(c1|c0|u8|s)-(\w+)-[ab]\d+$",n)
+    m=re.match(r"(c1|c0|u8|u1|s)-(\w+)-[ab]\d+$",n)
     if not m: continue
     try: r=json.load(open(f"{D}/{n}/result.json"))
     except Exception: continue
