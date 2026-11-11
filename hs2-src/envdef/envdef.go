@@ -102,6 +102,8 @@ var Table = []Key{
 	// stripe's sender); the upload gate reads the light users' queue per path
 	{"HS2_MCONN_STRIPE_FAST", "1", Edge},
 	{"HS2_MCONN_STRIPE_FAST_EARLY_MS", "200", Edge},
+	// rel54b: the fast rule only for an upload that stripes alone (u8 crowd p99)
+	{"HS2_MCONN_STRIPE_FAST_SOLO", "1", Edge},
 	{"HS2_MCONN_STRIPE_UP_PATHQ", "1", Edge},
 }
 

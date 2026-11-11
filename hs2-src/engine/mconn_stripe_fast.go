@@ -147,12 +147,60 @@ const (
 	stripeFastBackoffJit = 250 * time.Millisecond
 )
 
-// stripeFastOn: the fast rule applies to this growth (an upload).
-func stripeFastOn(up bool) bool { return up && stripeFast.Load() }
+// stripeFastOnLocked: the fast rule applies to this growth (an upload) —
+// with HS2_MCONN_STRIPE_FAST_SOLO only while no other upload stripes.
+func (m *mConn) stripeFastOnLocked(up bool) bool {
+	return up && stripeFast.Load() && m.stripeFastSoloLocked()
+}
+
+// stripeFastSolo: HS2_MCONN_STRIPE_FAST_SOLO (rel54b, Iran, with
+// HS2_MCONN_STRIPE_FAST; on in the production table, 0 turns it off). The
+// fast rule (one hot sample, the doubling chain, the 250 ms retries) applies
+// only to an upload that stripes ALONE: while another connection's stripe
+// last grew for an upload, every upload widens the rel53 way (stripeHotTicks
+// samples, one sub a growth, mReopenBackoff), as HS2_STRIPE_AW_SOLO keeps the
+// adaptive window to a lone stripe. rel54's lab with eight parallel uploads
+// (u8, crowd 3000): crowd p99 +18 ms (median 114 -> 138) with the fast rule
+// on every upload; a single upload (u1 +43 %) and the link kill keep it.
+var stripeFastSolo atomic.Bool
+
+// stripeUpActive (Iran, process-wide): connections holding a stripe slot
+// whose last growth was for an upload (mConn.stUpCnt).
+var stripeUpActive atomic.Int32
+
+// stripeFastSoloLocked: no other upload stripes now (or the gate is off).
+func (m *mConn) stripeFastSoloLocked() bool {
+	if !stripeFastSolo.Load() {
+		return true
+	}
+	n := stripeUpActive.Load()
+	if m.stUpCnt {
+		n--
+	}
+	if n > 0 {
+		stripeFastStat.soloHeld.Add(1)
+		return false
+	}
+	return true
+}
+
+// stripeUpCountLocked (a growth decided, or the slot given back with
+// up=false): keep stripeUpActive in step with this connection.
+func (m *mConn) stripeUpCountLocked(up bool) {
+	if up == m.stUpCnt {
+		return
+	}
+	m.stUpCnt = up
+	if up {
+		stripeUpActive.Add(1)
+	} else {
+		stripeUpActive.Add(-1)
+	}
+}
 
 // stripeRetryLocked: when the next stripe open may be tried after a failed one.
 func (m *mConn) stripeRetryLocked(now time.Time) time.Time {
-	if m.stGrowUp && stripeFast.Load() {
+	if m.stGrowUp && m.stripeFastOnLocked(true) {
 		m.stFastMore = 0
 		return now.Add(stripeFastBackoff + rand.N(stripeFastBackoffJit))
 	}
@@ -162,7 +210,7 @@ func (m *mConn) stripeRetryLocked(now time.Time) time.Time {
 // stripeFastPlanLocked (in stripeTickLocked, a growth n → n+1 decided): how
 // many more subs to open right after this one (0: none).
 func (m *mConn) stripeFastPlanLocked(n int, rate float64, up bool) int {
-	if !stripeFastOn(up) || rate < float64(n)*float64(stripeFastRate.Load()) {
+	if !m.stripeFastOnLocked(up) || rate < float64(n)*float64(stripeFastRate.Load()) {
 		return 0
 	}
 	more := max(n-1, 1) // n → 2n: this open plus n-1 more (the first growth: 1 → 3)
@@ -179,7 +227,7 @@ func (m *mConn) stripeFastNextLocked() bool {
 		return false
 	}
 	m.stFastMore--
-	if m.ended || m.closing || m.peerFin || m.wclosed || m.stOpening || m.callOn || m.callUp {
+	if m.ended || m.closing || m.peerFin || m.wclosed || m.stOpening || m.callOn || m.callUp || !m.stripeFastSoloLocked() {
 		m.stFastMore = 0
 		return false
 	}
@@ -223,7 +271,7 @@ func (m *mConn) stripeFastRetry(try int) bool {
 		return false
 	}
 	m.mu.Lock()
-	ok := m.stGrowUp && stripeFast.Load() && !m.ended && !m.closing && !m.peerFin && !m.wclosed && !m.callOn && !m.callUp
+	ok := m.stGrowUp && m.stripeFastOnLocked(true) && !m.ended && !m.closing && !m.peerFin && !m.wclosed && !m.callOn && !m.callUp
 	m.mu.Unlock()
 	if !ok {
 		return false
@@ -261,6 +309,7 @@ var stripeFastStat struct {
 	refills  atomic.Uint64 // up56: reserved links taken and asked again at once
 	hsKicks  atomic.Uint64 // up56: chains resumed the moment the upgrade's handshake ended
 	bumps    atomic.Uint64 // up56: pool targets raised at once for the stripe
+	soloHeld atomic.Uint64 // rel54b: fast rule held, another upload stripes (HS2_MCONN_STRIPE_FAST_SOLO)
 }
 
 // stripeUpSubWin: HS2_STRIPE_UP_SUB_WIN_MB (the exit, 0/off by default, 3-8):

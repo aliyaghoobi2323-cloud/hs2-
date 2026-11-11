@@ -153,6 +153,7 @@ type stripeState struct {
 	stUp      bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
 	stGrowUp  bool // Iran: the last growth was for an upload (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
 
+	stUpCnt    bool          // Iran: counted in stripeUpActive (HS2_MCONN_STRIPE_FAST_SOLO, mconn_stripe_fast.go)
 	stFastMore int           // Iran: subs still to open in the doubling chain (HS2_MCONN_STRIPE_FAST, mconn_stripe_fast.go)
 	stFastRate float64       // Iran: the rate that started the chain
 	stEarlyW   time.Duration // Iran: this tick's sample window is an early one (HS2_MCONN_STRIPE_FAST_EARLY_MS, mconn_stripe_early.go)
@@ -247,7 +248,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		}
 		return false
 	}
-	if m.stHot++; n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) && !stripeFastOn(up) {
+	if m.stHot++; n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) && !m.stripeFastOnLocked(up) {
 		// only a long download stripes: a reel or a page's burst is over in
 		// a second or two, and each would take (and the pool dial) links
 		return false
@@ -286,7 +287,8 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	}
 	m.stOpening = true
 	m.stGrowUp = up
-	if n == 1 && stripeFastOn(up) && m.stHot < int(stripeHotTicks.Load()) {
+	m.stripeUpCountLocked(up) // HS2_MCONN_STRIPE_FAST_SOLO (mconn_stripe_fast.go)
+	if n == 1 && m.stripeFastOnLocked(up) && m.stHot < int(stripeHotTicks.Load()) {
 		stripeFastStat.early.Add(1)
 	}
 	m.stFastMore = m.stripeFastPlanLocked(n, rate, up) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
@@ -320,7 +322,7 @@ func (m *mConn) stripeAvoidLocked() []any {
 	if stripeXDir {
 		avoid = append(avoid, stripeDirHint{up: m.stGrowUp}) // HS2_MCONN_STRIPE_XDIR (mconn_stripe_xdir.go)
 	}
-	if m.stFastMore > 0 && stripeFastOn(m.stGrowUp) {
+	if m.stFastMore > 0 && m.stripeFastOnLocked(m.stGrowUp) {
 		avoid = append(avoid, stripeWantHint{n: 1 + m.stFastMore}) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 	}
 	avoid = m.stripeNoShareHintLocked(avoid) // HS2_MCONN_STRIPE_UP_NOSHARE (mconn_stripe_noshare.go)
@@ -333,6 +335,7 @@ func (m *mConn) stripeIdleLocked() {
 	if m.stActive && !m.stOpening && m.liveStripeLocked() == 0 {
 		m.stActive = false
 		stripeStat.active.Add(-1)
+		m.stripeUpCountLocked(false)
 		r := &m.r
 		r.mu.Lock()
 		r.releaseOOOLocked(0)
@@ -348,6 +351,7 @@ func (m *mConn) stripeEnded() {
 		m.stActive = false
 		stripeStat.active.Add(-1)
 	}
+	m.stripeUpCountLocked(false)
 	m.mu.Unlock()
 }
 

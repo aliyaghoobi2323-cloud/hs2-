@@ -339,7 +339,7 @@ func (m *mConn) rawTick() {
 		// HS2_MCONN_STRIPE: the upgrade's new sub is the first stripe sub
 		m.lightOpening = true
 		avoid := append([]any{m.raw1.key}, m.deadKeys...)
-		if m.stFastMore > 0 && stripeFastOn(m.stGrowUp) {
+		if m.stFastMore > 0 && m.stripeFastOnLocked(m.stGrowUp) {
 			avoid = append(avoid, stripeWantHint{n: 1 + m.stFastMore}) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 		}
 		avoid = m.stripeNoShareHintLocked(avoid) // HS2_MCONN_STRIPE_UP_NOSHARE (mconn_stripe_noshare.go)
