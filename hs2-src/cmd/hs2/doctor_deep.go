@@ -763,7 +763,7 @@ func collectPaths(env *deepEnv, st []namedStatus) []*pathProbe {
 			if h, _, err := net.SplitHostPort(r); err == nil {
 				r = h
 			}
-			if ip := net.ParseIP(r); ip == nil || ip.IsLoopback() || len(out) >= 8 {
+			if ip := net.ParseIP(r); ip == nil || ip.IsLoopback() {
 				continue
 			}
 			k := local + ">" + r
@@ -818,6 +818,36 @@ func collectPaths(env *deepEnv, st []namedStatus) []*pathProbe {
 				}
 				add(local, fc.Addr, &pathProbe{})
 			}
+		}
+	}
+	return pickPaths(out, pathProbeMax)
+}
+
+// pathProbeMax: paths pinged at once (in parallel, ~2 s in all).
+const pathProbeMax = 24
+
+// pickPaths keeps at most max probes, every local and every remote address
+// first: a production LB (3 kharej IPv4 + 1 IPv6 × 6 Iran IPv4 + 1 IPv6 = 19
+// paths, two tunnels on one host) used to be cut to the first 8 in status
+// order — the third kharej IP, the IPv6 path and the second tunnel were
+// never checked.
+func pickPaths(all []*pathProbe, max int) []*pathProbe {
+	if len(all) <= max {
+		return all
+	}
+	var out []*pathProbe
+	used := make([]bool, len(all))
+	locals, remotes := map[string]bool{}, map[string]bool{}
+	for i, p := range all {
+		if len(out) < max && (!locals[p.local] || !remotes[p.remote]) {
+			locals[p.local], remotes[p.remote] = true, true
+			out = append(out, p)
+			used[i] = true
+		}
+	}
+	for i, p := range all {
+		if len(out) < max && !used[i] {
+			out = append(out, p)
 		}
 	}
 	return out
