@@ -65,7 +65,7 @@ func lbPathDialer(p engine.LBPath, sni string, key []byte) engine.LinkDialer {
 	if err != nil {
 		return engine.FailingDialer(err)
 	}
-	return d
+	return engine.WithPeerTargetNames(d, lbPeerTargetNames)
 }
 
 // ---- listening side: one acceptor per local IP ------------------------------

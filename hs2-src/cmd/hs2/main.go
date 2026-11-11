@@ -631,7 +631,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			cfg.RevLB = newLB(fc, logf)
 			cfg.Advert = setupLB(fc, cfg.RevLB, nil, logf)
 			cfg.RevDialPath = func(p engine.LBPath, scout bool) (*tlscarrier.Carrier, error) {
-				dp := tlscarrier.DialPath{Addr: p.Addr, SNI: lbSNIFor(lbCur(fc), p.Remote), BindIP: p.Local, Key: key, Profile: pathFront(fc, p.Front)}
+				dp := tlscarrier.DialPath{Addr: p.Addr, SNI: lbSNIFor(lbCur(fc), p.Remote), BindIP: p.Local, Key: key, Profile: pathFront(fc, p.Front), PeerTargetNames: lbPeerTargetNames}
 				if scout {
 					dp.Connect = 2 * time.Second
 				}

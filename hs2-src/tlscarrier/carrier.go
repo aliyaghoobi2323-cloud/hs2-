@@ -168,7 +168,7 @@ func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, erro
 // keeps a dial's SYNs close together (the kernel spaces a hanging connect's
 // retransmits 1, 2, 4 s apart), for a caller that retries anyway.
 func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration) (*Carrier, error) {
-	return dialTLS(addr, sni, sharedKey, bindIP, connect, nil)
+	return dialTLS(addr, sni, sharedKey, bindIP, connect, nil, nil)
 }
 
 // ErrTargetAnswered: a tls dial to a reality-capable listener got the
@@ -181,7 +181,7 @@ var ErrTargetAnswered = errors.New("tlscarrier: tls dial answered by the reality
 // dialTLS is DialFromTimeout; targetNames (the path's reality server_names,
 // nil for a plain tls path) make a certificate for one of them that is not
 // for sni fail the handshake with ErrTargetAnswered.
-func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, targetNames []string) (*Carrier, error) {
+func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, targetNames []string, peerNames func() []string) (*Carrier, error) {
 	d := net.Dialer{Timeout: connect}
 	if bindIP != "" {
 		ip := net.ParseIP(bindIP)
@@ -209,6 +209,16 @@ func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Dur
 	cfg := &utls.Config{ServerName: sni, InsecureSkipVerify: true}
 	if len(targetNames) > 0 {
 		cfg.VerifyPeerCertificate = targetCertCheck(sni, targetNames)
+	} else if peerNames != nil {
+		// rel47: a plain tls path to a peer known to run reality on some IP
+		// (announced or remembered names, read when the certificate arrives:
+		// a dial sent just before the first announcement still gets them).
+		cfg.VerifyPeerCertificate = func(raw [][]byte, ch [][]*x509.Certificate) error {
+			if n := peerNames(); len(n) > 0 {
+				return targetCertCheck(sni, n)(raw, ch)
+			}
+			return nil
+		}
 	}
 	u, err := newClientConn(wrapBatch(raw), cfg, addr, clientHello)
 	if err != nil {

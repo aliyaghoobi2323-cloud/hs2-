@@ -101,6 +101,12 @@ type DialPath struct {
 	Connect time.Duration // TCP connect timeout (0 = the default 8 s)
 	Key     []byte        // the tunnel's shared key (tunnel auth above the front)
 	Profile *FrontProfile // nil = tls
+	// PeerTargetNames (rel47, optional): the reality server_names the peer
+	// announced (or the dialer remembers) for ANY of its IPs. A plain tls path
+	// (no reality profile of its own) whose certificate is for one of them and
+	// not for SNI fails with ErrTargetAnswered: the IP is pure reality and
+	// spliced our hello to its target, a proof would never come (10 s).
+	PeerTargetNames func() []string
 }
 
 // Dialer is the dial side of a front: it returns an authenticated carrier.
@@ -133,7 +139,7 @@ func (TLSFront) DialFront(_ context.Context, p DialPath) (*Carrier, error) {
 	if k := p.Profile.NormKind(); k == FrontBoth || k == FrontReality {
 		names = p.Profile.ServerNames // the tls leg of "both": see ErrTargetAnswered
 	}
-	return dialTLS(p.Addr, p.SNI, p.Key, p.BindIP, c, names)
+	return dialTLS(p.Addr, p.SNI, p.Key, p.BindIP, c, names, p.PeerTargetNames)
 }
 
 // AcceptFront is the "tls" front's listen side: exactly Handle.
