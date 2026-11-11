@@ -2456,15 +2456,23 @@ and `c` (c1: the same + heavy x8 at 1 % loss). ms, mean ± sd (n), permutation p
 
 | scenario | metric | rel48 | rel50 | p |
 |---|---|---|---|---|
-| s | crowd p99 | 85 ± 4 (6) | 87 ± 6 (5) | 0.58 |
-| s | call p99 | 86 ± 4 (6) | 88 ± 7 (5) | 0.48 |
-| s | ping p99 | 102 ± 14 (6) | 96 ± 24 (5) | 0.59 |
-| c | crowd p99 | 241 ± 81 (5) | 212 ± 68 (4) | 0.60 |
-| c | call p99 | 278 ± 89 (5) | 253 ± 50 (4) | 0.61 |
-| c | ping p99 | 190 ± 52 (5) | 192 ± 28 (4) | 0.98 |
-| c | Mbit/s | 1148 ± 85 (5) | 1100 ± 199 (4) | 0.65 |
+| s | crowd p99 | 85 ± 3 (8) | 91 ± 16 (8) | 0.38 |
+| s | call p99 | 86 ± 3 (8) | 93 ± 16 (8) | 0.27 |
+| s | ping p99 | 99 ± 13 (8) | 96 ± 22 (8) | 0.72 |
+| c | crowd p99 | 229 ± 72 (8) | 216 ± 68 (8) | 0.69 |
+| c | call p99 | 256 ± 82 (8) | 267 ± 60 (8) | 0.75 |
+| c | ping p99 | 179 ± 55 (8) | 185 ± 42 (8) | 0.84 |
+| c | Mbit/s | 1178 ± 103 (8) | 1163 ± 168 (8) | 0.83 |
 
-No regression (the rel50 changes are off the tls/reality data path; the
+(`s` rel50 crowd/call p99 +6/+7 ms in the mean come from one run at 130/129
+ms in g50-s-6; medians 83/84 vs 85/86 ms.) No regression (the rel50 changes are off the tls/reality data path; the
 `both` policy only acts on failed dials).
 
 Defaults unchanged; `HS2_REALITY_PREFER_AES128` stays off.
+
+Final checks on lab 3 from a clean bundle (rel50 tree): gofmt 0 files, `go
+vet ./...` clean, `go test ./... -count=1 -timeout 40m` all 12 packages ok,
+`-race` on `TestBoth*|TestHybrid*` ok, all 23 installer sh tests pass (the
+docs tree, with the root install.sh synced), multi_tunnel alone: 57 PASS, 0 FAIL (rc 0).
+Release binary (build 384be0c38517, `CGO_ENABLED=0 -trimpath -ldflags="-s
+-w"`): sha256 6c9d15a67620f15145b720021f89c8db9d25e3139d8c68338bdc9f9d9cc9bb3e.
