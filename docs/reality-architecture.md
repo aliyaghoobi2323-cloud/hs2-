@@ -2686,3 +2686,211 @@ docs tree, with the root install.sh synced), multi_tunnel alone: 57 PASS, 0 FAIL
 Release binary (build 384be0c38517, `CGO_ENABLED=0 -trimpath -ldflags="-s
 -w"`): sha256 6c9d15a67620f15145b720021f89c8db9d25e3139d8c68338bdc9f9d9cc9bb3e.
 
+### 11.9 rel46/rel49 (2026-11-11): the u8 upload freeze — production has it; root cause; fixed in rel49 (§11.9.5)
+
+Branch rel46 = rel45 (64aee0b6) + the commits below. Harness
+`hs2-src/lab/s46` (labs 1 and 2, 3 slots each, all tls, arms interleaved).
+"Frozen" = the 8-stream heavy upload is at 0 Mbit/s for the last 5 s of the
+run (u8: 75 % of the links killed at 12 s, 30 s upload).
+
+#### 11.9.1 Production's binary has it
+
+| binary (u8, tls) | n | frozen | Mbps (whole run) mean | after the kill, mean Mbit/s |
+|---|---|---|---|---|
+| r31, lab env + `HS2_LB_FLAP_PEN=1` | 6 | **4/6** | 380 | 112 |
+| r31, production env only (Iran: defaults; kharej: `HS2_LB_FLAP_PEN=1`) | 6 | **2/5** (+1 empty iperf3 JSON) | 371 | 202 |
+| rel40 | 6 | 3/6 | 518 | 258 |
+| rel45 | 5+8 | 5/5, 6/8 | 455, 484 | 0, 154 |
+| rel45 + `HS2_MCONN_STRIPE_JUMP_MS=1500` on Iran | 4 | 2/4 | 520 | 215 |
+
+r31's production defaults include `HS2_MCONN_STRIPE=8` (the Iran log says
+so), so **production has the bug today**: an upload striped over several
+links is lost when one of its links dies. `HS2_MCONN_STRIPE_JUMP_MS` on the
+Iran side does not help.
+
+#### 11.9.2 Root cause
+
+Per stream (iperf3 JSON) the streams do not slow down: each one drops to 0 at
+the kill second and stays there, with no iperf3 error. With
+`HS2_MCONN_STRIPE_LOG=1` (both sides) every such connection's mConn ends at
+the kill: on Iran `sub- N ... cause=write: connection reset by peer
+holeRecent=true quiet=false` then `end err=mconn: a sub died holding the only
+copy of some bytes rst=true`. That is the stripe's designed failure rule
+(`mconn_stripe.go`, "Failure"): a stripe puts each chunk on ONE sub and there
+is no retransmission layer, so the bytes a dying link held (its send buffer,
+in flight, the peer's receive buffer) are gone and the connection is reset.
+The Iran relay closes the user socket; iperf3 does not reopen a data stream,
+so the stream shows 0 (a real app sees its upload reset). A connection
+striped over 2-3 subs loses one of them in 75 % kill almost surely; the runs
+that "recover" are those where 1-2 of the 8 connections happened to keep all
+their subs. Not the front, not the iperf3 control path (off the links since
+§11.5.3), not smux window or backpressure (the connection is gone), not the
+dead links' replacement (the pool rebuilds; the user connection was already
+reset).
+
+#### 11.9.3 A first fix, kept off: `HS2_MCONN_STRIPE_RESEND`
+
+`engine/mconn_stripe_resend.go`: the sender keeps each chunk a sub wrote for
+2 s (at most 16 MiB per connection) and, when the sub dies while another
+lives, queues those chunks plus the dead sub's queue at the front of the
+live sub with the shortest queue; the receiver drops what it already has (no
+wire change). Unit test: `TestStripeLinkDeathOldRuleResets` reproduces the
+bug (a striped download whose stripe sub's link swallows its writes and then
+dies is reset with `errMConnLost`), `TestStripeLinkDeathResend` shows the
+resend completes it byte-exact.
+
+In the lab it is not enough (u8, rel46 build with the resend on):
+
+| | n | frozen | after the kill, mean Mbit/s |
+|---|---|---|---|
+| resend, 16 MiB keep | 8 | 4/8 | 259 |
+| resend, 48 MiB keep (lab 1, stripe log on) | 6 | 4/6 | 187 |
+| resend, 48 MiB keep (lab 2) | 5 | 0/5 | 552 |
+
+The logs show why: `errMConnLost` is gone (every death is a `resend N
+chunks`, 500-2000 chunks), but (1) a connection striped over 2 subs whose
+two links both die still ends (`every sub died`, both sides), and (2) some
+survivors carry 200-480 Mbit/s for 4-5 s and then stall with no end: the
+receiver's reorder room fills behind a gap the resend did not fill (48 MiB
+of keep did not change it, so it is not the keep bound). For a real app (2)
+is a hang until `mGapTimeout` (30 s) instead of an immediate reset — worse —
+so the key ships **off** (`HS2_MCONN_STRIPE_RESEND=1` turns it on, lab only).
+c1 and s with the resend on (n=4 each vs rel45): Mbps 1208 vs 1258, every
+latency p99 equal or lower (noise); u8 latency p99s are 40-70 ms higher with
+the upload alive after the kill than with it dead (the light users share the
+25 % of links left with it).
+
+#### 11.9.4 Next (plan)
+
+1. Find the unfilled gap: `HS2_MCONN_TRACE_PORT=8444` on both sides in u8
+   with the resend on; log at each stall the receiver's `next` and first ooo
+   offset and, on the sender, whether that offset was in the dead sub's keep
+   list, its queue, or on another sub (a second sub dying later, a chunk
+   pruned by age while unread behind a blocked reader, or a raw-first-sub
+   boundary).
+2. "Every sub died": keep the connection for a short grace (2-3 s) on both
+   sides when its last sub dies with a resend possible — Iran opens a light
+   sub at once (role join) and resends its keep list; the exit keeps the
+   table entry so the join finds it — or stripe a heavy connection over at
+   least 3 subs on different paths.
+3. Acceptance as briefed: u8 n>=8 with 0 frozen, crowd/ping/call no worse,
+   c and s n>=4 — then the key on by default and in the production table.
+4. Until then production behaves as before: a striped upload is reset when
+   one of its links dies.
+
+#### 11.9.5 rel49: the unfilled gap found, the last-sub grace, the resend on by default
+
+Branch rel49 = rel46 (1dfa4442) + the commits below; harness `lab/s49`
+(arms r45 = rel45 binary, r49f = rel49 with `HS2_MCONN_STRIPE_RESEND=1` on
+both sides; `ttr.py` gives per stream the seconds from the kill to the first
+second above 5 Mbit/s, streams at 0 in the last 5 s, stalls of 3 s or more).
+
+**The gap (rel46 open item 2).** A per-second line under
+`HS2_MCONN_STRIPE_LOG` (both sides: receive `next`, first out-of-order offset,
+ooo bytes; send `sendOff`, per sub queued bytes, the offset being written, the
+end of what it was given, the oldest kept offset) showed every stalled
+connection waiting behind ONE missing record: `next=171053071 ooo1=171053093`
+(a 22-byte hole: a write's tail record) or `next=180502554 ooo1=180518927`
+(one 16373-byte record), the ooo room filling to its bound behind it, the
+receiver then no longer reading — so the sender's queues fill and the user's
+upload stops (7 of 8 iperf3 streams at 0, the 8th carrying 800 Mbit/s).
+The missing offset lay inside what the dead sub had been given but in none of
+its sent list, queue, `cur` or `curMore`: `writeLoop` cleared `cur` and
+released the record whose `Write` FAILED (the link was reset under it) before
+`subDied` collected the dead sub's chunks. Neither the keep age (kills here
+are resets, seen at once) nor the 16/48 MiB bound mattered. Fix: with the
+resend on, a record whose write failed is kept like a written one, so the
+resend carries it. `TestStripeFailedWriteResent` (a striped download whose
+stripe sub's next write fails and whose link dies) hangs on the gap without
+the fix (3/3 rounds hang at round 0) and passes with it.
+
+**Every sub died (rel46 open item 1).** Chosen: a grace, not "at least 3
+subs" (a third sub on a third path still dies with 75 % of the links killed
+in ~40 % of the cases, and widening costs light users links). With the resend
+on, when the LAST sub dies (`HS2_MCONN_STRIPE_GRACE_MS`, default 3000, 0 = off)
+both sides keep the connection: the dead sub's chunks (the resend set) wait
+as orphans; Iran at once opens a light sub (role join, avoiding the dead links,
+retried every 250 ms); the exit keeps its table entry (the connection lives),
+so the join attaches; the first sub that joins takes the orphans at the front
+of its queue. No sub within the grace: the connection ends as before. No wire
+change. `TestStripeAllDieNoGraceEnds` / `TestStripeAllDieGraceRejoins`.
+In the lab every grace was ended by a join 0.2-0.5 s after the kill.
+
+Lab (tls, labs 1 and 2 under other agents' load, interleaved):
+
+| u8 | n | frozen (sum 0 for the last 5 s) | streams at 0 at the end | longest pause per flow after the kill | after the kill, mean Mbit/s |
+|---|---|---|---|---|---|
+| r45 | 8 | 5/8 | 61/64 | dead | 0-381, mean 124 |
+| resend + grace, before the failed-write fix (r49, r49l, r49dl) | 14 | 2/14 | 89/112 | dead after 0-4 s of carrying | 103-1336, mean 731 |
+| **r49f** (rel49) | 10 | **0/10** | **0/80** | **0-6 s, median 1 s** | 504-1381, mean 994 |
+
+(Before the fix the aggregate often looked alive because ONE stream took the
+whole rate while the others hung behind their holes.)
+
+No 30 s hang (`mGapTimeout`) and no reset in any r49f run.
+
+No regression elsewhere beyond the labs' noise (labs 1 and 2 shared with
+three other agents; lab 1 load ~30):
+
+| | r45 | r49f | note |
+|---|---|---|---|
+| u1 (ONE upload connection, no kill: the stripe's own speed), Mbit/s | n=10, mean 643, median 639 | n=9, mean 671, median 595 | one more r49f run lost to an iperf3 `--cport` clash (harness) |
+| c1 Mbit/s, lab 1 / lab 2 | 1238 / 1185 (n=5+5) | 1083 / 1117 (n=4+4) | medians 1216 vs 1094 and 1182 vs 1202 |
+| c1 ping / call p99 ms, lab 1 | 221 / 313 | 356 / 519 (medians 253 / 351) | one slow run under load |
+| c1 ping / call p99 ms, lab 2 | 283 / 375 | 208 / 284 | |
+| s ping p99 ms, lab 1 / lab 2 | 198 / 83 | 88 / 157 | n=2 vs 1 each: noise |
+| u8 ping / call p99 ms, lab 1 | 229 / 290 | 188 / 213 | |
+| u8 ping / call p99 ms, lab 2 | 192 / 210 | 320 / 455 | the upload is ALIVE after the kill now and shares the 25 % of links left with the light users (in r45 it was dead) |
+
+Open: c1 Mbit/s leans 5-10 % lower by mean (one lab, not the other; rel46
+saw -4 %); a quiet-lab c1 battery (n>=8, Mann-Whitney) should confirm or
+clear it. The u8 light-user p99 on lab 2 is the cost of the upload surviving
+on a quarter of the links; light-user protection under a mass link kill
+(scavenger width for a striped connection while the pool rebuilds) is the
+next item if it shows again.
+
+Defaults: `HS2_MCONN_STRIPE_RESEND=1` is in the production table
+(`envdef`, side both; read in `loadEnvKeys`; `=0` turns it off; the grace
+follows it). A mixed pair (new Iran, old exit) loses nothing over today: the
+old exit ends a connection whose subs all died, the join is refused and Iran
+ends it after the 3 s grace instead of at once.
+
+**multi_tunnel (rel46 open item).** On lab 3, alone, with the release binary:
+57/57 PASS (incl. `10 uninstall (ir)`). rel46's two failures on lab 1 were the
+uninstall prompt not appearing within the test's 60 s prompt wait while five
+tunnels were removed on a host at load ~30 — the host, not the binary. A
+first rel49 run on lab 3 broke at step 3 because another agent ran
+multi_tunnel at the same time: the test's netns names (`mtir`, `mtkh`) are
+fixed, so two runs on one host destroy each other — run it once per host.
+
+Release binary: build 5712ea8a30c7 (CGO_ENABLED=0, -trimpath -ldflags="-s -w"), sha256 0595213f….
+
+#### 11.9.6 Reality Mbps vs AES-128: not the cipher
+
+Lab 2, rel46 build (c981cdaa, the resend on — no link dies in c0/c1),
+`lab/s46/run2.sh`, arms r128 (reality, the openssl target limited to
+TLS_AES_128_GCM_SHA256, checked in `ps`), reality (target AES-256 by suite
+parity), tls (Go: AES-128), all three in every round, order rotated, n=8
+each; kharej `ss -ti` of the 150 link sockets every second (means over the
+heavy window). Means ± sd, Mann-Whitney p (5000 permutations):
+
+| | tls | r128 | reality | p reality/tls | p r128/tls | p reality/r128 |
+|---|---|---|---|---|---|---|
+| c0 Mbps | 1601 ± 105 | 1668 ± 145 | 1607 ± 116 | 0.57 | 0.38 | 0.51 |
+| c1 Mbps | 1312 ± 93 | 1251 ± 139 | 1169 ± 134 | 0.063 | 0.57 | 0.38 |
+| c1 sum cwnd (segments) | 73677 | 72637 | 71008 | 0.72 | 0.79 | 0.96 |
+| c1 mean rtt ms | 79.2 | 80.2 | 79.9 | 0.50 | 0.73 | 0.96 |
+| c1 retrans / s | 1432 | 1405 | 1293 | 0.041 | 0.88 | 0.07 |
+| c1 ping p99 ms | 169 | 146 | 152 | 0.38 | 0.24 | 0.53 |
+
+Lossless (c0) reality = tls (1607 vs 1601) at the higher rate, where a
+cipher cost would show most; it does not. In c1 the -11 % shows again
+(p 0.063 here, 0.009 in rel45) and r128 sits between, significant against
+neither, with the same cwnd and rtt; reality's lower retransmits/s follow
+its lower rate. So AES-256 is not the cause and the target picker stays as it
+is (no AES-128 preference). The c1 gap appears only under loss; next: one
+link's tcpdump per arm in c1 (record sizes, how a lost segment's record is
+recovered) and the uTLS vs crypto/tls write path under loss.
+
+Release binary: build f2ec4e506acd (the resend off by default: behaviour =
+rel45), sha256 b2f39c97….

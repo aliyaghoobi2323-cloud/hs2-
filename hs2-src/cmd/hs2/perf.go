@@ -71,6 +71,7 @@ var perfKeys = func() []perfKey {
 		"HS2_LB_FLAP_PEN":           {"kharej: a flapping path is kept out longer (30 min, up to 2 h)", "خارج: مسیر نوسانی مدت بیشتری بیرون می‌ماند (۳۰ دقیقه تا ۲ ساعت)"},
 		"HS2_L3_DUP":                {"duplicate tiny packets of calls/games on a second link", "تکرار بسته‌های کوچک تماس/بازی روی لینک دوم"},
 		"HS2_MCONN":                 {"multi-connection mode (lite = production)", "حالت چنداتصالی (lite = پیش‌فرض)"},
+		"HS2_MCONN_STRIPE_RESEND":   {"a striped connection survives a dead link (resend + 3 s rejoin)", "اتصال راه‌راه با مرگ یک لینک قطع نمی‌شود (بازفرستی + ۳ ثانیه پیوستن دوباره)"},
 	}
 	var out []perfKey
 	seen := map[string]bool{}

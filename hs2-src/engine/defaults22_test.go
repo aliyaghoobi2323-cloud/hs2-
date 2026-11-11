@@ -50,7 +50,7 @@ func TestApplyDefaults(t *testing.T) {
 	if !mconnLite.Load() || stripeK.Load() != 8 || !stripeUp.Load() || smuxAutoWin == nil || !smuxAutoWin.Rel ||
 		smuxAutoWin.Share != 32<<20 || stripeAWHeavy != 2 || !stripeAWSolo || pickLane == 0 || !pickClass ||
 		!linkProbation || !partialRefill || !lbAuto2 || !lbSteer || !mconnCall.Load() || stripeQWin != 8*time.Second ||
-		lbIPCutGrace != 20*time.Second || !tlscarrier.QuietIdle || !tlscarrier.Batch || !tlscarrier.Resume {
+		lbIPCutGrace != 20*time.Second || !tlscarrier.QuietIdle || !tlscarrier.Batch || !tlscarrier.Resume || !stripeResend.Load() {
 		t.Fatal("edge: production set not in force")
 	}
 	if lbFillPct != 0 || lbSparePerRound != 1 || lbRecConfirm || lbFlapPen {
@@ -61,8 +61,8 @@ func TestApplyDefaults(t *testing.T) {
 	}
 
 	ApplyDefaults(false)
-	if lbFillPct != 25 || lbSparePerRound != 3 || !lbRecConfirm || !lbFlapPen {
-		t.Fatal("exit: exit-only keys off")
+	if lbFillPct != 25 || lbSparePerRound != 3 || !lbRecConfirm || !lbFlapPen || !stripeResend.Load() {
+		t.Fatal("exit: exit-only keys off (or the both-sides resend)")
 	}
 	if stripeAWHeavy != 0 || stripeAWSolo || pickLane != 0 || linkProbation || partialRefill || lbRescue {
 		t.Fatal("exit: edge-only keys on")

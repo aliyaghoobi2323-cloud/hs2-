@@ -947,6 +947,7 @@ defaults; ...)`.
 | `HS2_MCONN_CALL`, `HS2_MCONN_CALL_AVOID` | `1` | both |
 | `HS2_MCONN_STRIPE` | `8` | both |
 | `HS2_MCONN_STRIPE_UP`, `HS2_MCONN_STRIPE_SHARE`, `HS2_MCONN_STRIPE_REL` | `1` | both |
+| `HS2_MCONN_STRIPE_RESEND` (resend + 3 s rejoin when a striped connection's link dies; `HS2_MCONN_STRIPE_GRACE_MS`, default 3000, 0 = no rejoin) | `1` | both |
 | `HS2_MCONN_STRIPE_QWIN_MS` | `8000` | both |
 | `HS2_QUIET_IDLE`, `HS2_TLS_RESUME`, `HS2_AUTH_PAD`, `HS2_COVER_NGINX` | `1` | both |
 | `HS2_LB_AUTO2`, `HS2_LB_CUT_DRAIN`, `HS2_LB_FAST_RECOVER` | `1` | both |

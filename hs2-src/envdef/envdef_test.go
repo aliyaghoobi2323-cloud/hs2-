@@ -62,6 +62,7 @@ func TestSides(t *testing.T) {
 		{"HS2_REFILL_WAIT_MS", "300", ""},
 		{"HS2_MCONN_STRIPE", "8", "8"},
 		{"HS2_MCONN_STRIPE_JUMP_MS", "", ""},
+		{"HS2_MCONN_STRIPE_RESEND", "1", "1"},
 	}
 	for _, c := range cases {
 		Activate(true)
@@ -122,7 +123,7 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 45 {
-		t.Fatalf("table has %d keys, want 45", len(Table))
+	if len(Table) != 46 {
+		t.Fatalf("table has %d keys, want 46", len(Table))
 	}
 }

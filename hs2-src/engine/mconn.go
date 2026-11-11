@@ -348,6 +348,7 @@ type msub struct {
 	stripe     bool      // carries the stripe (HS2_MCONN_STRIPE, mconn_stripe.go)
 	stPushed   time.Time // the stripe rule last put a chunk on it (HS2_MCONN_STRIPE_UP)
 	lastWarm   time.Time // Iran: the last keep-warm STRIPE record (HS2_MCONN_STRIPE_SHARE)
+	sent       []sentRec // HS2_MCONN_STRIPE_RESEND: chunks it wrote recently (mconn_stripe_resend.go)
 
 	// stMtr (exit): the link meter whose stripeN this stripe sub raised
 	// (released in close).
@@ -456,15 +457,22 @@ type mConn struct {
 	mu       sync.Mutex
 	sendCond sync.Cond // Write waits here for queue room (L = &mu)
 
-	subs    []*msub // live subs in join order
-	mode    mPlane
-	bulk    *msub
-	sendOff uint64
-	wclosed bool // FIN queued
-	closing bool // Close called; lingering until queues drain
-	ended   bool
-	err     error
-	peerFin bool
+	subs      []*msub // live subs in join order
+	mode      mPlane
+	bulk      *msub
+	sendOff   uint64
+	keptBytes int // HS2_MCONN_STRIPE_RESEND: bytes kept in the subs' sent lists
+	// HS2_MCONN_STRIPE_GRACE_MS (mconn_stripe_resend.go): the last sub died;
+	// what it held waits here for the next sub until graceUntil
+	orphan       []*mchunk
+	graceUntil   time.Time
+	graceRetryAt time.Time
+	stallLogAt   time.Time // HS2_MCONN_STRIPE_LOG: the last stall line
+	wclosed      bool      // FIN queued
+	closing      bool      // Close called; lingering until queues drain
+	ended        bool
+	err          error
+	peerFin      bool
 
 	// heavy detection (this side's sending direction): the rate window, and
 	// since when the carrying sub's queue has been above mHeavyQueue
@@ -678,6 +686,9 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	s.idx = m.nsubs
 	m.nsubs++
 	m.subs = append(m.subs, s)
+	if !bulk {
+		m.graceFlushLocked(s) // HS2_MCONN_STRIPE_GRACE_MS
+	}
 	m.setPrimaryLocked()
 	m.refreshLiteDualLocked()
 	m.tr.ev("sub+ %d bulk=%v key=%p sendOff=%d subs=%d", s.idx, bulk, key, m.sendOff, len(m.subs))
@@ -1209,15 +1220,25 @@ func (s *msub) writeLoop() {
 		s.cur = nil
 		more := s.curMore
 		s.curMore = nil
+		// HS2_MCONN_STRIPE_RESEND: a record whose write FAILED is kept too
+		// (the sub is about to die; subDied resends it). Released here, it
+		// was the one chunk the resend missed: the receiver's unfilled gap
+		// in the lab u8 (rel49, docs §11.9.5).
+		kept := (err == nil || stripeResend.Load()) && m.stripeKeepOnLocked(s)
+		if kept {
+			m.keepSentLocked(s, time.Now(), append(more, c)...) // HS2_MCONN_STRIPE_RESEND
+		}
 		if s == m.primary.Load() {
 			m.pStuckSince = time.Time{} // a record got through: not stuck
 		}
 		m.noteQueueLocked() // the queue fell: the rule's "without a break"
 		idle := len(s.q) == 0 && m.closing
 		m.mu.Unlock()
-		c.unref()
-		for _, x := range more {
-			x.unref()
+		if !kept {
+			c.unref()
+			for _, x := range more {
+				x.unref()
+			}
 		}
 		if idle {
 			m.kickMgr()
@@ -1693,6 +1714,10 @@ func (m *mConn) subDied(s *msub, cause error) {
 	}
 	s.dead = true
 	m.removeSubLocked(s)
+	resent := !m.closedCleanLocked(s) && m.stripeResendLocked(s) // HS2_MCONN_STRIPE_RESEND
+	if !resent && len(s.sent) > 0 {
+		m.dropSentLocked(s, len(s.sent))
+	}
 	lost := false
 	for _, c := range s.q {
 		if c.seq() {
@@ -1737,11 +1762,20 @@ func (m *mConn) subDied(s *msub, cause error) {
 	switch {
 	case m.mode == planeBulk && s == m.bulk:
 		endErr, rst = errMConnBulkDied, true
+	case (len(m.subs) == 0 || m.onlyClosingLocked()) && resent && !m.graceUntil.IsZero():
+		// HS2_MCONN_STRIPE_GRACE_MS: wait for a new sub (Iran opens one)
+		if s.key != nil {
+			m.deadKeys = append(m.deadKeys, s.key)
+			if len(m.deadKeys) > mDeadKeys {
+				m.deadKeys = m.deadKeys[1:]
+			}
+		}
+		m.graceOpenLocked(time.Now())
 	case len(m.subs) == 0 || m.onlyClosingLocked():
 		endErr = errMConnSubsDied
 	case m.mode == planeBulk:
 		// a light sub of a switched connection: nothing rides on it now
-	case lost || m.holeRecentLocked() && !m.stripeQuietLocked(s):
+	case !resent && (lost || m.holeRecentLocked() && !m.stripeQuietLocked(s)):
 		endErr, rst = errMConnLost, true
 	default:
 		if !m.peerFin && !m.closing {
@@ -1799,6 +1833,7 @@ func (m *mConn) end(err error, rst bool) {
 		stripeLogf("stripe %x: end err=%v rst=%v iran=%v sent=%d subs=%d", m.id&0xffffff, err, rst, m.iran, m.sendOff, len(m.subs))
 	}
 	m.setStateLocked(mStateEnded)
+	m.releaseSentLocked() // HS2_MCONN_STRIPE_RESEND (and the grace's orphans)
 	if m.lite {
 		m.refreshLiteDualLocked()
 		obs.mconnLiteOpen.Add(-1)
@@ -1917,6 +1952,14 @@ func (m *mConn) tick(now time.Time) time.Duration {
 		at(m.lingerAt.Sub(now))
 		m.mu.Unlock()
 		return wake
+	}
+	m.stripeStallLogLocked(now)
+	if over, d := m.graceTickLocked(now); over {
+		m.mu.Unlock()
+		m.end(errMConnSubsDied, false)
+		return 0
+	} else if d > 0 {
+		at(d)
 	}
 	var retire []*msub
 	if m.iran && m.lite {

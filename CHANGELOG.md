@@ -95,6 +95,55 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 - Tests: `TestLBPeerNotUpYetNoBackoff`, `TestPlainTLSPeerTargetNames`,
   `TestLBEditsKeepMixedFronts`, `TestRealityCarrierTCPConn`.
 
+## rel49 — the u8 upload freeze fixed: resend on by default (binary)
+
+- **Root cause of the gap rel46 left** (survivors stalled ~4 s after the kill,
+  for an app a 30 s hang): `writeLoop` released the record whose write
+  FAILED on a dying stripe sub before `subDied` collected the sub's chunks,
+  so no resend carried it; the receiver waited behind that one record (a
+  22-byte or one-chunk hole, seen with a new per-second
+  `HS2_MCONN_STRIPE_LOG` line of rx `next`/first ooo offset and per-sub tx
+  offsets). Now kept and resent (`TestStripeFailedWriteResent`: hangs
+  without the fix, passes with it).
+- **Every sub died**: `HS2_MCONN_STRIPE_GRACE_MS` (default 3000, 0 = off,
+  with the resend): both sides keep a connection whose last sub died; Iran
+  opens a join sub on another link at once, the dead subs' chunks go first
+  on it. Lab: joins 0.2-0.5 s after the kill. No wire change.
+- **Lab u8** (8 uploads, 75 % of links killed; tls; labs 1+2): rel45
+  5/8 runs frozen and 61/64 streams dead at the end; rel49 0 frozen, 0
+  streams dead, every flow back within 0-6 s, no 30 s hang, no reset.
+  c1/s: no regression beyond noise. See docs/reality-architecture.md
+  §11.9.5 (incl. the single-upload numbers).
+- multi_tunnel: 57/57 on lab 3 alone with the release binary (rel46's lab 1
+  failures were host load; two concurrent runs collide on the fixed netns names).
+- **`HS2_MCONN_STRIPE_RESEND=1` is now a production default on both sides**
+  (`envdef`; `=0` turns it off). Binary build 5712ea8a30c7, sha256
+  0595213f….
+
+## rel46 — the u8 upload freeze: production has it, root cause found, fix kept off (binary)
+
+- **Production (r31) has the bug**: lab u8 (8 uploads, 75 % of the links
+  killed), tls, frozen = upload at 0 for the rest of the run: r31 4/6 (lab
+  env), 2/5 (production env), rel40 3/6, rel45 11/13. Root cause: a
+  striped connection (`HS2_MCONN_STRIPE=8`, a production default) is reset
+  when one of its subs dies (`mconn: a sub died holding the only copy`):
+  one copy per chunk, no retransmission. See
+  docs/reality-architecture.md §11.9.
+- **`HS2_MCONN_STRIPE_RESEND` (new, default off)**: the sender keeps written
+  chunks 2 s / 16 MiB per connection and resends them on a live sub when a
+  sub dies. Ends the resets in the lab but not the freeze (a connection
+  whose subs all die still ends; some survivors stall on an unfilled gap —
+  a hang, worse than a reset), so it stays off. Tests
+  `TestStripeLinkDeathOldRuleResets` (reproduces the bug) and
+  `TestStripeLinkDeathResend`.
+- `HS2_MCONN_STRIPE_JUMP_MS` on Iran: no help (2/4 frozen).
+- Lab harness `hs2-src/lab/s46` (several binaries per battery, r31 with the
+  production env, the `r128` arm and a per-second `ss -ti` sampler).
+- **Reality Mbps vs AES-128**: not the cipher. n=8 interleaved: c0 reality
+  1607 = tls 1601; c1 reality 1169 vs tls 1312 (p 0.063), r128 1251 in
+  between (n.s.), same cwnd/rtt. Target picker unchanged.
+- Binary: build f2ec4e506acd, behaviour = rel45.
+
 
 ## rel45 — no stall when an IP switches both -> reality; reality vs tls measured (binary)
 

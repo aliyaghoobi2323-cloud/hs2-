@@ -77,6 +77,7 @@ var Table = []Key{
 	{"HS2_MCONN_STRIPE_UP", "1", Both},
 	{"HS2_MCONN_STRIPE_SHARE", "1", Both},
 	{"HS2_MCONN_STRIPE_REL", "1", Both},
+	{"HS2_MCONN_STRIPE_RESEND", "1", Both}, // rel49: a striped connection survives its links' death (§11.9.5)
 	{"HS2_LB_CUT_DRAIN", "1", Both},
 	{"HS2_MCONN_STRIPE_QWIN_MS", "8000", Both},
 	{"HS2_SMUX_AUTOWIN", "1", Both},

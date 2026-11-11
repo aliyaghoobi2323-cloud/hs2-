@@ -23,7 +23,9 @@ type tSub struct {
 	rate   atomic.Int64 // bytes/s this end's writes are held to (0: none)
 	turn   atomic.Int64 // ns every write waits first (a smux turn behind other streams)
 	wrote  atomic.Int64
-	raw    bool // the first sub of a raw pair (mconnRaw)
+	raw    bool        // the first sub of a raw pair (mconnRaw)
+	drop   atomic.Bool // writes "succeed" and vanish (a link's buffers lost at its reset)
+	failW  atomic.Bool // the next write fails, nothing of it delivered, and the link dies
 	closed atomic.Bool
 	dead   chan struct{}
 	once   sync.Once
@@ -46,6 +48,13 @@ func (t *tSub) Write(p []byte) (int, error) {
 	}
 	if r := t.rate.Load(); r > 0 {
 		time.Sleep(time.Duration(int64(len(p)) * int64(time.Second) / r))
+	}
+	if t.drop.Load() {
+		return len(p), nil
+	}
+	if t.failW.Load() {
+		t.Close()
+		return 0, io.ErrClosedPipe
 	}
 	n, err := t.Conn.Write(p)
 	t.wrote.Add(int64(n))
