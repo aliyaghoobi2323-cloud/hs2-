@@ -5078,6 +5078,10 @@ backup(){
   # cert, so renewal keeps working after a restore.
   for u in $units; do
     [ -f "$UNIT_DIR/$u.service" ] && items+=("${UNIT_DIR#/}/$u.service")
+    # its drop-ins too (systemctl edit / perf / cores): a production unit keeps
+    # its HS2_ keys and limits there, and a restore without them silently runs
+    # the tunnel on different settings
+    [ -d "$UNIT_DIR/$u.service.d" ] && items+=("${UNIT_DIR#/}/$u.service.d")
     c=$(tm_cfg "$u")
     for p in "$c" "$c.prev"; do [ -n "$c" ] && [ -f "$p" ] && items+=("${p#/}"); done
     for p in "$(jget "$c" cert_file)" "$(jget "$c" key_file)"; do

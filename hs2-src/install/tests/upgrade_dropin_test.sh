@@ -54,4 +54,6 @@ out=$(run 'running_exe_ok hs2 && echo RC0 || echo RC1')
 check "running_exe_ok: no PID → no false error" 'echo "$out" | grep -qx RC0'
 body=$(sed -n '/^upgrade(){/,/^}/p' "$INST")
 check "upgrade calls dropin_exec_sync and checks the running binary" 'echo "$body" | grep -q "dropin_exec_sync \"\$u\"" && echo "$body" | grep -q "running_exe_ok \"\$u\""'
+bk=$(sed -n '/^backup(){/,/^}/p' "$INST")
+check "backup keeps each tunnel's drop-ins (its HS2_ keys)" 'echo "$bk" | grep -q "items+=(\"\${UNIT_DIR#/}/\$u.service.d\")"'
 exit $fail
