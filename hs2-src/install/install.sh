@@ -5482,7 +5482,8 @@ upgrade(){ # [tunnel]
     systemctl enable "$u" >/dev/null 2>&1 || true
     if restart_unit "$u"; then
       exe=$(unit_exe "$u")
-      if [ -n "$exe" ] && [ "$exe" != "$BIN" ]; then
+      # (/proc/PID/exe is the resolved path: compare with $BIN resolved too)
+      if [ -n "$exe" ] && [ "$exe" != "$BIN" ] && [ "$exe" != "$(readlink -f "$BIN" 2>/dev/null)" ]; then
         err "$u restarted but runs $exe, not the upgraded $BIN — an override outside hs2's control (systemctl cat $u)."
         fails=$((fails + 1)); continue
       fi
