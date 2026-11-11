@@ -796,6 +796,12 @@ type targetMirror struct {
 	// authenticated handshake staples the same, so the record is as long)
 	OCSP []byte
 	SCTs [][]byte
+	// SNIAck: the target's EncryptedExtensions carries an empty server_name
+	// (OpenSSL acks the SNI, nginx/Go do not); the authenticated handshake
+	// sends the same (uTLS fork, Config.ServerNameAck). EELen: the target's
+	// EE record length (diagnostics; 0 = not seen alone in a record).
+	SNIAck bool
+	EELen  int
 }
 
 // nstProbes: handshakes per mirror refresh that sample the ticket sizes.
@@ -885,13 +891,15 @@ func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
 	if err := c.Handshake(); err != nil {
 		return 0, err
 	}
+	ee := tap.firstEncrypted()
 	// The tickets come after our Finished (which Handshake just sent): every
 	// record from here on within nstWait is one.
 	i0 := tap.count()
 	drainFor(c, nstWait)
 	var n int64
 	cs := c.ConnectionState()
-	m := &targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol, NST: tap.since(i0), OCSP: cs.OCSPResponse, SCTs: cs.SignedCertificateTimestamps}
+	m := &targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol, NST: tap.since(i0), OCSP: cs.OCSPResponse, SCTs: cs.SignedCertificateTimestamps, EELen: ee}
+	m.SNIAck = eeSNIAck(ee, cs.NegotiatedProtocol)
 	if len(cs.PeerCertificates) > 0 {
 		m.KeyKind, m.KeyBits = leafKey(cs.PeerCertificates[0])
 	}

@@ -25,3 +25,10 @@ require (
 // window, HS2_SMUX_AUTOWIN; see third_party/smux/autowin.go). With the switch
 // off it is the upstream code, the same bytes on the wire.
 replace github.com/xtaci/smux => ./third_party/smux
+
+// uTLS v1.8.0 with one small hs2 addition: the server can ack the client's
+// SNI in EncryptedExtensions (Config.ServerNameAck, off by default), so an
+// authenticated reality handshake's EE is as long as an OpenSSL target's
+// (docs/reality-architecture.md 11.8.3). Clients are unchanged: the same
+// ClientHello bytes.
+replace github.com/refraction-networking/utls => ./third_party/utls
