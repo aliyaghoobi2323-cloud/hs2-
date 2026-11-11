@@ -56,7 +56,7 @@ func TestRealityNetBudget(t *testing.T) {
 	var b netBudget
 	got := int64(0)
 	for i := 0; i < 100; i++ {
-		got += b.take("1.2.3.0", 512<<10)
+		got += b.take("1.2.3.0", 256<<10)
 	}
 	if got != netFreeBudget {
 		t.Fatalf("free bytes over 100 connections %d, want the budget %d", got, netFreeBudget)
@@ -115,5 +115,25 @@ func TestParseServerHelloHRR(t *testing.T) {
 	copy(m[6:], hrrRandom)
 	if _, ok := parseServerHello(m); ok {
 		t.Fatal("HRR taken for a ServerHello")
+	}
+}
+
+// sec41: the net budget is charged with bytes actually spliced: many small
+// visits from one /24 stay full speed, a bulk reader is capped once the
+// budget is used up even across reconnects.
+func TestRealitySpliceNetBudgetCharged(t *testing.T) {
+	rt := newRawTarget(t, "T", 300<<10)
+	l := newRealityLab(t, rt.ln.Addr().String(), func(p *FrontProfile) {
+		p.FallbackMaxBytes, p.FallbackRateBps = 1<<20, 64<<10
+	})
+	l.srv.budget.take("127.0.0.0", netFreeBudget-100<<10) // the net has used most of its minute
+	c, _ := net.Dial("tcp", l.addr)
+	c.Write(plainHello(t, "www.target.test"))
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _ := io.Copy(io.Discard, c)
+	c.Close()
+	// 100 KB free, then 2 s at 64 KB/s (+ a chunk of slack)
+	if n < 100<<10 || n > 100<<10+128<<10+32<<10 {
+		t.Fatalf("got %d B in 2 s", n)
 	}
 }

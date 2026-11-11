@@ -1203,7 +1203,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 			return
 		}
 		defer release()
-		free, rate := r.spliceLimits(hello, raw.RemoteAddr())
+		free, rate := r.spliceLimits(hello)
 		getTarget(true)
 		r.fallback(ctx, raw, target, buf[sent:], free, rate)
 		return
@@ -1452,6 +1452,7 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 // fallback splices client <-> target byte for byte (pending = client bytes
 // read but not yet sent to the target), with the limits.
 func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, pending []byte, free, rate int64) {
+	netKey := clientNet(client.RemoteAddr())
 	defer client.Close()
 	if target == nil {
 		realityReject("target_dial")
@@ -1472,7 +1473,7 @@ func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, p
 	wg.Add(2)
 	cp := func(dst, src net.Conn) {
 		defer wg.Done()
-		r.limitedCopy(dst, src, free, rate)
+		r.limitedCopy(dst, src, free, rate, netKey)
 		if c, ok := dst.(interface{ CloseWrite() error }); ok {
 			c.CloseWrite()
 		} else {
@@ -1493,14 +1494,15 @@ func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, p
 }
 
 // limitedCopy: free up to maxBytes, then at most rateBps.
-func (r *RealityServer) limitedCopy(dst, src net.Conn, maxBytes, rateBps int64) {
+func (r *RealityServer) limitedCopy(dst, src net.Conn, maxBytes, rateBps int64, netKey string) {
 	b := make([]byte, 32<<10)
 	var total int64
 	var start time.Time
 	var after int64
+	capped := false
 	for {
 		chunk := b
-		if total >= maxBytes && len(chunk) > 16<<10 {
+		if capped && len(chunk) > 16<<10 {
 			chunk = b[:16<<10]
 		}
 		n, err := src.Read(chunk)
@@ -1510,13 +1512,21 @@ func (r *RealityServer) limitedCopy(dst, src net.Conn, maxBytes, rateBps int64) 
 			}
 			total += int64(n)
 			realityStats.fbBytes.Add(int64(n))
-			if total > maxBytes {
-				if start.IsZero() {
-					start = time.Now()
-					after = total - maxBytes
-				} else {
-					after += int64(n)
+			if !capped {
+				// free while this connection is under maxBytes AND its client
+				// net has budget left this minute (charged as used, sec41)
+				inFree := min(int64(n), maxBytes-(total-int64(n)))
+				var got int64
+				if inFree > 0 {
+					got = r.budget.take(netKey, inFree)
 				}
+				if got < int64(n) {
+					capped, start, after = true, time.Now(), int64(n)-got
+				}
+			} else {
+				after += int64(n)
+			}
+			if capped {
 				want := time.Duration(float64(after) / float64(rateBps) * float64(time.Second))
 				if d := want - time.Since(start); d > 0 {
 					time.Sleep(d)

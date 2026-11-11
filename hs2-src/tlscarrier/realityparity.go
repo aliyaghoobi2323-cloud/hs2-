@@ -182,10 +182,10 @@ const (
 	foreignFreeBytes = 32 << 10
 	foreignRateBps   = 8 << 10
 	// netFreeBudget: free (full-speed) cover bytes per client /24 (/64) per
-	// minute across ALL its connections; past it every new splice from that
-	// net starts at the rate cap (reconnecting no longer resets the
-	// allowance).
-	netFreeBudget = 4 << 20
+	// minute across ALL its connections and both directions, charged as
+	// used; past it every splice from that net runs at its rate cap
+	// (reconnecting no longer resets the allowance).
+	netFreeBudget = 8 << 20
 )
 
 type netBudget struct {
@@ -214,7 +214,7 @@ func (b *netBudget) take(k string, want int64) int64 {
 }
 
 // spliceLimits are one cover splice's free bytes (per direction) and rate.
-func (r *RealityServer) spliceLimits(h *realityHello, a net.Addr) (free, rate int64) {
+func (r *RealityServer) spliceLimits(h *realityHello) (free, rate int64) {
 	free, rate = r.maxBytes, r.rateBps
 	if h == nil || !r.names[strings.ToLower(h.sni)] {
 		if free > foreignFreeBytes {
@@ -224,8 +224,6 @@ func (r *RealityServer) spliceLimits(h *realityHello, a net.Addr) (free, rate in
 			rate = foreignRateBps
 		}
 	}
-	// both directions draw on the net's budget
-	free = r.budget.take(clientNet(a), 2*free) / 2
 	return free, rate
 }
 
