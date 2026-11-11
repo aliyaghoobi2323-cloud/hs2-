@@ -264,7 +264,7 @@ func (m *mConn) budAddLocked(now time.Time, all, dup int) {
 // callLog writes the 10 s line (only when something was copied).
 func callLog(now time.Time) {
 	last := callStat.last.Load()
-	if now.UnixNano()-last < int64(mCallLogEvery) || !callStat.last.CompareAndSwap(last, now.UnixNano()) {
+	if monoNano(now)-last < int64(mCallLogEvery) || !callStat.last.CompareAndSwap(last, monoNano(now)) {
 		return
 	}
 	if last == 0 {

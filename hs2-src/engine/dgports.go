@@ -493,7 +493,7 @@ func (e *dgEdge) probeLoop(ctx context.Context) {
 		switch r := e.probe(ctx); {
 		case r == dgTagUnknown:
 			wait = dgProbeUnknown
-		case r == dgTagNo && time.Since(time.Unix(0, e.since.Load())) < dgFastAfterNo:
+		case r == dgTagNo && time.Since(monoTime(e.since.Load())) < dgFastAfterNo:
 			wait = dgProbeRetry
 		}
 		select {
@@ -615,7 +615,7 @@ func (e *dgEdge) setState(s int32) {
 		e.silent.Store(0)
 	}
 	if old := e.state.Swap(s); old != s {
-		e.since.Store(time.Now().UnixNano())
+		e.since.Store(monoNano(time.Now()))
 		switch s {
 		case dgTagYes:
 			e.cfg.Log("dg: the kharej server routes each user port to its own target (per-port routing on)")

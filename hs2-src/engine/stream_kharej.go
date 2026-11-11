@@ -157,7 +157,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			continue
 		}
 		bo.ok()
-		go cfg.Server.AcceptFront(ctx, conn, func(car *tlscarrier.Carrier) {
+		go guardAccept(ctx, cfg.Server, conn, logf, func(car *tlscarrier.Carrier) {
 			mtr := &linkMeter{tcp: tcpConnOf(car)} // download-side counters, reported over kindStats
 			sess, why, err := newSession(car.RawConn(), true, nil, mtr)
 			if err != nil {

@@ -731,7 +731,7 @@ func (m *LinkManager) notifyCtl() {
 // far more than a minute when refusals come in bursts.
 func (m *LinkManager) noteOverCap() (n int, since time.Duration) {
 	k := m.overCapN.Add(1)
-	now := time.Now().UnixNano()
+	now := monoNano(time.Now())
 	last := m.overCapLog.Load()
 	if now-last < int64(time.Minute) || !m.overCapLog.CompareAndSwap(last, now) {
 		return 0, 0

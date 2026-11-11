@@ -60,7 +60,7 @@ func (p *poolPeak) note(now time.Time, n int) {
 	}
 	if p.n >= stripeRebuildMinPeak && 2*n < p.n && now.Sub(p.open) > stripeRebuildFor {
 		p.open = now
-		p.until.Store(now.Add(stripeRebuildFor).UnixNano())
+		p.until.Store(monoNano(now.Add(stripeRebuildFor)))
 		stripeRebuildHits.Add(1)
 		log.Printf("mconn stripe: pool %d -> %d links (under half): uploads use 1 stripe sub for %v (HS2_MCONN_STRIPE_REBUILD)", p.n, n, stripeRebuildFor)
 	}
@@ -72,7 +72,7 @@ func (p *poolPeak) rebuildCap(now time.Time) int {
 	if p == nil || !stripeRebuildOn.Load() {
 		return -1
 	}
-	if u := p.until.Load(); u != 0 && now.UnixNano() < u {
+	if u := p.until.Load(); u != 0 && monoNano(now) < u {
 		return 1
 	}
 	return -1

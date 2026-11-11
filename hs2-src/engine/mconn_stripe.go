@@ -276,7 +276,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 // stripeAllUsedLocked (Iran): every live stripe sub received data in the
 // last mLitePoll (the sender's gate uses them all).
 func (m *mConn) stripeAllUsedLocked(now time.Time) bool {
-	t := now.Add(-mLitePoll).UnixNano()
+	t := monoNano(now.Add(-mLitePoll))
 	for _, s := range m.subs {
 		if s.stripe && !s.retired && !s.dead && s.lastRecv.Load() < t {
 			return false

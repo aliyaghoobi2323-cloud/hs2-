@@ -38,7 +38,7 @@ func (m *mConn) traceFirstLocked(s *msub, end uint64, n int) {
 		return
 	}
 	i := x.n % mTraceRing
-	x.ends[i], x.ats[i] = end, time.Now().UnixNano()
+	x.ends[i], x.ats[i] = end, monoNano(time.Now())
 	x.n++
 	s.tr.first += int64(n)
 }
@@ -55,7 +55,7 @@ func (m *mConn) traceDupLocked(s *msub, off, end uint64, n int) {
 	for j := lo; j < x.n; j++ {
 		k := j % mTraceRing
 		if x.ends[k] >= end {
-			if lag := time.Duration(time.Now().UnixNano() - x.ats[k]); lag > s.tr.lagMax {
+			if lag := time.Duration(monoNano(time.Now()) - x.ats[k]); lag > s.tr.lagMax {
 				s.tr.lagMax = lag
 			}
 			return

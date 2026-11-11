@@ -77,8 +77,8 @@ func (b *LB) fillMin() int {
 	b.mu.Unlock()
 	if n > 0 {
 		f(n)
-		if b.spareLog.Load() == 0 || time.Since(time.Unix(0, b.spareLog.Load())) >= time.Minute {
-			b.spareLog.Store(time.Now().UnixNano())
+		if b.spareLog.Load() == 0 || time.Since(monoTime(b.spareLog.Load())) >= time.Minute {
+			b.spareLog.Store(monoNano(time.Now()))
 			b.log("lb auto2: %d link(s) short of two per path on %v — spare dial(s) asked of the pool (nothing closed for them)", n, names)
 		}
 	}
@@ -134,8 +134,8 @@ func (b *LB) spareForGap(now time.Time) bool {
 	f, uname := b.spare, b.paths[under].Name()
 	b.mu.Unlock()
 	f(k)
-	if t := b.spareGapLog.Load(); t == 0 || time.Since(time.Unix(0, t)) >= time.Minute {
-		b.spareGapLog.Store(time.Now().UnixNano())
+	if t := b.spareGapLog.Load(); t == 0 || time.Since(monoTime(t)) >= time.Minute {
+		b.spareGapLog.Store(monoNano(time.Now()))
 		b.log("lb auto2: rebalance — no idle link to retire; a spare dial asked for %s (%.1f links under its share; the edge retires the surplus once empty)", uname, underBy)
 	}
 	return true

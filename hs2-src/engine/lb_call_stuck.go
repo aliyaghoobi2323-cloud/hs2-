@@ -174,7 +174,7 @@ func (m *mConn) callStuckLocked(live []*msub, now time.Time) (gave bool, poll ti
 		m.stuckSince = time.Time{}
 		return false, 0
 	}
-	gap := lastRecv != 0 && now.Sub(time.Unix(0, lastRecv)) >= callStuckGap && now.Sub(lastPush) <= 2*callStuckPoll
+	gap := lastRecv != 0 && now.Sub(monoTime(lastRecv)) >= callStuckGap && now.Sub(lastPush) <= 2*callStuckPoll
 	busy := true
 	for _, s := range live {
 		if s.retired || s.dead || s.closeHS {
@@ -239,7 +239,7 @@ func (m *mConn) callStuckMoveLocked(live []*msub, now time.Time) bool {
 		}
 		if containsAny(m.stuckKeys, s.key) {
 			bad = append(bad, s)
-		} else if s.lastRecv.Load() >= m.stuckOpenedAt.UnixNano() {
+		} else if s.lastRecv.Load() >= monoNano(m.stuckOpenedAt) {
 			fresh = true
 		}
 	}

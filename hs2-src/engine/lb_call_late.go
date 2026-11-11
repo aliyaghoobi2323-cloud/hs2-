@@ -162,7 +162,7 @@ func (m *mConn) callLateMoveLocked(live []*msub, now time.Time) bool {
 			late = s
 			continue
 		}
-		if !containsAny(m.lateLive, s.key) && s.lastRecv.Load() >= m.lateOpenedAt.UnixNano() {
+		if !containsAny(m.lateLive, s.key) && s.lastRecv.Load() >= monoNano(m.lateOpenedAt) {
 			fresh = true
 		}
 	}

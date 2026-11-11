@@ -500,7 +500,7 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 	if stripeLog {
 		if fr := mc.firstRx.Load(); fr != 0 {
 			stripeLogf("newconn: pick=%v open=%v first=%v link=[%s]", e.pickDur.Round(time.Millisecond), tOpen.Round(time.Millisecond),
-				time.Duration(fr-t0.UnixNano()).Round(time.Millisecond), e.pickLink)
+				time.Duration(fr-monoNano(t0)).Round(time.Millisecond), e.pickLink)
 		}
 	}
 	return true

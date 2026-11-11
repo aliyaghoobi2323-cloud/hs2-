@@ -283,7 +283,7 @@ const dgPeerRetireStale = 4 * dgPoolCtlEvery
 // p.mu (l.retiring). A fresh notice arriving meanwhile wins (the CAS fails).
 func (l *dgLink) expirePeerRetire(now time.Time) bool {
 	at := l.peerRetireAt.Load()
-	if at == 0 || now.UnixNano()-at < int64(dgPeerRetireStale) || !l.peerRetireAt.CompareAndSwap(at, 0) {
+	if at == 0 || monoNano(now)-at < int64(dgPeerRetireStale) || !l.peerRetireAt.CompareAndSwap(at, 0) {
 		return false
 	}
 	if !l.retiring {
@@ -305,7 +305,7 @@ func (l *dgLink) avoid(now time.Time) bool {
 		return true
 	}
 	at := l.peerMuteAt.Load()
-	return at != 0 && now.UnixNano()-at < int64(dgPeerMuteFor)
+	return at != 0 && monoNano(now)-at < int64(dgPeerMuteFor)
 }
 
 // recentFlows counts the flows that moved on the carrier within flowRecent.
@@ -328,7 +328,7 @@ func (l *dgLink) setRetiring(now time.Time, on bool) {
 	case !on:
 		l.retiringAt.Store(0)
 	case l.retiringAt.Load() == 0:
-		l.retiringAt.Store(now.UnixNano())
+		l.retiringAt.Store(monoNano(now))
 	}
 }
 
@@ -336,7 +336,7 @@ func (l *dgLink) setRetiring(now time.Time, on bool) {
 // dgRetireForce: its flows then move off it even mid-burst.
 func (l *dgLink) retireForced(now time.Time) bool {
 	at := l.retiringAt.Load()
-	return at != 0 && now.UnixNano()-at >= int64(dgRetireForce)
+	return at != 0 && monoNano(now)-at >= int64(dgRetireForce)
 }
 
 // dgRetireForce: a retiring carrier keeps its sticky flows (moving a flow
@@ -365,7 +365,7 @@ const (
 // recycle and count) — and records pressure.
 func (l *dgLink) enqueue(b *[]byte, flow uint32, now time.Time) (ok bool, displaced *[]byte) {
 	if d := l.fq.push(qpkt{b: b, t: now}, flow); d != nil {
-		l.droppedAt.Store(now.UnixNano())
+		l.droppedAt.Store(monoNano(now))
 		l.noteQueueDrop()
 		if d.b == b {
 			return false, nil
@@ -437,7 +437,7 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 			// at its limit just as surely as on a queue-full drop. Record it
 			// as pressure, or a starved carrier reads as "not at its limit"
 			// and the pool shrinks under exactly the load that needs it.
-			l.droppedAt.Store(time.Now().UnixNano())
+			l.droppedAt.Store(monoNano(time.Now()))
 			l.noteQueueDrop()
 			drops.Add(1)
 			aged.Add(1)
@@ -853,13 +853,13 @@ func (p *dgPool) onCloseFrame(l *dgLink, payload []byte) bool {
 		return true
 	case closeRetire:
 		now := p.now()
-		l.peerRetireAt.Store(max(now.UnixNano(), 1))
+		l.peerRetireAt.Store(max(monoNano(now), 1))
 		l.setRetiring(now, true)
 	case closeServe:
 		l.peerRetireAt.Store(0)
 		l.setRetiring(p.now(), false)
 	case closeMute:
-		if l.peerMuteAt.Swap(max(p.now().UnixNano(), 1)) == 0 {
+		if l.peerMuteAt.Swap(max(monoNano(p.now()), 1)) == 0 {
 			p.muteLog.log("dg: carrier %d: the other server hears nothing on it — what goes there is lost: its flows move to live carriers", l.id)
 		}
 	case closeHear:
@@ -1195,7 +1195,7 @@ func (p *dgPool) sampleHealth() apSample {
 		dropped := l.droppedAt.Load()
 		// Under a policer cap a full queue is the cap, not the path: another
 		// carrier would share the same budget, so it never counts as pressure.
-		l.pressed = !capped && !l.retiring && warm && dropped != 0 && now.Sub(time.Unix(0, dropped)) <= dt
+		l.pressed = !capped && !l.retiring && warm && dropped != 0 && now.Sub(monoTime(dropped)) <= dt
 		s.links = append(s.links, apLink{
 			id: int(l.id), serving: l.alive() && !l.retiring, retiring: l.retiring,
 			servingSince: l.servingSince, pressed: l.pressed,
@@ -1226,7 +1226,7 @@ func (p *dgPool) foldDownPressure(links []apLink, dnRate []float64, now time.Tim
 		return
 	}
 	at := p.dnStatsAt.Load()
-	if at == 0 || now.Sub(time.Unix(0, at)) > dgDownStatsStale {
+	if at == 0 || now.Sub(monoTime(at)) > dgDownStatsStale {
 		return
 	}
 	want := int(p.dnPressed.Load())
@@ -1522,7 +1522,7 @@ func (p *dgPool) dialOne(ctx context.Context, epoch uint64) {
 			p.dialEpoch.Add(1)
 		}
 		n := p.failN.Add(1)
-		now := time.Now().UnixNano()
+		now := monoNano(time.Now())
 		if last := p.failLog.Load(); now-last >= int64(dialFailLogEvery) && p.failLog.CompareAndSwap(last, now) {
 			p.failN.Add(-n)
 			p.log("dg: carrier dial failed: %v (%d failed dial(s) since the last line)", err, n)
@@ -1989,7 +1989,7 @@ func (p *dgPool) onLinkStats(payload []byte) {
 	}
 	p.dnPressed.Store(uint32(binary.BigEndian.Uint16(payload[0:])))
 	p.dnServing.Store(uint32(binary.BigEndian.Uint16(payload[2:])))
-	p.dnStatsAt.Store(p.now().UnixNano())
+	p.dnStatsAt.Store(monoNano(p.now()))
 	if len(payload) >= 6 { // [pressed][serving][exit's ceiling]: display only
 		p.storePeerMax(binary.BigEndian.Uint16(payload[4:]))
 	}
@@ -1998,13 +1998,13 @@ func (p *dgPool) onLinkStats(payload []byte) {
 // storePeerMax records the other server's ceiling and when it arrived.
 func (p *dgPool) storePeerMax(v uint16) {
 	p.peerMax.Store(uint32(v))
-	p.peerMaxAt.Store(p.now().UnixNano())
+	p.peerMaxAt.Store(monoNano(p.now()))
 }
 
 // peerMaxNow is the other server's ceiling, or 0 when no report is fresh.
 func (p *dgPool) peerMaxNow() int {
 	at := p.peerMaxAt.Load()
-	if at == 0 || p.now().Sub(time.Unix(0, at)) > dgPeerMaxStale {
+	if at == 0 || p.now().Sub(monoTime(at)) > dgPeerMaxStale {
 		return 0
 	}
 	return int(p.peerMax.Load())

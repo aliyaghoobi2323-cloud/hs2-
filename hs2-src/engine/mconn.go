@@ -400,7 +400,7 @@ func (s *msub) push(c *mchunk) {
 // coldLocked (lite): nothing queued on s and nothing received on it since
 // before t — Iran's idle rule (mLiteIdle, both ways) may close it soon.
 func (s *msub) coldLocked(t time.Time) bool {
-	return s.qBytes == 0 && s.cur == nil && s.lastPush.Before(t) && s.lastRecv.Load() < t.UnixNano()
+	return s.qBytes == 0 && s.cur == nil && s.lastPush.Before(t) && s.lastRecv.Load() < monoNano(t)
 }
 
 func (s *msub) fits(n int) bool {
@@ -678,7 +678,7 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	s := &msub{m: m, rw: rw, key: key, kick: make(chan struct{}, 1), done: make(chan struct{})}
 	s.bulk.Store(bulk)
 	now := time.Now()
-	s.lastRecv.Store(now.UnixNano())
+	s.lastRecv.Store(monoNano(now))
 	s.lastPush = now
 	if m.sendOff > 0 && !bulk {
 		s.lastHole = now // it lacks what was sent before it joined
@@ -1330,7 +1330,7 @@ loop:
 		if _, err = io.ReadFull(s.rw, s.hdr[:1]); err != nil {
 			break
 		}
-		s.lastRecv.Store(time.Now().UnixNano())
+		s.lastRecv.Store(monoNano(time.Now()))
 		switch s.hdr[0] {
 		case mRecData:
 			if _, err = io.ReadFull(s.rw, s.hdr[1:mDataHdr]); err != nil {
@@ -2066,7 +2066,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				// connection (lab, 2% loss: downloads cut ~11 s in, at
 				// mLiteIdle after the upgrade).
 				last := s.lastPush
-				if r := time.Unix(0, s.lastRecv.Load()); r.After(last) {
+				if r := monoTime(s.lastRecv.Load()); r.After(last) {
 					last = r
 				}
 				if idle := now.Sub(last); idle >= mLiteIdle {
@@ -2151,7 +2151,7 @@ func (m *mConn) canRetireLocked(now time.Time) bool {
 	if now.Sub(m.echoAt) < mRetireAfter {
 		return false
 	}
-	quiet := now.Add(-mRetireAfter).UnixNano()
+	quiet := monoNano(now.Add(-mRetireAfter))
 	for _, s := range m.subs {
 		if s == m.bulk {
 			continue

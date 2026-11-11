@@ -161,7 +161,7 @@ func (m *mConn) readRaw(p []byte) (int, error, bool) {
 		n, err := s.rw.Read(want)
 		if n > 0 {
 			if m.rawRecvd.Add(int64(n)) == int64(n) && stripeLog {
-				m.firstRx.CompareAndSwap(0, time.Now().UnixNano())
+				m.firstRx.CompareAndSwap(0, monoNano(time.Now()))
 			}
 			return n, nil, true
 		}

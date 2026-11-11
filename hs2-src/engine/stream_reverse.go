@@ -62,7 +62,7 @@ func acceptReverseLinks(ctx context.Context, ln net.Listener, srv tlscarrier.Acc
 		if h, _, err := net.SplitHostPort(from); err == nil {
 			from = h
 		}
-		go srv.AcceptFront(ctx, conn, func(car *tlscarrier.Carrier) {
+		go guardAccept(ctx, srv, conn, logf, func(car *tlscarrier.Carrier) {
 			// This server's ceiling holds in reverse too: an exit that dials
 			// far more (an older one, or its min_links above our max) would
 			// otherwise make a small edge hold hundreds of sessions.
