@@ -368,14 +368,22 @@ type frontSpec struct {
 	ForceTarget       bool
 }
 
-// applyFrontSpec rewrites the entry's "front": tls removes it (the default);
-// reality / both keep what is there (key, short ids, limits) unless asked.
+// applyFrontSpec rewrites the entry's "front": tls makes the IP serve tls
+// again (the tunnel's front) but keeps a reality key, target and short ids
+// in the block ({"kind":"tls",...}: tls ignores them, nothing is announced),
+// so a later switch back to reality / both reuses the same key — the dialer
+// needs no new key; a block without a key is removed (the default). reality
+// / both keep what is there (key, short ids, limits) unless asked.
 func applyFrontSpec(e map[string]any, s frontSpec) error {
+	f, _ := e["front"].(map[string]any)
 	if s.Kind == tlscarrier.FrontTLS {
-		delete(e, "front")
+		if pk, _ := f["private_key"].(string); pk == "" {
+			delete(e, "front")
+			return nil
+		}
+		f["kind"] = tlscarrier.FrontTLS
 		return nil
 	}
-	f, _ := e["front"].(map[string]any)
 	if f == nil {
 		f = map[string]any{}
 	}
@@ -614,17 +622,16 @@ func realityFrontCmd(sub string, args []string) int {
 // frontPreflight refuses a reality / both front the other server could
 // never use: "" = fine.
 //   - the announcement (which carries the front, its public key and short
-//     ids to the dialer) is empty while this side listens on a wildcard
-//     address: the dialer would keep dialing tls, and a "reality" IP would
-//     then refuse every new link;
+//     ids to the dialer) cannot be built: the dialer would keep dialing tls,
+//     and a "reality" IP would then refuse every new link. A wildcard listen
+//     (addr 0.0.0.0:P) announces its explicit lb list (lbOwnAdvert), so this
+//     only catches an invalid list;
 //   - "both" answers tls only for the tunnel's own server names (sni): a
 //     tunnel without one would send every tls dialer to the cover target.
 func frontPreflight(fc fileConfig, kind, cfgPath string) string {
 	if lbOwnAdvert(fc) == nil {
-		h, p, _ := net.SplitHostPort(fc.Addr)
-		return fmt.Sprintf(tr("this server listens on the wildcard %s: the announcement that carries the front to the other server needs an exact address. First set "addr" in %s to <this IP>:%s (menu 2) Tunnels -> edit, or the config editor; a restart), then retry. (%s)",
-			"این سرور روی نشانی عمومی %s گوش می‌دهد: اعلامی که front را به سرور مقابل می‌برد نشانی دقیق می‌خواهد. اول "addr" را در %s به <IP همین سرور>:%s تغییر دهید (منوی ۲) تونل‌ها -> ویرایش، یا ویرایشگر پیکربندی؛ با ری‌استارت)، سپس دوباره. (%s)"),
-			firstNonEmpty(h, "*")+":"+p, cfgPath, p, fc.Addr)
+		return fmt.Sprintf(tr("the announcement that carries the front to the other server cannot be built from the lb list in %s (check it: hs2 lb show -u U; weights must be 0..100, at most 100 in total): fix the list first, then retry.",
+			"اعلامی که front را به سرور مقابل می‌برد از فهرست lb در %s ساخته نمی‌شود (بررسی: hs2 lb show -u U؛ وزن‌ها ۰ تا ۱۰۰ و مجموع حداکثر ۱۰۰): اول فهرست را درست کنید، سپس دوباره."), cfgPath)
 	}
 	if kind == tlscarrier.FrontBoth && len(tlsNames(fc)) == 0 {
 		return tr("'both' answers tls only for the tunnel's server name (sni), and this tunnel has none (no domain): tls dialers would be sent to the cover target. Set the same sni on both servers first, or use 'reality' once the other server shows it in `hs2 reality status`.",
@@ -682,7 +689,7 @@ func buildFrontState(unit string, fc fileConfig, ls liveStatus, running bool, jo
 			}
 			row := frontIPRow{IP: ip.String(), Configured: tlscarrier.FrontTLS, InUse: "-"}
 			f := e.Front
-			if f.IsDefault() {
+			if f.IsDefault() || f.NormKind() == tlscarrier.FrontTLS { // a kept key: still tls
 				f = tunnelFront(fc)
 			}
 			if !f.IsDefault() {
@@ -860,7 +867,7 @@ func checkFronts(statuses []namedStatus, cfgOf func(unit string) (fileConfig, bo
 			nRealityIPs := 0
 			for _, e := range lbLocalList(lbCur(fc)) {
 				f := e.Front
-				if f.IsDefault() {
+				if f.IsDefault() || f.NormKind() == tlscarrier.FrontTLS {
 					f = tunnelFront(fc)
 				}
 				k := f.NormKind()

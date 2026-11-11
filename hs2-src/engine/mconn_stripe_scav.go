@@ -353,7 +353,7 @@ type stripeLinkQ struct {
 	// stat reads the link's TCP_INFO (Iran's links, stripeUpTrack); nil:
 	// the meter's tcp (the exit's)
 	stat func() (tcpStat, bool)
-	win  qwinMin // HS2_MCONN_STRIPE_QWIN_MS (mconn_stripe_diag.go)
+	win  qwinMin  // HS2_MCONN_STRIPE_QWIN_MS (mconn_stripe_diag.go)
 	lb   linkBase // HS2_MCONN_STRIPE_LINKBASE (mconn_stripe_linkbase.go)
 }
 

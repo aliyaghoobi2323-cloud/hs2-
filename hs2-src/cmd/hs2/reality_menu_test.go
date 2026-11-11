@@ -59,10 +59,26 @@ func TestFrontSpecEdit(t *testing.T) {
 	if e["front"].(map[string]any)["private_key"] == pk {
 		t.Fatal("key not rotated")
 	}
-	// tls removes the block
+	// tls keeps the key (and target, short ids) in a tls block: switching
+	// back needs no new key distribution
+	pk2 := e["front"].(map[string]any)["private_key"]
+	sid := e["front"].(map[string]any)["short_ids"].([]any)[0]
 	applyFrontSpec(e, frontSpec{Kind: "tls"})
-	if _, ok := e["front"]; ok {
-		t.Fatal("tls kept a front block")
+	if f, _ := e["front"].(map[string]any); f == nil || f["kind"] != "tls" || f["private_key"] != pk2 {
+		t.Fatalf("tls lost the key: %v", e["front"])
+	}
+	if err := applyFrontSpec(e, frontSpec{Kind: "reality"}); err != nil { // no --target: the kept one
+		t.Fatal(err)
+	}
+	if f := e["front"].(map[string]any); f["kind"] != "reality" || f["private_key"] != pk2 || f["short_ids"].([]any)[0] != sid || f["target"] != "www.example.ir:443" {
+		t.Fatalf("back to reality changed the key: %v", f)
+	}
+	// a block without a key: tls removes it
+	e2 := m5Entry(t, m, "10.0.0.1")
+	e2["front"] = map[string]any{"kind": "tls"}
+	applyFrontSpec(e2, frontSpec{Kind: "tls"})
+	if _, ok := e2["front"]; ok {
+		t.Fatal("tls kept a key-less front block")
 	}
 	if _, err := ownLBEntry(m, "kharej", "10.9.9.9"); err == nil {
 		t.Fatal("unknown IP accepted")
@@ -271,13 +287,18 @@ func TestFrontDiffOneSidedAndHidden(t *testing.T) {
 
 func TestFrontPreflight(t *testing.T) {
 	var fc fileConfig
-	json.Unmarshal([]byte(m5Cfg), &fc) // addr 0.0.0.0:443: no announcement
-	if msg := frontPreflight(fc, "reality", "/etc/hs2/x.json"); !strings.Contains(msg, "wildcard") {
-		t.Fatalf("wildcard listener accepted: %q", msg)
-	}
-	fc.Addr = "10.0.0.1:443"
+	json.Unmarshal([]byte(m5Cfg), &fc) // addr 0.0.0.0:443: announces its explicit list
 	priv, _, _ := tlscarrier.RealityKeygen()
 	fc.LB.Kharej[1].Front.PrivateKey = priv
+	if msg := frontPreflight(fc, "reality", "/etc/hs2/x.json"); msg != "" {
+		t.Fatalf("wildcard listener refused: %q", msg)
+	}
+	bad := fc
+	bad.LB = &lbConfig{Enabled: true, Kharej: []lbIP{{IP: "10.0.0.1", Weight: 90}, {IP: "10.0.0.2", Weight: 90}}}
+	if msg := frontPreflight(bad, "reality", "/etc/hs2/x.json"); !strings.Contains(msg, "announcement") {
+		t.Fatalf("unbuildable announcement accepted: %q", msg)
+	}
+	fc.Addr = "10.0.0.1:443"
 	if msg := frontPreflight(fc, "reality", "/etc/hs2/x.json"); msg != "" {
 		t.Fatalf("exact listener refused: %q", msg)
 	}

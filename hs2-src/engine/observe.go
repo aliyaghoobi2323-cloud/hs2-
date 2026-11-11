@@ -116,8 +116,8 @@ var obs struct {
 	// light — no download-rate user stream and no stripe sub on it; busy —
 	// one of those, so the pong waits behind the download's data.
 	ctrlRTTLight, ctrlRTTBusy obsHist // µs
-	openLat obsHist // µs
-	openErr atomic.Uint64
+	openLat                   obsHist // µs
+	openErr                   atomic.Uint64
 
 	udpQueued obsHist // bytes waiting on the flow when a datagram is queued
 	udpDrops  atomic.Uint64

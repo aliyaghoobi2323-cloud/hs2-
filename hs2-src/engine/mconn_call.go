@@ -103,8 +103,8 @@ var callBud liteBudget
 // callStat: totals for the 10 s log line.
 var callStat struct {
 	upgrades, refused, dup, all, avoided atomic.Uint64
-	last                        atomic.Int64
-	prevUp, prevDup, prevAll    atomic.Uint64
+	last                                 atomic.Int64
+	prevUp, prevDup, prevAll             atomic.Uint64
 }
 
 // callCapped: the call copies of the last mCallBudgetWin seconds exceed the

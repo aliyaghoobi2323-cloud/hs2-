@@ -126,7 +126,9 @@ func (m *frontMux) rebuild(fc fileConfig) {
 	names := tlsNames(fc)
 	for _, e := range lbLocalList(fc) {
 		ip := net.ParseIP(e.IP)
-		if ip == nil || e.Front.IsDefault() {
+		// a "tls" block (possibly keeping a reality key for a later switch
+		// back) is the tunnel's front, exactly like no block
+		if ip == nil || e.Front.IsDefault() || e.Front.NormKind() == tlscarrier.FrontTLS {
 			continue
 		}
 		k := ip.String()

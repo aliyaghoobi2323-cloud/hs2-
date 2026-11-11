@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // The four roles: reverse iran (listens, announces), reverse kharej (dials),
@@ -41,9 +42,103 @@ func TestLBOwnAdvertRoles(t *testing.T) {
 			t.Errorf("%s: advert %v", c.name, got)
 		}
 	}
-	// a wildcard listen announces nothing (the peer keeps its local list)
-	if a := lbOwnAdvert(lbFC(t, strings.Replace(lbKharejDirListen, `"addr":"10.1.0.1:443"`, `"addr":"0.0.0.0:443"`, 1))); a != nil {
-		t.Errorf("wildcard announced %v", a)
+	// a wildcard listen (what `hs2 tunnel create` writes) announces its
+	// explicit list, so per-IP fronts reach the dialer
+	for _, w := range []string{"0.0.0.0:443", "[::]:443", ":443"} {
+		a := lbOwnAdvert(lbFC(t, strings.Replace(lbKharejDirListen, `"addr":"10.1.0.1:443"`, `"addr":"`+w+`"`, 1)))
+		if len(a) != 2 || a[0] != (engine.LBAdvertIP{IP: "10.1.0.1", Weight: 70}) || a[1] != (engine.LBAdvertIP{IP: "10.1.0.2", Weight: 30}) {
+			t.Errorf("wildcard %s announced %v", w, a)
+		}
+	}
+	// ... and nothing with an empty list (the peer keeps its local list)
+	if a := lbOwnAdvert(lbFC(t, `{"mode":"listen","carrier":"mtcp","addr":"0.0.0.0:443","lb":{"enabled":true,"kharej":[]}}`)); a != nil {
+		t.Errorf("empty wildcard list announced %v", a)
+	}
+}
+
+// A wildcard listener's list is announced as written when it sums to 100,
+// else scaled to 100; its per-IP fronts are carried (public part only).
+func TestLBWildcardAdvert(t *testing.T) {
+	for _, c := range []struct {
+		ws, want []int
+	}{
+		{[]int{70, 30}, []int{70, 30}},
+		{[]int{50}, []int{100}},
+		{[]int{40, 20}, []int{67, 33}},
+		{[]int{0, 0, 0}, []int{34, 33, 33}},
+		{[]int{0, 100}, []int{0, 100}},
+	} {
+		var l []lbIP
+		for i, w := range c.ws {
+			l = append(l, lbIP{IP: fmt.Sprintf("10.2.0.%d", i+1), Weight: w})
+		}
+		ips, w, err := lbWildcardAdvert(l)
+		if err != nil || len(ips) != len(c.want) || fmt.Sprint(w) != fmt.Sprint(c.want) {
+			t.Errorf("%v: %v %v %v", c.ws, ips, w, err)
+		}
+	}
+	if _, _, err := lbWildcardAdvert([]lbIP{{IP: "10.2.0.1", Weight: 80}, {IP: "10.2.0.2", Weight: 80}}); err == nil {
+		t.Error("sum 160 accepted")
+	}
+	priv, _, _ := tlscarrier.RealityKeygen()
+	pub, _ := tlscarrier.RealityPublicOf(priv)
+	fc := lbFC(t, `{"mode":"listen","carrier":"mtcp","addr":"0.0.0.0:443","lb":{"enabled":true,"kharej":[{"ip":"10.2.0.1","weight":50},
+	 {"ip":"10.2.0.2","weight":50,"front":{"kind":"reality","target":"www.site.ir:443","server_names":["www.site.ir"],"short_ids":["aa"]}}]}}`)
+	fc.LB.Kharej[1].Front.PrivateKey = priv
+	a := lbOwnAdvert(fc)
+	if len(a) != 2 || a[0].Front != nil || a[1].Front == nil || a[1].Front.Kind != "reality" || a[1].Front.PublicKey != pub ||
+		a[1].Front.PrivateKey != "" || a[1].Front.Target != "" {
+		t.Fatalf("wildcard advert fronts: %v", a)
+	}
+	// the dialer takes the front from that announcement
+	ps, err := lbPathsAdvert(lbFC(t, lbIranDirDialW), a)
+	if err != nil || len(ps) != 2 || ps[1].Remote != "10.2.0.2" || ps[1].Front == nil || ps[1].Front.PublicKey != pub || ps[0].Front != nil {
+		t.Fatalf("dialer paths from a wildcard advert: %+v %v", ps, err)
+	}
+	// a tls block that keeps a reality key announces nothing for that IP
+	fc.LB.Kharej[1].Front.Kind = "tls"
+	if a := lbOwnAdvert(fc); len(a) != 2 || a[1].Front != nil {
+		t.Fatalf("kept key announced: %v", a)
+	}
+}
+
+const lbIranDirDialW = `{"mode":"dial","carrier":"mtcp","addr":"10.2.0.1:443","bind_local_ip":"10.0.0.1",
+ "lb":{"enabled":true,"iran":[{"ip":"10.0.0.1","weight":100}],"kharej":[]}}`
+
+// fakeLNSet is a ListenerSet that records removals.
+type fakeLNSet struct {
+	net.Listener
+	ips     []string
+	removed []string
+}
+
+func (f *fakeLNSet) AddListener(ln net.Listener) { ln.Close() }
+func (f *fakeLNSet) RemoveListener(ip string) bool {
+	f.removed = append(f.removed, ip)
+	return true
+}
+func (f *fakeLNSet) ListenIPs() []string { return f.ips }
+
+// A wildcard addr's listener shows up as "::" (or "0.0.0.0") whatever addr
+// says: an lb reload must never close it; a removed exact address is closed.
+func TestSyncListenersKeepsWildcard(t *testing.T) {
+	for _, c := range []struct{ addr, member string }{
+		{"0.0.0.0:443", "::"}, {"0.0.0.0:443", "0.0.0.0"}, {":443", "::"}, {"[::]:443", "::"}, {"[::]:443", "0.0.0.0"},
+	} {
+		fc := lbFC(t, `{"mode":"listen","carrier":"mtcp","addr":"`+c.addr+`","lb":{"enabled":true,"kharej":[{"ip":"10.3.0.1","weight":100}]}}`)
+		ln := &fakeLNSet{ips: []string{c.member, "10.3.0.9"}}
+		rt := &lbRuntime{fc: fc, ln: ln, logf: func(string, ...any) {}}
+		rt.syncListenersLocked()
+		if len(ln.removed) != 1 || ln.removed[0] != "10.3.0.9" {
+			t.Errorf("addr %s member %s: removed %v", c.addr, c.member, ln.removed)
+		}
+	}
+	// an exact addr: its own listener stays too
+	ln := &fakeLNSet{ips: []string{"10.1.0.1", "10.1.0.2", "10.1.0.7"}}
+	rt := &lbRuntime{fc: lbFC(t, lbKharejDirListen), ln: ln, logf: func(string, ...any) {}}
+	rt.syncListenersLocked()
+	if fmt.Sprint(ln.removed) != "[10.1.0.7]" {
+		t.Errorf("exact addr: removed %v", ln.removed)
 	}
 }
 

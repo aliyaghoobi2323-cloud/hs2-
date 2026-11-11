@@ -65,19 +65,26 @@ func lbCur(fc fileConfig) fileConfig {
 }
 
 // lbOwnAdvert is the listening side's own list as announced: every address
-// with its weight, the primary included. nil on the dialing side or when the
-// primary is a wildcard listen (nothing exact to announce: the peer keeps its
-// local list).
+// with its weight, the primary included. nil on the dialing side.
+//
+// A wildcard listen (addr 0.0.0.0:P / [::]:P / :P, what `hs2 tunnel create`
+// writes) has no exact primary: it announces its explicit lb list instead
+// (lbWildcardAdvert), so the per-IP fronts still reach the dialer. nil only
+// when that list is empty (the peer keeps its local list, as before).
 func lbOwnAdvert(fc fileConfig) []engine.LBAdvertIP {
 	if !lbOn(fc) || dialing(fc) {
 		return nil
 	}
 	local, _, lp, _ := lbLists(fc)
+	var ips []string
+	var w []int
+	var err error
 	if lp == "" {
-		return nil
+		ips, w, err = lbWildcardAdvert(local)
+	} else {
+		ips, w, err = lbSideWeights("local", local, lp, true)
 	}
-	ips, w, err := lbSideWeights("local", local, lp, true)
-	if err != nil {
+	if err != nil || len(ips) == 0 {
 		return nil
 	}
 	out := make([]engine.LBAdvertIP, 0, len(ips))
@@ -88,6 +95,52 @@ func lbOwnAdvert(fc fileConfig) []engine.LBAdvertIP {
 		return nil
 	}
 	return out
+}
+
+// lbWildcardAdvert is the announced list of a wildcard listener: exactly its
+// explicit lb list (every listed IP is reachable through the wildcard). The
+// weights are announced as written when they sum to 100 (what `hs2 lb
+// add-ip` writes); otherwise they are scaled to 100 (largest remainder; all
+// zero = equal shares), since an announcement must sum to 100.
+func lbWildcardAdvert(list []lbIP) ([]string, []int, error) {
+	ips, w, err := lbSideWeights("local", list, "", false)
+	if err != nil {
+		return nil, nil, err
+	}
+	// drop the unlisted wildcard member ("") lbSideWeights adds
+	var oi []string
+	var ow []int
+	sum := 0
+	for i, ip := range ips {
+		if ip == "" {
+			continue
+		}
+		oi, ow = append(oi, ip), append(ow, w[i])
+		sum += w[i]
+	}
+	if len(oi) == 0 || sum == 100 {
+		return oi, ow, nil
+	}
+	if sum == 0 {
+		for i := range ow {
+			ow[i] = 1
+		}
+		sum = len(ow)
+	}
+	type rem struct{ i, r int }
+	var rs []rem
+	tot := 0
+	for i, x := range ow {
+		ow[i] = x * 100 / sum
+		rs = append(rs, rem{i, x * 100 % sum})
+		tot += ow[i]
+	}
+	sort.SliceStable(rs, func(a, b int) bool { return rs[a].r > rs[b].r })
+	for k := 0; tot < 100; k++ {
+		ow[rs[k%len(rs)].i]++
+		tot++
+	}
+	return oi, ow, nil
 }
 
 // lbPathsAdvert builds the dialing side's paths with the remote addresses

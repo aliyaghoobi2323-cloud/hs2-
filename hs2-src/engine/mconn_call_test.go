@@ -275,7 +275,6 @@ func TestMConnCallOneWayStaysSingle(t *testing.T) {
 	noLeak(t, before)
 }
 
-
 // HS2_MCONN_CALL_PICK: the two subs whose links are not repairing a loss
 // and hold the least unsent come first; ties go in turn.
 func TestMConnCallPickScores(t *testing.T) {
