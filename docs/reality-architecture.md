@@ -617,7 +617,7 @@ call, game, iperf down x8; 45 s):
 | eq2 | 1146 | 0 | 167 ms | 59/35/58 | 39/23/38% |
 | B worse (+80 ms, 3% corrupt) | 1040 | 0 | 1230 ms | 60/28/65 | 39/18/42% |
 
-Findings for the LB (OPEN): (a) with equal paths the reality-only path B
+Findings for the LB (resolved / explained in 8.4): (a) with equal paths the reality-only path B
 settles at ~37 links instead of ~51: at ~10 s one B dial fails with
 `reading server proof: i/o timeout` and auto2 lowers B to x0.17 citing
 `loss 1.1%` (the same loss as A and C), and the share does not recover in
@@ -625,3 +625,93 @@ the run — the LB is biased by the front's startup failures, not by quality.
 (b) when B really degrades, auto2 cuts it (x0.10, `loss 4.2%`) but only idle
 links retire (37 -> 28), so crowd p99 rises to 1.23 s: light users stay
 behind a bad path — against the "light users never behind heavy/bad" rule.
+
+### 8.4 Phase 4c: LB front bias, light users on a cut path, start-storm (2026-11-11)
+
+Commit `777c181d` (branch reality35c, engine only). Lab 1, same setup as 8.3
+(`/opt/hs2lab/r35/c`, whole lab per run, 3 paths A tls / B reality / C both,
+1000mbit/40ms/1% each, reverse l3mtcp, crowd 3000, call, game, iperf down x8).
+
+**(a) Front bias — root cause.** Every equal-path run (old and new binary,
+6/6) has exactly ONE failed dial, always on B at ~10-12 s:
+`tlscarrier: reading server proof: read tcp ...: i/o timeout` (TCP connected,
+the front's proof read timed out). `LB.measure` turned the tick's dial counts
+into `q2Reading.fail = dfails/dials`; that tick B had 2 dials, 1 failed ->
+fail 0.5, and `q2Goodness` = 1/(1 + 50*loss + queue/50 + 4*fail) fell from
+~0.65 to ~0.28 next to A and C at the same 1.1% loss: r = 0.43, target r^2 =
+0.19 — exactly the logged `1.00->0.19 (lower: loss 1.1%)` (the reason string
+named only the loss). B then climbed 0.1 a reading, but a busy pool only
+retires idle links, so B ended the 45 s runs at 35-37 links. Not retransmits,
+not link age: the per-path loss reading is computed the same way for every
+front. Unit test `TestJudgeEqualPathsFrontFailure` reproduces it with the
+old rule (B -> <0.3) and shows 1.0 with the fix.
+
+Fix (`lb_judgedata.go`, `HS2_LB_JUDGE_DATA`, default ON in envdef): the
+judge's fail share counts only dials that failed BEFORE TCP connected
+(`*net.OpError` Op "dial": refused / SYN timeout — the path itself) and only
+in a tick with >= 4 dials. A front's handshake failure never reaches the
+judge (it stays with the front fallback / cool-down / start back-off, which
+still count every failed dial). The reason string now shows `dial fail N%`
+when that term is in play.
+
+| equal paths | links A/B/C end | crowd p99 | heavy Mbps | n |
+|---|---|--:|--:|--:|
+| before (8.3, be79c990) | 59/36/58, 57/37/56, 59/35/58 | 168 ms | 1185 | 3 |
+| after (JUDGE_DATA=1) | 51/50/49, 51/50/49, 51/50/49 | 169 ms | 1220 | 3 |
+
+(B's one front failure still happens in every run, ~11 s in; its cause is in
+the reality front, not the LB: a lead for tlscarrier — the proof read deadline
+under the start burst.)
+
+**(b) Light users behind a cut path.** B +80 ms one-way, 3% corrupt. The
+existing cut drain (`HS2_LB_CUT_DRAIN`, on) already retires B's surplus
+(24-30 links holding ~1800 connections) at the cut (~12-15 s): no new
+connections land there. Measured with the probe's `-warm 25s` (stats from
+25 s to 60 s, i.e. AFTER the cut) the crowd is at p99 ~325 ms, not 1.2 s: the
+1.2-1.5 s whole-run p99 (bbase0 1419, p4bbad0 1230; bbase1 401 — noisy) comes
+from the ~12 s BEFORE the cut, when a third of the crowd is on B and the judge
+still needs two bad readings.
+
+New mechanism (`lb_evac.go`, `HS2_LB_EVAC`, default OFF): a link cut-drained
+for 4 s has its LIGHT user streams (not heavy, rate < 32 KB/s, not mconn
+copy-only) closed BETWEEN requests (no byte for 400 ms, re-checked right
+before the close), at most 24 a link and 240 a 2 s tick over the pool, spaced
+5-25 ms; after cutDrainForce (60 s) the old rule takes over. Log:
+`lb evac: N closed ... (passed over: C copy-only, B busy, M mid-request)`.
+What it found: ~85% of the connections on the cut links are mconn lite
+second copies (copy-only — the connection already rides a good link too);
+the ~200-250 real light first subs were moved in ~25 s.
+
+| B worse, stats 25-60 s | crowd p95 | crowd p99 | call p99 | ping p99 | heavy | crowd fail | n |
+|---|--:|--:|--:|--:|--:|---|--:|
+| base (cut drain only) | 224 (219-226) | 328 (327-336) | 282 | 172 | 961 | 0,0,0 | 3 |
+| + EVAC | 200 (197-206) | 321 (320-325) | 289 | 177 | 935 | 0,4,0,0 | 4 |
+| all-tls, base | 218 | 324 | 304 | 101 | 918 | 0 | 1 |
+| all-tls, + EVAC | 201 | 321 | 194 | 166 | 1120 | 0 | 1 |
+
+(medians, ranges; EVAC n=4 = one run of the first version with the same
+rule + 3 of the final one.) EVAC lowers crowd p95 by ~10% consistently (no
+overlap, Welch t ~ 8, the same in the all-tls run: a general LB effect, not
+reality's), p99 by ~2% (noise level), heavy unchanged within noise, and one
+run had 4 crowd connections reset (a light first sub without a live copy).
+Not a proven p99 gain -> default off. Plan for the real p99 cause (the
+pre-cut window): evacuate on the first "lowered <= 0.25" reading too, or a
+faster first verdict for a path whose loss AND rtt both jump at once.
+
+**(c) Target down from start (phase-4 back-off).** `0:tdown` (target killed
+at t=0; B reality-only fails fast with EOF, C falls back to tls):
+
+| run | crowd p99 | heavy | failures | links A/B/C t5 / t10 / t20 | B failed dials |
+|---|--:|--:|---|---|--:|
+| p3 tdown0 (before back-off) | 2683 ms | 954 | 0 | 5/3/4, 6/3/5, 6/4/5 (13 links until ~30 s) | 599 |
+| td0 | 179 ms | 1034 | 0 | 28/0/28, 55/0/53, 76/1/74 | 26 -> cooled 20 s |
+| td1 | 167 ms | 1074 | 0 | 28/0/28, 55/0/53, 76/0/74 | 25 -> cooled 20 s |
+
+Pool growth is no longer stalled (150 links at 20 s), crowd p99 normal.
+
+Tests: `TestJudgeFailFrontNotLoss`, `TestJudgeEqualPathsFrontFailure`,
+`TestLBConnectFailCounted`, `TestEvacLightSparesHeavyAndActive` (heavy,
+call-rate, mid-request and copy-only streams untouched; per-call bound),
+`TestEvacDue`, `TestEvacPerTickBound` (pool-wide bound; non-cut retiring and
+serving links untouched), envdef/defaults tests. Raw: lab 1
+`/opt/hs2lab/r35/c/res/*`, `an.py`.
