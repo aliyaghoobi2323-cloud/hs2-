@@ -83,11 +83,13 @@ func TestRealityTargetSuiteParity(t *testing.T) {
 					return
 				}
 				go func() {
-					rel := lockSuite(cs)
-					s := utls.Server(&firstWriteConn{Conn: c, f: rel}, &utls.Config{Certificates: []utls.Certificate{{Certificate: cert.Certificate, PrivateKey: cert.PrivateKey}},
-						CurvePreferences: []utls.CurveID{utls.X25519}})
+					s := utls.Server(c, &utls.Config{Certificates: []utls.Certificate{{Certificate: cert.Certificate, PrivateKey: cert.PrivateKey}},
+						CurvePreferences: []utls.CurveID{utls.X25519},
+						GetConfigForClient: func(chi *utls.ClientHelloInfo) (*utls.Config, error) {
+							onlySuite13(chi.CipherSuites, cs)
+							return nil, nil
+						}})
 					s.Handshake()
-					rel()
 					c.Close()
 				}()
 			}
@@ -103,9 +105,6 @@ func TestRealityTargetSuiteParity(t *testing.T) {
 		}
 		car.Close()
 		ln.Close()
-	}
-	if len(utlsSuites13) != 3 || utlsSuites13[0] != tls.TLS_AES_128_GCM_SHA256 {
-		t.Fatalf("defaults not restored: %#x", utlsSuites13)
 	}
 }
 

@@ -12,7 +12,7 @@ package tlscarrier
 // the target). Now the listener forwards the hello to the target, waits for
 // the target's ServerHello (the timing of a spliced connection), takes its
 // cipher suite and key-share group, and serves that with the uTLS server
-// (its TLS 1.3 preference list is set for the one handshake under a lock),
+// (the suite per connection, onlySuite13: no global state, no lock),
 // stapling the target's OCSP response and SCTs.
 
 import (
@@ -22,71 +22,35 @@ import (
 	"strings"
 	"sync"
 	"time"
-	_ "unsafe" // go:linkname
 
 	utls "github.com/refraction-networking/utls"
 )
 
-// The uTLS server's TLS 1.3 preference lists (uTLS marks them for linkname,
-// go.dev/issue/67401). In this process only the reality listener's uTLS
-// server reads them (our uTLS clients use parrot presets with their own
-// cipher list).
-//
-//go:linkname utlsSuites13 github.com/refraction-networking/utls.defaultCipherSuitesTLS13
-var utlsSuites13 []uint16
-
-//go:linkname utlsSuites13NoAES github.com/refraction-networking/utls.defaultCipherSuitesTLS13NoAES
-var utlsSuites13NoAES []uint16
-
-var (
-	suiteMu                      sync.Mutex
-	suites13Orig, suites13NoAESO = append([]uint16(nil), utlsSuites13...), append([]uint16(nil), utlsSuites13NoAES...)
-)
-
-func preferSuite(l []uint16, s uint16) []uint16 {
-	out := []uint16{s}
+// onlySuite13 makes s the only TLS 1.3 suite the uTLS server sees in this
+// client's offer, so it must pick s (rel44). It rewrites, in place, the
+// parsed hello's suite list that GetConfigForClient's ClientHelloInfo shares
+// with the handshake (utls handshake_server.go: CipherSuites:
+// clientHello.cipherSuites); the transcript hashes the hello's original bytes
+// (clientHelloMsg.marshal returns m.original), so nothing on the wire or in
+// the Finished changes. Per connection: no global state, no lock. A no-op
+// when the client did not offer s. TestRealityTargetSuiteParity guards the
+// uTLS detail it relies on.
+func onlySuite13(l []uint16, s uint16) {
+	offered := false
 	for _, x := range l {
-		if x != s {
-			out = append(out, x)
+		if x == s {
+			offered = true
 		}
 	}
-	return out
-}
-
-// lockSuite makes s the uTLS server's first TLS 1.3 choice until the returned
-// release runs (at the handshake's first write: the suite is chosen by then).
-// s == 0: the defaults, still under the lock (another handshake may have
-// changed them).
-func lockSuite(s uint16) (release func()) {
-	suiteMu.Lock()
-	if s != 0 {
-		utlsSuites13 = preferSuite(suites13Orig, s)
-		utlsSuites13NoAES = preferSuite(suites13NoAESO, s)
+	if !offered {
+		return
 	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			utlsSuites13, utlsSuites13NoAES = suites13Orig, suites13NoAESO
-			suiteMu.Unlock()
-		})
+	for i, x := range l {
+		if x>>8 == 0x13 && x != s {
+			l[i] = s
+		}
 	}
 }
-
-// firstWriteConn runs f before its first Write.
-type firstWriteConn struct {
-	net.Conn
-	f func()
-}
-
-func (c *firstWriteConn) Write(b []byte) (int, error) {
-	if c.f != nil {
-		c.f()
-		c.f = nil
-	}
-	return c.Conn.Write(b)
-}
-
-func (c *firstWriteConn) NetConn() net.Conn { return c.Conn }
 
 // targetHello is what the target answered to the client's own hello.
 type targetHello struct {

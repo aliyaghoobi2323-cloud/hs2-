@@ -358,16 +358,23 @@ func parseRealityHello(b []byte) (*realityHello, error) {
 
 // RealityStats are process-wide counters of the reality listener(s).
 type RealityStats struct {
-	Authed        int64            `json:"authed"`
-	FallbackConns int64            `json:"fallback_conns"`
-	FallbackBytes int64            `json:"fallback_bytes"`
-	Rejected      map[string]int64 `json:"rejected,omitempty"`
+	Authed        int64 `json:"authed"`
+	FallbackConns int64 `json:"fallback_conns"`
+	FallbackBytes int64 `json:"fallback_bytes"`
+	// HelloLate: authenticated links served without the target's ServerHello
+	// (it did not answer within authTargetBudget; rel44).
+	HelloLate int64            `json:"target_hello_late,omitempty"`
+	Rejected  map[string]int64 `json:"rejected,omitempty"`
 }
 
+// authTargetBudget bounds the target's part of an authenticated link (its
+// connect + its ServerHello), well inside the dialer's 10 s auth deadline.
+const authTargetBudget = 3 * time.Second
+
 var realityStats struct {
-	authed, fbConns, fbBytes atomic.Int64
-	mu                       sync.Mutex
-	rej                      map[string]int64
+	authed, fbConns, fbBytes, helloLate atomic.Int64
+	mu                                  sync.Mutex
+	rej                                 map[string]int64
 }
 
 func realityReject(reason string) {
@@ -381,7 +388,7 @@ func realityReject(reason string) {
 
 // RealityStatsNow snapshots the counters.
 func RealityStatsNow() RealityStats {
-	s := RealityStats{Authed: realityStats.authed.Load(), FallbackConns: realityStats.fbConns.Load(), FallbackBytes: realityStats.fbBytes.Load()}
+	s := RealityStats{Authed: realityStats.authed.Load(), FallbackConns: realityStats.fbConns.Load(), FallbackBytes: realityStats.fbBytes.Load(), HelloLate: realityStats.helloLate.Load()}
 	realityStats.mu.Lock()
 	if len(realityStats.rej) > 0 {
 		s.Rejected = make(map[string]int64, len(realityStats.rej))
@@ -1233,7 +1240,40 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	// target cannot be reached neither can we (no reality without a reachable
 	// target; a "both" dialer then falls back to tls). The dial started at
 	// accept, so this rarely waits.
-	getTarget(true)
+	//
+	// rel44: the target's part (connect + its ServerHello) is bounded by
+	// authTargetBudget from here. Before, a slow target (a SYN lost under a
+	// burst of link dials, a site that throttles many connections from one
+	// IP) could hold an authenticated link for the 5 s target dial plus the
+	// 10 s target-hello wait, while the dialer's whole handshake + auth has
+	// ONE 10 s deadline: it then failed late as "reading server proof: i/o
+	// timeout". Now a target that has not connected in time fails the link
+	// at once (target_slow; "both" falls back to tls), and a target that
+	// connected but has not answered its ServerHello in time is served with
+	// the mirrored defaults (availability first; counted as target_hello_late).
+	tb := time.Now().Add(authTargetBudget)
+	if target == nil && !targetErr {
+		if !startedA.Load() {
+			startDial()
+		}
+		tm := time.NewTimer(authTargetBudget)
+		select {
+		case x := <-tch:
+			target, targetErr = x.c, x.err != nil
+		case <-tm.C:
+			go func() { // the dial still finishes: close what it brings
+				if x := <-tch; x.c != nil {
+					x.c.Close()
+				}
+			}()
+			tm.Stop()
+			realityReject("target_slow")
+			r.Counters.Rejected.Add(1)
+			raw.Close()
+			return
+		}
+		tm.Stop()
+	}
 	if target == nil {
 		realityReject("target_down")
 		r.Counters.Rejected.Add(1)
@@ -1253,7 +1293,10 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	var th targetHello
 	thOK := false
 	if _, err := target.Write(buf[sent:]); err == nil {
-		th, thOK = readTargetHello(target, handshakeTimeout)
+		th, thOK = readTargetHello(target, max(time.Until(tb), 50*time.Millisecond))
+		if !thOK {
+			realityStats.helloLate.Add(1)
+		}
 	}
 	target.Close()
 	cr := <-cch
@@ -1402,11 +1445,22 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 	if thOK {
 		suite = th.suite
 	}
-	release := lockSuite(suite)
-	tconn := utls.Server(&firstWriteConn{Conn: &prefixConn{Conn: wrapBatch(raw), pre: pre}, f: release}, ucfg)
+	// The target's suite, per connection (rel44; sec41 swapped uTLS's
+	// global TLS 1.3 preference list under a lock, which serialised the
+	// handshakes and raced with uTLS clients that read the same list).
+	if suite != 0 {
+		prev := ucfg.GetConfigForClient
+		ucfg.GetConfigForClient = func(chi *utls.ClientHelloInfo) (*utls.Config, error) {
+			onlySuite13(chi.CipherSuites, suite)
+			if prev != nil {
+				return prev(chi)
+			}
+			return nil, nil
+		}
+	}
+	tconn := utls.Server(&prefixConn{Conn: wrapBatch(raw), pre: pre}, ucfg)
 	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
 	err := tconn.Handshake()
-	release()
 	if err != nil {
 		realityReject("handshake")
 		raw.Close()
