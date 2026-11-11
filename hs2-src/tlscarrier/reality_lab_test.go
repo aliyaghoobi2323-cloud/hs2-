@@ -184,6 +184,16 @@ func TestLabReality(t *testing.T) {
 				cr.Close()
 			})
 		}
+	case "dial": // the real dialer: reality handshake + tunnel auth, then a frame echo
+		key, _ := hex.DecodeString(g("KEY"))
+		p := &FrontProfile{Kind: FrontReality, ServerNames: []string{g("SNI")}, PublicKey: g("PUB"), ShortIDs: []string{g("SID")}}
+		t0 := time.Now()
+		c, err := RealityFront{}.DialFront(context.Background(), DialPath{Addr: g("ADDR"), SNI: g("SNI"), Key: key, Profile: p})
+		if err != nil {
+			t.Fatalf("DIAL failed: %v", err)
+		}
+		t.Logf("DIAL ok in %v (tunnel authenticated)", time.Since(t0))
+		c.Close()
 	case "fp":
 		labFP(t, g("ADDR"), g("SNI"), g("PUB"), g("SID"))
 	case "replay":

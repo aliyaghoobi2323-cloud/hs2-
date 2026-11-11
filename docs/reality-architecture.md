@@ -1552,3 +1552,72 @@ Findings from the lab demo (fixed or guarded here):
   primary left unlisted scales the listed weights to 100 minus its share;
   remove-ip of the bound primary moves it to a listed IP. Lab-verified via
   the menu (health gate + confirm, 8/8 links).
+
+## 10. Security review sec41 (2026-11-11, branch sec41)
+
+Adversarial review of the reality front (code + lab 2/3 attack, prober on
+lab 1; listener `tlscarrier` RealityServer on lab 2 :18743, target
+`www.microsoft.com:443`, real dialer on lab 3). Probe tool:
+`tlscarrier/reality_lab_test.go` (`HS2_LAB=serve|dial|fp|replay`), scripts in
+`lab/sec41/` (probe battery, idle-connection flood).
+
+Found and fixed:
+
+* **Authenticated handshake differed from the target's (passive tell on
+  every link).** Before: cipher 0x1301 (Go's fixed preference) vs the
+  target's 0x1302, Finished record 53 vs 69 B, Certificate record 5919 vs
+  8268 B (the target staples OCSP + SCTs; the mirror counted only the chain),
+  first server byte one listener->target RTT earlier than a spliced
+  connection (173 vs 253 ms). Now the listener forwards the hello to the
+  target, waits for the target's ServerHello, takes its suite and group and
+  answers with the uTLS server (its TLS 1.3 preference list, linknamed, is set
+  for one handshake under a lock released at the first write), stapling the
+  target's OCSP/SCTs. After: suite, group, Certificate 8268, CV 281, Finished
+  69, tickets 2x298 and first-byte time all equal to a spliced connection.
+* **Free relay through a CDN-hosted target.** Every non-authenticated hello,
+  whatever its SNI, was spliced with 256 KB free then 64 KB/s, per
+  connection (reconnecting reset it). With a target behind Cloudflare whose
+  name has no CDN keyword (`www.npmjs.com` passes `multiTenantCDN`), a
+  stranger fetched 843 KB of www.cloudflare.com (and chat.openai.com) through
+  the listener. Now a hello with a foreign or no SNI, or no TLS, gets 32 KB
+  free then 8 KB/s (after: 122 KB in 12 s), and free bytes are charged per
+  client /24 (/64) per minute across connections (8 MB).
+* **Pre-hello connection flood mirrored to the target.** Each accepted
+  connection dials the target before its hello; 200 idle sockets from one /24
+  meant 200 target connections for 10 s each. Now at most 64 pre-hello
+  connections per /24 and 4096 per listener (FIN beyond).
+* **Old `"carrier": "reality"`** (package `reality`): no time window, no
+  replay memory (a replayed hello gets our own certificate at any time), an
+  unlimited cover splice. `hs2 check` warns and its start logs a WARNING;
+  removal needs an operator decision (no deployment should use it).
+
+Verified unchanged / OK: AEAD over the whole hello (zeroed session_id) with a
+per-connection HKDF key (salt client_random[:20]) and nonce
+client_random[20:32]; ±90 s window; replay memory (5 min, 16384 entries,
+only authenticated hellos enter it, so no memory DoS without the key);
+short id compared only after the AEAD opens; cert tag HMAC(authKey, SPKI)
+checked in constant time, the cert is encrypted (TLS 1.3) and only proves
+the key, the Ed25519 issuer never leaves the process; `private_key` is
+`json:"-"` (never announced, not in status), config files are written 0600;
+the per-IP profile announcement rides the authenticated tunnel control
+channel. Unauthenticated probes (openssl TLS 1.3 / 1.2 / no SNI / other SNI /
+ALPN, curl --http2, plain HTTP, garbage) give the same results as the
+target (the target is spliced byte for byte).
+
+Remaining known limits:
+
+* EncryptedExtensions is 4 B shorter than the target's (32 vs 36: the target
+  acks the SNI; the uTLS server has no hook for it). Fix: a small patched
+  uTLS server (replace in go.mod, like third_party/smux) that adds the
+  target's EE extensions as measured by the mirror probe.
+* First sender wins: a man in the middle that sends a captured hello before
+  the client (or replays it within 90 s after a listener restart or to
+  another listener of the same key) gets our handshake, now differing only
+  by the EE size above; it cannot finish it. Same as Xray REALITY.
+* "both" auto-fallback: an active censor that breaks reality handshakes (RST,
+  drop) makes the dialer use tls (our own SNI and certificate) for 10 min:
+  a forced downgrade by design (availability first).
+* Many links per IP pair, our IP not being one of the target's addresses
+  (SNI <-> IP mismatch), and the listener->target connection made for every
+  visitor remain visible to a censor that correlates flows or resolves the
+  SNI.
