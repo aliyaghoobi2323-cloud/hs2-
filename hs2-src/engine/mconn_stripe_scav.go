@@ -353,6 +353,7 @@ type stripeLinkQ struct {
 	// stat reads the link's TCP_INFO (Iran's links, stripeUpTrack); nil:
 	// the meter's tcp (the exit's)
 	stat func() (tcpStat, bool)
+	path string   // Iran's local IP of the link (HS2_MCONN_STRIPE_UP_PATHQ, mconn_stripe_pathq.go)
 	win  qwinMin  // HS2_MCONN_STRIPE_QWIN_MS (mconn_stripe_diag.go)
 	lb   linkBase // HS2_MCONN_STRIPE_LINKBASE (mconn_stripe_linkbase.go)
 }
@@ -465,6 +466,7 @@ func (p *stripeQ) pickLocked(now time.Time, own []*linkMeter, logIt bool) time.D
 		}
 	}
 	var lt []time.Duration
+	var pathLQ time.Duration
 	if p.light {
 		// Iran's upload (mconn_stripe_up.go): the light users' links too
 		for mtr, l := range p.links {
@@ -473,11 +475,12 @@ func (p *stripeQ) pickLocked(now time.Time, own []*linkMeter, logIt bool) time.D
 			}
 		}
 		slices.Sort(lt)
+		pathLQ = p.pathLightQLocked(own) // HS2_MCONN_STRIPE_UP_PATHQ (0 when off)
 	}
 	slices.Sort(ds)
 	if logIt && stripeLog && p.light && now.Sub(p.logAt) >= time.Second {
 		p.logAt = now // diagnostics: what Iran's upload gate reads
-		log.Printf("stripe upq: links=%d own=%d busy-others=%v light=%v", len(p.links), len(own), ds, lt)
+		log.Printf("stripe upq: links=%d own=%d busy-others=%v light=%v pathq=%v", len(p.links), len(own), ds, lt, pathLQ)
 	}
 	var q time.Duration
 	if len(ds) > 0 {
@@ -486,7 +489,7 @@ func (p *stripeQ) pickLocked(now time.Time, own []*linkMeter, logIt bool) time.D
 	if len(lt) > 0 {
 		q = max(q, lightQ(lt))
 	}
-	return q
+	return max(q, pathLQ)
 }
 
 // The relative gate's baseline. Production's Iran-Germany path shows its

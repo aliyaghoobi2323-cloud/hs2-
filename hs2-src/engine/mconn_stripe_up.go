@@ -156,13 +156,13 @@ var stripeUpLightPct atomic.Int32
 
 // stripeUpTrack counts an Iran link (its meter and its TCP_INFO reader)
 // while it is up; the returned func forgets it. Nothing with a key off.
-func stripeUpTrack(mtr *linkMeter, stat func() (tcpStat, bool)) func() {
+func stripeUpTrack(mtr *linkMeter, stat func() (tcpStat, bool), path string) func() {
 	if !stripeUp.Load() || stripeK.Load() == 0 || mtr == nil || stat == nil {
 		return func() {}
 	}
 	p := stripeUpPathQ
 	p.mu.Lock()
-	p.links[mtr] = &stripeLinkQ{stat: stat}
+	p.links[mtr] = &stripeLinkQ{stat: stat, path: path}
 	p.mu.Unlock()
 	return func() {
 		p.mu.Lock()
@@ -176,7 +176,7 @@ func trackEdgeLinkUp(l *mtcpLink) {
 	if !stripeUp.Load() || stripeK.Load() == 0 || l.sess == nil {
 		return
 	}
-	forget := stripeUpTrack(l.mtr, l.tcpStats)
+	forget := stripeUpTrack(l.mtr, l.tcpStats, linkPathOf(l))
 	go func() {
 		<-l.closed()
 		forget()
