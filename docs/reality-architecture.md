@@ -2166,3 +2166,105 @@ connections from our IP slows the pool build that way; the 3 s
   the heavy streams at the kill (which links each of the 8 streams' stripes
   were on, whether the dead ones are replaced), and test with
   `HS2_MCONN_STRIPE_JUMP_MS` on the Iran side too (it is kharej-only today).
+
+### 11.6 rel46 (2026-11-11): the u8 upload freeze — production has it; root cause; not fixed yet
+
+Branch rel46 = rel45 (64aee0b6) + the commits below. Harness
+`hs2-src/lab/s46` (labs 1 and 2, 3 slots each, all tls, arms interleaved).
+"Frozen" = the 8-stream heavy upload is at 0 Mbit/s for the last 5 s of the
+run (u8: 75 % of the links killed at 12 s, 30 s upload).
+
+#### 11.6.1 Production's binary has it
+
+| binary (u8, tls) | n | frozen | Mbps (whole run) mean | after the kill, mean Mbit/s |
+|---|---|---|---|---|
+| r31, lab env + `HS2_LB_FLAP_PEN=1` | 6 | **4/6** | 380 | 112 |
+| r31, production env only (Iran: defaults; kharej: `HS2_LB_FLAP_PEN=1`) | 6 | **2/5** (+1 empty iperf3 JSON) | 371 | 202 |
+| rel40 | 6 | 3/6 | 518 | 258 |
+| rel45 | 5+8 | 5/5, 6/8 | 455, 484 | 0, 154 |
+| rel45 + `HS2_MCONN_STRIPE_JUMP_MS=1500` on Iran | 4 | 2/4 | 520 | 215 |
+
+r31's production defaults include `HS2_MCONN_STRIPE=8` (the Iran log says
+so), so **production has the bug today**: an upload striped over several
+links is lost when one of its links dies. `HS2_MCONN_STRIPE_JUMP_MS` on the
+Iran side does not help.
+
+#### 11.6.2 Root cause
+
+Per stream (iperf3 JSON) the streams do not slow down: each one drops to 0 at
+the kill second and stays there, with no iperf3 error. With
+`HS2_MCONN_STRIPE_LOG=1` (both sides) every such connection's mConn ends at
+the kill: on Iran `sub- N ... cause=write: connection reset by peer
+holeRecent=true quiet=false` then `end err=mconn: a sub died holding the only
+copy of some bytes rst=true`. That is the stripe's designed failure rule
+(`mconn_stripe.go`, "Failure"): a stripe puts each chunk on ONE sub and there
+is no retransmission layer, so the bytes a dying link held (its send buffer,
+in flight, the peer's receive buffer) are gone and the connection is reset.
+The Iran relay closes the user socket; iperf3 does not reopen a data stream,
+so the stream shows 0 (a real app sees its upload reset). A connection
+striped over 2-3 subs loses one of them in 75 % kill almost surely; the runs
+that "recover" are those where 1-2 of the 8 connections happened to keep all
+their subs. Not the front, not the iperf3 control path (off the links since
+§11.5.3), not smux window or backpressure (the connection is gone), not the
+dead links' replacement (the pool rebuilds; the user connection was already
+reset).
+
+#### 11.6.3 A first fix, kept off: `HS2_MCONN_STRIPE_RESEND`
+
+`engine/mconn_stripe_resend.go`: the sender keeps each chunk a sub wrote for
+2 s (at most 16 MiB per connection) and, when the sub dies while another
+lives, queues those chunks plus the dead sub's queue at the front of the
+live sub with the shortest queue; the receiver drops what it already has (no
+wire change). Unit test: `TestStripeLinkDeathOldRuleResets` reproduces the
+bug (a striped download whose stripe sub's link swallows its writes and then
+dies is reset with `errMConnLost`), `TestStripeLinkDeathResend` shows the
+resend completes it byte-exact.
+
+In the lab it is not enough (u8, rel46 build with the resend on):
+
+| | n | frozen | after the kill, mean Mbit/s |
+|---|---|---|---|
+| resend, 16 MiB keep | 8 | 4/8 | 259 |
+| resend, 48 MiB keep (lab 1, stripe log on) | 6 | 4/6 | 187 |
+| resend, 48 MiB keep (lab 2) | 5 | 0/5 | 552 |
+
+The logs show why: `errMConnLost` is gone (every death is a `resend N
+chunks`, 500-2000 chunks), but (1) a connection striped over 2 subs whose
+two links both die still ends (`every sub died`, both sides), and (2) some
+survivors carry 200-480 Mbit/s for 4-5 s and then stall with no end: the
+receiver's reorder room fills behind a gap the resend did not fill (48 MiB
+of keep did not change it, so it is not the keep bound). For a real app (2)
+is a hang until `mGapTimeout` (30 s) instead of an immediate reset — worse —
+so the key ships **off** (`HS2_MCONN_STRIPE_RESEND=1` turns it on, lab only).
+c1 and s with the resend on (n=4 each vs rel45): Mbps 1208 vs 1258, every
+latency p99 equal or lower (noise); u8 latency p99s are 40-70 ms higher with
+the upload alive after the kill than with it dead (the light users share the
+25 % of links left with it).
+
+#### 11.6.4 Next (plan)
+
+1. Find the unfilled gap: `HS2_MCONN_TRACE_PORT=8444` on both sides in u8
+   with the resend on; log at each stall the receiver's `next` and first ooo
+   offset and, on the sender, whether that offset was in the dead sub's keep
+   list, its queue, or on another sub (a second sub dying later, a chunk
+   pruned by age while unread behind a blocked reader, or a raw-first-sub
+   boundary).
+2. "Every sub died": keep the connection for a short grace (2-3 s) on both
+   sides when its last sub dies with a resend possible — Iran opens a light
+   sub at once (role join) and resends its keep list; the exit keeps the
+   table entry so the join finds it — or stripe a heavy connection over at
+   least 3 subs on different paths.
+3. Acceptance as briefed: u8 n>=8 with 0 frozen, crowd/ping/call no worse,
+   c and s n>=4 — then the key on by default and in the production table.
+4. Until then production behaves as before: a striped upload is reset when
+   one of its links dies.
+
+#### 11.6.5 Not done: reality Mbps vs AES-128
+
+The r128 / reality / tls interleaved battery (n>=8, c0 and c1, `ss -ti` per
+second) did not run in rel46 (time went to 11.6.1-11.6.3). The harness is
+ready (`lab/s46/run2.sh`, arm `r128`, kharej `kh-ss.txt`), untested; jobs:
+`c1|c0 x r128|reality|tls`, arm order rotated per round, 4 rounds per lab.
+
+Release binary: build f2ec4e506acd (the resend off by default: behaviour =
+rel45), sha256 b2f39c97….

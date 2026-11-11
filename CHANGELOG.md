@@ -19,6 +19,28 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel46 — the u8 upload freeze: production has it, root cause found, fix kept off (binary)
+
+- **Production (r31) has the bug**: lab u8 (8 uploads, 75 % of the links
+  killed), tls, frozen = upload at 0 for the rest of the run: r31 4/6 (lab
+  env), 2/5 (production env), rel40 3/6, rel45 11/13. Root cause: a
+  striped connection (`HS2_MCONN_STRIPE=8`, a production default) is reset
+  when one of its subs dies (`mconn: a sub died holding the only copy`):
+  one copy per chunk, no retransmission. See
+  docs/reality-architecture.md §11.6.
+- **`HS2_MCONN_STRIPE_RESEND` (new, default off)**: the sender keeps written
+  chunks 2 s / 16 MiB per connection and resends them on a live sub when a
+  sub dies. Ends the resets in the lab but not the freeze (a connection
+  whose subs all die still ends; some survivors stall on an unfilled gap —
+  a hang, worse than a reset), so it stays off. Tests
+  `TestStripeLinkDeathOldRuleResets` (reproduces the bug) and
+  `TestStripeLinkDeathResend`.
+- `HS2_MCONN_STRIPE_JUMP_MS` on Iran: no help (2/4 frozen).
+- Lab harness `hs2-src/lab/s46` (several binaries per battery, r31 with the
+  production env, the `r128` arm and a per-second `ss -ti` sampler — the
+  AES-128 battery did not run yet).
+- Binary: build f2ec4e506acd, behaviour = rel45.
+
 ## rel45 — no stall when an IP switches both -> reality; reality vs tls measured (binary)
 
 - **Switch grace (listener)**: an IP switched live from tls or `both` to pure
