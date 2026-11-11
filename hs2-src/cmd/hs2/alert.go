@@ -109,11 +109,31 @@ func parseAlertConf(text string) (alertCfg, error) {
 			c.LogFile = v
 		case "host":
 			c.Host = v
+		case "disable":
+			var l []string
+			if l, err = validList(v, alertRuleNames, "disable"); err == nil {
+				c.Disabled = map[string]bool{}
+				for _, n := range l {
+					c.Disabled[n] = true
+				}
+			}
+		case "quiet_hours":
+			if _, _, _, err = parseQuiet(v); err == nil {
+				c.Quiet = v
+				if v == "off" {
+					c.Quiet = ""
+				}
+			}
+		case "summary_items":
+			c.SummaryItems, err = validList(v, summaryItemNames, "summary_items")
 		default:
 			// unknown keys are ignored (newer menu, older binary)
 		}
 		if err != nil {
-			return c, err
+			if strings.HasPrefix(err.Error(), "line ") {
+				return c, err
+			}
+			return c, fmt.Errorf("line %d: %v", ln, err)
 		}
 	}
 	if c.ResendMin < 1 {
@@ -160,6 +180,9 @@ func unitForConfig(cfgPath string) string {
 }
 
 func alertCmd(args []string) {
+	if alertSubCmd(args) {
+		return
+	}
 	fs := flag.NewFlagSet("alert", flag.ExitOnError)
 	cfgPath := fs.String("c", "/etc/hs2/config.json", "tunnel config")
 	unit := fs.String("u", "", "systemd unit (default: from the config name)")
@@ -246,7 +269,7 @@ func runAlertOnce(cfg alertCfg, cfgPath, unit, stateDir string, dry bool) {
 	}
 	sp := alertStatePath(stateDir, unit)
 	st := loadAlertState(sp)
-	msgs := evalAlerts(cfg, st, snap)
+	msgs := filterDisabled(cfg, evalAlerts(cfg, st, snap))
 	sortMsgs(msgs)
 	if dueSummary(cfg, st, now) {
 		msgs = append(msgs, alertMsg{Key: "summary", Sev: sevInfo, Text: takeSummary(cfg, st, now)})
@@ -282,13 +305,18 @@ func deliver(cfg alertCfg, unit string, msgs []alertMsg) error {
 		return nil
 	}
 	var lines []string
+	now := time.Now()
 	for _, m := range msgs {
 		l := formatAlert(cfg.Host, unit, m)
-		lines = append(lines, l)
+		if telegramAllowed(cfg, m, now) {
+			lines = append(lines, l)
+		} else {
+			l += " [quiet hours: not sent]"
+		}
 		writeAlertLog(cfg, unit, l)
 		_ = exec.Command("logger", "-t", "hs2-alert", "-p", "daemon."+syslogPrio(m.Sev), "--", l).Run()
 	}
-	if cfg.BotToken == "" || cfg.ChatID == "" {
+	if cfg.BotToken == "" || cfg.ChatID == "" || len(lines) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

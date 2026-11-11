@@ -21,6 +21,43 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M6 — Monitoring & alerts, Server doctor with safe fixes (binary + installer)
+
+- New `hs2 alert conf show|set|token`, `hs2 alert rule NAME on|off`,
+  `hs2 alert history`, `hs2 alert summary-now`, `hs2 alert telegram-check`
+  (`cmd/hs2/alert_conf.go`). `alert.conf` writes are validated (chat id,
+  proxy URL, numbers, lists, HH:MM) and atomic with mode 600; the bot token is
+  accepted only on stdin and is never printed. New keys `disable=` (alert kinds
+  never sent), `quiet_hours=` (only critical alerts and the "resolved" of a
+  critical one reach Telegram; may cross midnight; everything is still logged
+  with `[quiet hours: not sent]`), `summary_items=` (daily summary content).
+  The reachability check tells an Iran server without Telegram access to set a
+  proxy. `summary-now` sends the day so far without resetting it.
+- New `hs2 doctor --only CAT`, `--fixes`, `--report FILE`, `--fix N`
+  (`cmd/hs2/doctor_fix.go`): findings are grouped in network / cpu / tunnel /
+  reality / panel; new checks for `netdev_budget` against `time_squeeze`, the
+  24 h sampler and per-tunnel alert timers, and tunnel certificate expiry.
+  Numbered safe fixes reuse M4 mechanisms (CPUAffinity safe apply with
+  auto-rollback, measured netdev_budget, timed LB park), the stats timer, a
+  `certbot renew --dry-run`; x-ui / xray / Reality / panel findings never get
+  a fix. A fix checks its tunnel still exists, refuses a run older than 30 min
+  and explains non-root.
+- Fix: the doctor's "restarts / panics" lines counted every `hs2*` unit
+  (`hs2-coreguard`, `hs2-alert-*`, …) as a tunnel; only units whose
+  `ExecStart` is `hs2 run -c /etc/hs2/<name>.json` are counted now.
+- Installer: screens 6 and 7 of the new menu (`nm_alerts`, `nm_doctor`); an
+  older binary (no `hs2 alert --supported` / `hs2 doctor --supported`) gets the
+  classic screens. The `max-throughput` preset is labelled "experimental, not
+  recommended" in the menu and `hs2 perf presets` (not A/B-proven).
+- Tests: `cmd/hs2/m6_test.go` (10 tests: alert.conf validation and atomic
+  set/token/rule, quiet hours across midnight, disable + summary items,
+  history filter, Telegram check direct/proxy/blocked, fix mapping incl. never
+  x-ui/xray, apply-fix safety (no run, stale run, gone unit), coreguard
+  filtering, monitoring + budget checks); `install/tests/alerts_doctor_menu_test.sh`
+  (24 pty checks); `new_menu_test.sh` keeps testing the classic fallbacks.
+
+---
+
 ## Menu redesign M4 — Load balancing & IPs, Speed & performance (binary + installer)
 
 - New `hs2 lb show|history|suggest|add-ip|remove-ip|weights|mode|park|unpark|parks`

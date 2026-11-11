@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -35,6 +36,9 @@ type finding struct {
 	What string
 	Why  string
 	Do   string
+	Cat  string     // network | cpu | tunnel | reality | panel (M6)
+	Fix  *fixAction // a safe automatic fix, when one exists (M6)
+	FixN int        // its number in this run (collectFixes)
 }
 
 // deepLang selects the output language ("en" or "fa").
@@ -54,6 +58,7 @@ type deepEnv struct {
 	proc, sys string
 	runDir    string
 	cfgPath   string
+	etc       string // /etc/hs2 (certificates); "" = skip
 	window    time.Duration
 	run       func(timeout time.Duration, name string, args ...string) (string, error)
 }
@@ -69,13 +74,43 @@ func realRun(timeout time.Duration, name string, args ...string) (string, error)
 }
 
 // deepDoctor runs every deep check and prints the findings. It returns the
-// number of BAD findings.
-func deepDoctor(cfgPath string) int {
-	env := &deepEnv{proc: "/proc", sys: "/sys", runDir: statusRunDir, cfgPath: cfgPath,
+// number of BAD findings. cat limits the report to one category ("" = all);
+// fixes numbers the safe fixes and saves them for `hs2 doctor --fix N`;
+// report also writes the text to that file.
+func deepDoctor(cfgPath string, opts ...string) int {
+	cat, fixes, report := "", false, ""
+	if len(opts) > 0 {
+		cat = opts[0]
+	}
+	if len(opts) > 1 {
+		fixes = opts[1] == "fixes"
+	}
+	if len(opts) > 2 {
+		report = opts[2]
+	}
+	env := &deepEnv{proc: "/proc", sys: "/sys", runDir: statusRunDir, cfgPath: cfgPath, etc: "/etc/hs2",
 		window: 3 * time.Second, run: realRun}
 	start := time.Now()
-	fs := runDeep(env)
+	fs := filterCat(runDeep(env), cat)
+	fl := collectFixes(fs)
+	if !fixes {
+		for i := range fs {
+			fs[i].Fix, fs[i].FixN = nil, 0
+		}
+	}
 	printFindings(fs, time.Since(start))
+	if fixes {
+		if err := saveFixes(doctorFixesPath, fl, time.Now()); err != nil {
+			fmt.Println(tr("(fixes not saved: ", "(اصلاح‌ها ذخیره نشد: ") + err.Error() + notRootHint(err) + ")")
+		}
+	}
+	if report != "" {
+		if err := writeReport(report, fs, time.Since(start)); err != nil {
+			fmt.Println(tr("report not written: ", "گزارش نوشته نشد: ") + err.Error())
+		} else {
+			fmt.Println(tr("report saved: ", "گزارش ذخیره شد: ") + report)
+		}
+	}
 	bad := 0
 	for _, f := range fs {
 		if f.Sev == "BAD" {
@@ -85,53 +120,86 @@ func deepDoctor(cfgPath string) int {
 	return bad
 }
 
+func setCat(fs []finding, cat string) []finding {
+	for i := range fs {
+		if fs[i].Cat == "" {
+			fs[i].Cat = cat
+		}
+	}
+	return fs
+}
+
 func runDeep(env *deepEnv) []finding {
 	statuses := readStatuses(env.runDir, env.cfgPath)
+	var units []string
+	for _, s := range statuses {
+		if u := unitFromStatusFile(s.file); u != "" {
+			units = append(units, u)
+		}
+	}
 
 	// Snapshot 1 of the sampled counters, then run the slow checks (pings,
 	// journal reads) in parallel during the sampling window, then snapshot 2.
 	stat1, _ := os.ReadFile(filepath.Join(env.proc, "stat"))
 	irq1, _ := os.ReadFile(filepath.Join(env.proc, "interrupts"))
+	sq1, _ := os.ReadFile(filepath.Join(env.proc, "net", "softnet_stat"))
 	procs1 := readProcCPU(env.proc)
 	t0 := time.Now()
 
 	var wg sync.WaitGroup
-	var pathF, xuiF, hs2F, realF []finding
-	wg.Add(4)
+	var pathF, xuiF, hs2F, realF, monF []finding
+	wg.Add(5)
 	go func() { defer wg.Done(); pathF = checkPaths(env, statuses) }()
 	go func() { defer wg.Done(); xuiF = checkXUI(env) }()
 	go func() { defer wg.Done(); hs2F = checkHS2Health(env, statuses) }()
 	go func() { defer wg.Done(); realF = checkReality(env) }()
+	go func() { defer wg.Done(); monF = checkMonitoring(env, units) }()
 	if d := env.window - time.Since(t0); d > 0 {
 		time.Sleep(d)
 	}
 	stat2, _ := os.ReadFile(filepath.Join(env.proc, "stat"))
 	irq2, _ := os.ReadFile(filepath.Join(env.proc, "interrupts"))
+	sq2, _ := os.ReadFile(filepath.Join(env.proc, "net", "softnet_stat"))
 	procs2 := readProcCPU(env.proc)
 	elapsed := time.Since(t0)
 	wg.Wait()
 
+	nic := setCat(checkNIC(env, stat1, stat2, irq1, irq2), "network")
+	for i := range nic {
+		if nic[i].Fix != nil {
+			nic[i].Fix.Units = units
+		}
+	}
 	var out []finding
-	out = append(out, checkNIC(env, stat1, stat2, irq1, irq2)...)
-	out = append(out, checkPressure(env, procs1, procs2, elapsed, stat1, stat2)...)
-	out = append(out, hs2F...)
-	out = append(out, pathF...)
-	out = append(out, realF...)
-	out = append(out, xuiF...)
+	out = append(out, nic...)
+	out = append(out, setCat(checkPressure(env, procs1, procs2, elapsed, stat1, stat2), "cpu")...)
+	out = append(out, setCat(checkBudget(env, sq1, sq2), "cpu")...)
+	out = append(out, setCat(hs2F, "tunnel")...)
+	out = append(out, setCat(monF, "tunnel")...)
+	out = append(out, setCat(checkCerts(env, time.Now()), "tunnel")...)
+	out = append(out, setCat(pathF, "network")...)
+	out = append(out, setCat(realF, "reality")...)
+	out = append(out, setCat(xuiF, "panel")...)
 	return out
 }
 
-func printFindings(fs []finding, took time.Duration) {
-	fmt.Println()
-	fmt.Println(tr("hs2 server doctor — deep check (read-only)", "hs2 پزشک سرور — بررسی عمیق (فقط خواندنی، هیچ چیزی تغییر نمی‌کند)"))
-	nb, nw := 0, 0
+func printFindings(fs []finding, took time.Duration) { printFindingsTo(os.Stdout, fs, took) }
+
+func printFindingsTo(w io.Writer, fs []finding, took time.Duration) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, tr("hs2 server doctor — deep check (read-only)", "hs2 پزشک سرور — بررسی عمیق (فقط خواندنی، هیچ چیزی تغییر نمی‌کند)"))
+	nb, nw, nf := 0, 0, 0
 	for _, f := range fs {
-		fmt.Printf("\n[%-4s] %s: %s\n", f.Sev, f.Area, f.What)
+		fmt.Fprintf(w, "\n[%-4s] %s: %s\n", f.Sev, f.Area, f.What)
 		if f.Why != "" {
-			fmt.Printf("       %s %s\n", tr("why:", "چرا مهم است:"), f.Why)
+			fmt.Fprintf(w, "       %s %s\n", tr("why:", "چرا مهم است:"), f.Why)
 		}
 		if f.Do != "" {
-			fmt.Printf("       %s %s\n", tr("do: ", "چه کنید:"), f.Do)
+			fmt.Fprintf(w, "       %s %s\n", tr("do: ", "چه کنید:"), f.Do)
+		}
+		if f.Fix != nil && f.FixN > 0 {
+			fmt.Fprintf(w, "       %s %d) %s\n", tr("fix:", "اصلاح:"), f.FixN, f.Fix.Title)
+			nf++
 		}
 		switch f.Sev {
 		case "BAD":
@@ -140,8 +208,12 @@ func printFindings(fs []finding, took time.Duration) {
 			nw++
 		}
 	}
-	fmt.Println()
-	fmt.Printf(tr("summary: %d bad, %d warning(s) — took %.0fs\n", "خلاصه: %d مشکل جدی، %d هشدار — %.0f ثانیه طول کشید\n"), nb, nw, took.Seconds())
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, tr("summary: %d bad, %d warning(s) — took %.0fs\n", "خلاصه: %d مشکل جدی، %d هشدار — %.0f ثانیه طول کشید\n"), nb, nw, took.Seconds())
+	if nf > 0 {
+		fmt.Fprintf(w, tr("%d safe automatic fix(es) available: hs2 doctor --fix N (preview first; x-ui/xray are never changed)\n",
+			"%d اصلاح خودکار امن موجود است: hs2 doctor --fix N (اول پیش‌نمایش؛ x-ui/xray هرگز تغییر نمی‌کنند)\n"), nf)
+	}
 }
 
 // ---------------------------------------------------------------- parsers
@@ -412,6 +484,9 @@ func checkNIC(env *deepEnv, stat1, stat2, irq1, irq2 []byte) []finding {
 		f.What = fmt.Sprintf(tr("%s — all incoming packets go through %s", "%s — همهٔ بسته‌های ورودی از %s می‌گذرند"), desc, where)
 		f.Why = rxWhy(nq) + tr("; when that one core is full, packets wait or drop before hs2 even sees them: higher RTT and loss for every user, however good the path is",
 			"؛ وقتی همین یک هسته پر شود، بسته‌ها قبل از رسیدن به hs2 منتظر می‌مانند یا دور ریخته می‌شوند: RTT و افت بیشتر برای همهٔ کاربران، هر قدر هم مسیر خوب باشد")
+		if hasHS2(onHot) {
+			f.Fix = &fixAction{Kind: "rxcore", Arg: strconv.Itoa(hot), Title: fmt.Sprintf(tr("keep core %d free for the hs2 tunnel units (CPUAffinity drop-in, auto-rollback)", "آزاد نگه داشتن هستهٔ %d برای سرویس‌های تونل hs2 (drop-in CPUAffinity، با برگشت خودکار)"), hot)}
+		}
 		if len(onHot) > 0 {
 			f.Do = fmt.Sprintf(tr("keep core %d free of %s: add CPUAffinity=<all cores except %d> to their systemd units (drop-in), restart them; also consider RPS (rps_cpus) to spread the rx work",
 				"هستهٔ %d را از %s خالی نگه دارید: در سرویس systemd آن‌ها CPUAffinity=<همهٔ هسته‌ها جز %d> بگذارید (drop-in) و ری‌استارت کنید؛ RPS (rps_cpus) هم برای پخش کار دریافت کمک می‌کند"),
@@ -669,6 +744,7 @@ func parsePing(out string) pingResult {
 
 type pathProbe struct {
 	local, remote  string
+	unit           string // the tunnel this LB path belongs to (park fix)
 	tunRTT, tunMin float64
 	tunLoss        float64
 	hasTunLoss     bool
@@ -710,6 +786,7 @@ func collectPaths(env *deepEnv, st []namedStatus) []*pathProbe {
 			if v.LossUp != nil && (!p.hasTunLoss || *v.LossUp > p.tunLoss) {
 				p.tunLoss, p.hasTunLoss = *v.LossUp, true
 			}
+			p.unit = unitFromStatusFile(s.file)
 			add(v.Local, v.Remote, p)
 		}
 		// Without LB: the address the dialing side connects to, or on the
@@ -847,6 +924,9 @@ func judgePaths(paths []*pathProbe) []finding {
 				"این IP حتی بدون تونل +%.0f ms صف و %.1f٪ افت دارد → مشکل از شبکه/دیتاسنتر است، نه hs2"), extra, pg.Loss)
 			f.Do = tr("lower this IP's share (or remove it) in load balancing, or ask the provider; LB auto mode already moves load away from a bad path",
 				"سهم این IP را در لودبالانس کم کنید (یا حذفش کنید) یا به دیتاسنتر گزارش دهید؛ حالت auto خودش بار را از مسیر بد دور می‌کند")
+			if p.unit != "" && p.local != "" && p.local != "*" {
+				f.Fix = &fixAction{Kind: "park", Units: []string{p.unit}, Arg: p.local, Title: fmt.Sprintf(tr("park %s on %s for N hours (its share goes to 0, restored by a timer)", "پارک %s در %s برای N ساعت (سهمش صفر می‌شود و زمان‌سنج برمی‌گرداند)"), p.local, p.unit)}
+			}
 		case p.tunRTT > 0 && p.tunRTT > pg.Avg+40 || p.hasTunLoss && p.tunLoss >= 3:
 			f.Sev = "WARN"
 			f.Why = tr("the bare path is clean but the tunnel's links are slower/lossier: the delay is added on this server or the peer (CPU, a full NIC core, queues in xray)",
@@ -1259,6 +1339,9 @@ func checkHS2Health(env *deepEnv, st []namedStatus) []finding {
 			continue
 		}
 		u := f[0]
+		if ex, _ := env.run(3*time.Second, "systemctl", "show", "-p", "ExecStart", "--value", u); !isTunnelExec(ex) {
+			continue // hs2-coreguard, hs2-alert-*, hs2-stats …: not a tunnel
+		}
 		nr := 0
 		if s, err := env.run(3*time.Second, "systemctl", "show", "-p", "NRestarts", "--value", u); err == nil {
 			nr, _ = strconv.Atoi(strings.TrimSpace(s))

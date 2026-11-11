@@ -24,6 +24,7 @@ case "$1 ${2:-}" in
   "dashboard "*) echo "DASHBOARD-FRAME"; exit 0 ;;
   "config lock") if [ "${LOCKED:-0}" = 1 ]; then echo "ERROR: another admin is editing: bob (pid 4242, pts/3) since 10:00 — wait, or use --force"; exit 1; fi; echo locked; exit 0 ;;
   "config history") echo "v1 2026-11-10 setup"; echo "v2 2026-11-11 edit"; exit 0 ;;
+  "alert --supported"|"doctor --supported") exit 2 ;;   # classic fallbacks are tested here (M6 screens: alerts_doctor_menu_test.sh)
 esac
 exit 0
 B

@@ -30,17 +30,46 @@ func doctorCmd(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	deep := fs.Bool("deep", false, "also inspect the whole server: NIC/softirq, CPU pressure, path quality without the tunnel, Reality dest, x-ui churn, hs2 health (~10 s, read-only)")
+	only := fs.String("only", "", "deep: one category only: network | cpu | tunnel | reality | panel")
+	fixes := fs.Bool("fixes", false, "deep: number the safe automatic fixes and save them for --fix N")
+	report := fs.String("report", "", "deep: also save the report to this file (for support)")
+	supported := fs.Bool("supported", false, "exit 0: this binary has --only/--fixes/--fix/--report (the menu probes)")
+	fixN := fs.Int("fix", 0, "apply safe fix N of the last `--deep --fixes` run (preview first)")
+	yes := fs.Bool("yes", false, "--fix: apply without asking")
+	hours := fs.Float64("hours", 6, "--fix of a park: hours")
+	within := fs.Duration("confirm-within", 5*time.Minute, "--fix: trial time before the automatic rollback (safe-apply fixes)")
 	lang := fs.String("lang", "en", "language of the deep report: en | fa")
 	fs.Parse(args)
 	if *lang == "fa" {
 		deepLang = "fa"
+	}
+	if *only != "" && *only != "all" {
+		okc := false
+		for _, c := range doctorCats {
+			okc = okc || c == *only
+		}
+		if !okc {
+			fmt.Println("--only is one of: " + strings.Join(doctorCats, ", "))
+			os.Exit(2)
+		}
+	}
+	if *supported {
+		return
+	}
+	if *fixN > 0 {
+		fixWithin = *within
+		os.Exit(applyFix(*fixN, *yes, *hours, os.Stdin, os.Stdout, realRun, execPassthrough))
+	}
+	fx := ""
+	if *fixes {
+		fx = "fixes"
 	}
 	if *cfgPath == "" && !*deep {
 		fmt.Println("usage: hs2 doctor -c config.json [--deep] [--lang fa]   |   hs2 doctor --deep [--lang fa]")
 		os.Exit(2)
 	}
 	if *cfgPath == "" {
-		if deepDoctor("") > 0 {
+		if deepDoctor("", *only, fx, *report) > 0 {
 			os.Exit(1)
 		}
 		return
@@ -95,7 +124,7 @@ func doctorCmd(args []string) {
 	d.print()
 	deepBad := 0
 	if *deep {
-		deepBad = deepDoctor(*cfgPath)
+		deepBad = deepDoctor(*cfgPath, *only, fx, *report)
 	}
 	if d.fails > 0 || deepBad > 0 {
 		os.Exit(1)

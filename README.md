@@ -1370,7 +1370,7 @@ hs2 perf speedtest --port P [--secs 5] [--gap 3s]
   |--------|------|-------|
   | `production` (recommended) | none — the code defaults (table above) | the A/B-tested set; removes `50-hs2-perf.conf` |
   | `low-cpu` | `HS2_MCONN_STRIPE=0 HS2_SMUX_AUTOWIN=0 HS2_STRIPE_AW_SOLO=0 HS2_STRIPE_AW_HEAVY=0 HS2_L3_DUP=0` | less CPU per Mbit; one connection tops out near ~200 Mbit/s at 80 ms, no call duplication |
-  | `max-throughput` | `HS2_SMUX_AUTOWIN_SHARE_MB=64`, kharej `HS2_MCONN_STRIPE_JUMP_MS=1500` | more window memory; light users may queue a little more under very heavy load — not lab-proven beyond the defaults |
+  | `max-throughput` | `HS2_SMUX_AUTOWIN_SHARE_MB=64`, kharej `HS2_MCONN_STRIPE_JUMP_MS=1500` | **experimental, not recommended** (labelled so in the menu): more window memory; light users may queue a little more under very heavy load — not lab-proven beyond the defaults |
   | `min-latency` | `HS2_SMUX_AUTOWIN_SHARE_MB=16 HS2_MCONN_STRIPE=4 HS2_STRIPE_AW_HEAVY=0` | big downloads slower, less queueing for calls / games |
 
   `show` lists each documented key with a one-line explanation and where its
@@ -1453,6 +1453,75 @@ cert_days=10
 flap_cuts=4
 probe=off                  # off | tcp | tls: connect to the tunnel's own listen port
 ```
+
+### Monitoring & alerts and Server doctor (new menu → 6 / 7)
+
+**Screen 6** renders `hs2 alert conf show` (the token only as "set (hidden)")
+and the alert timer state of every tunnel (`hs2-alert-<unit>.timer`, one per
+tunnel; alerts are per tunnel, the settings are shared). Items: bot token
+(read with hidden input and handed to hs2 **on stdin** — never on a command
+line, never echoed, never logged), chat id, proxy, language, Telegram
+reachability check + test message, alerts on/off per tunnel, one alert kind
+on/off, thresholds, quiet hours, daily summary time and content, the last 7
+days of alerts, and "send the summary now". Behind it:
+
+```
+hs2 alert conf show | set KEY=VALUE … | token      # validated, atomic, mode 600; bot_token only via `token` (stdin)
+hs2 alert rule NAME on|off                         # unit restart panic dead links ipcut flap rtt psi cert probe
+hs2 alert history [--days 7] [-u UNIT]             # from /var/log/hs2-alert.log, with a per-day count
+hs2 alert summary-now [-u UNIT]                    # the day so far, every watched tunnel (does not reset the day)
+hs2 alert telegram-check                           # api host reachable directly? the proxy? (Iran: explains the proxy)
+```
+
+New `alert.conf` keys (an invalid value is refused with its line number and
+nothing is written):
+
+```
+disable=rtt,psi                 # alert kinds never sent
+quiet_hours=23:30-07:00         # may cross midnight; off = none
+summary_items=users,mbit,rtt,cuts,restarts,alerts   # what the daily summary shows (default: all)
+```
+
+In quiet hours only **critical** alerts (and the "resolved" of a critical
+one, the daily summary at the chosen time, a test) reach Telegram; the others
+are still written to the journal and the log, marked `[quiet hours: not
+sent]`. An Iran server that cannot reach `api.telegram.org` is detected by
+the reachability check, which says to set a `proxy` (socks5/http, e.g. a
+local xray socks inbound). Without root the screen says so and changes
+nothing (`alert.conf` and the timers belong to root).
+
+**Screen 7** runs `hs2 doctor --deep --fixes` for all checks or one category:
+
+```
+hs2 doctor --deep [--only network|cpu|tunnel|reality|panel] [--fixes] [--report FILE]
+hs2 doctor --fix N [--yes] [--hours H] [--confirm-within 5m]    # fix N of the last --fixes run (≤ 30 min old)
+```
+
+Categories: network (NIC/softirq, path quality without the tunnel), cpu
+(pressure, `netdev_budget` vs. `time_squeeze`), tunnel (health, restarts and
+panics, monitoring, certificate expiry), reality (xray dest), panel (x-ui).
+A finding gets a numbered **fix** only when a safe automatic one exists, and
+every fix shows a preview and runs an hs2 command that has its own safety net:
+
+| Finding | Fix | Safety |
+|---|---|---|
+| single rx core full, hs2 on it | `hs2 perf cores -u U --keep N --yes` per tunnel | safe apply, auto-rollback unless `hs2 apply --confirm` |
+| `netdev_budget` < 600 and `time_squeeze` grew | `hs2 perf kernel --budget 600 --yes` | measured before/after, reverted when not better |
+| 24 h sampler off | `hs2 stats timer on` | harmless; off again in menu 9 |
+| alerts off for a tunnel | opens screen 6 | — |
+| an LB IP bad even without the tunnel | `hs2 lb park -u U --ip IP --hours H` (the menu asks H) | restored by `hs2-lb-park.timer`, also after a reboot |
+| certificate expires in < 21 days | `certbot renew --dry-run` + the renewal command | dry run changes nothing |
+| x-ui / xray / Reality / panel | none — advice text only | never changed |
+
+A fix whose tunnel no longer exists is skipped ("does not exist on this
+server any more"); a fix of a run older than 30 min is refused (run the
+doctor again); non-root is refused with an explanation. **r)** saves the
+report to `/root/hs2-doctor-<date>.txt` (non-root: `$HOME`) for support;
+findings carry no keys or passwords.
+
+Only real tunnel units are counted in the doctor's "restarts / panics"
+lines: a unit whose `ExecStart` is `hs2 run -c /etc/hs2/<name>.json`.
+`hs2-coreguard`, `hs2-alert-*`, `hs2-stats`, `hs2-lb-park` are not tunnels.
 
 ## The three ports (they are different things)
 

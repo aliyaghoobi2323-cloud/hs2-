@@ -5630,7 +5630,7 @@ nm_speed(){
   while :; do
     echo >&2; hr; say " ${C_B}$(nm_t "Speed & performance" "سرعت و کارایی") — $NM_U${C_0}"; hr
     nm_perf show -u "$NM_U" ${adv[@]+"${adv[@]}"}
-    say "   1) $(nm_t "Presets (production · low-cpu · max-throughput · min-latency)" "پیش‌تنظیم‌ها (تولید · CPU کم · بیشترین سرعت · کمترین تأخیر)")"
+    say "   1) $(nm_t "Presets (production · low-cpu · min-latency · max-throughput: experimental, not recommended)" "پیش‌تنظیم‌ها (تولید · CPU کم · کمترین تأخیر · بیشترین سرعت: آزمایشی، توصیه نمی‌شود)")"
     say "   2) $(nm_t "Turn a feature on/off (KEY=VALUE)" "روشن/خاموش کردن یک قابلیت (KEY=VALUE)")"
     say "   3) $(nm_t "Cores & NIC (keep the rx core free for hs2)" "هسته‌ها و کارت شبکه (آزاد نگه داشتن هستهٔ دریافت)")"
     say "   4) $(nm_t "Kernel (bbr, qdisc, buffers, netdev_budget)" "کرنل (bbr، qdisc، بافرها، netdev_budget)")"
@@ -5669,8 +5669,150 @@ nm_speed(){
     esac
   done
 }
-nm_alerts(){ nm_pick_unit || return 0; nm_edit tm_alerts "$NM_U" "$NM_CFG"; return 0; }
-nm_doctor(){ server_doctor; nm_pause; return 0; }
+# Screen 6 "Monitoring & alerts" (menu M6): `hs2 alert conf|rule|history|
+# summary-now|telegram-check`. Settings live in /etc/hs2/alert.conf (mode 600,
+# shared by every tunnel); each tunnel has its own hs2-alert-<unit>.timer. The
+# bot token is read hidden and handed to hs2 on stdin — never on a command
+# line, never echoed, never logged. A binary without these: the classic screen.
+nm_has_alertx(){ [ -x "$BIN" ] && "$BIN" alert --supported >/dev/null 2>&1; }
+nm_alx(){ "$BIN" alert "$@" --lang "$NM_LANG" </dev/tty || true; }
+nm_alerts_classic(){ nm_soon M6; nm_pick_unit || return 0; nm_edit tm_alerts "$NM_U" "$NM_CFG"; return 0; }
+nm_alert_units(){ # per-tunnel state lines
+  local u units=()
+  mapfile -t units < <(tm_units)
+  [ ${#units[@]} -gt 0 ] || { say "   $(nm_t "(no tunnel yet — alerts watch tunnels)" "(هنوز تونلی نیست — هشدار تونل‌ها را می‌پاید)")"; return 0; }
+  for u in "${units[@]}"; do
+    if alert_timer_on "$u"; then say "   $u: ${C_G}$(nm_t ON روشن)${C_0}"; else say "   $u: ${C_D}$(nm_t OFF خاموش)${C_0}"; fi
+  done
+}
+nm_alert_kind(){ # N → name (1-11)
+  case "$1" in
+    1) echo unit ;; 2) echo restart ;; 3) echo panic ;; 4) echo dead ;; 5) echo links ;; 6) echo ipcut ;;
+    7) echo flap ;; 8) echo rtt ;; 9) echo psi ;; 10) echo cert ;; 11) echo probe ;;
+  esac
+}
+nm_alerts(){
+  local c v k
+  if ! nm_has_alertx; then nm_alerts_classic; return 0; fi
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "6) Monitoring & alerts" "۶) پایش و هشدارها")${C_0}  ($ALERT_CONF)"; hr
+    [ "$(id -u)" = 0 ] || warn "$(nm_t "Not root: settings and timers cannot be changed here (run: sudo hs2-menu)." "کاربر root نیستید: تنظیمات و تایمرها این‌جا تغییر نمی‌کنند (اجرا کنید: sudo hs2-menu).")"
+    "$BIN" alert conf show --lang "$NM_LANG" >&2 2>/dev/null || true
+    say "  $(nm_t "watched tunnels (every 60 s):" "تونل‌های پایش‌شده (هر ۶۰ ثانیه):")"
+    nm_alert_units
+    hr
+    say "   1) $(nm_t "Telegram bot token (hidden)" "توکن ربات تلگرام (پنهان)")"
+    say "   2) $(nm_t "Telegram chat id" "شناسهٔ چت تلگرام")"
+    say "   3) $(nm_t "Proxy (Iran servers usually need one)" "پراکسی (سرور ایران معمولاً لازم دارد)")"
+    say "   4) $(nm_t "Message language (fa / en)" "زبان پیام‌ها (fa / en)")"
+    say "   5) $(nm_t "Check Telegram reachability + send a test message" "بررسی دسترسی به تلگرام + پیام آزمایشی")"
+    say "   6) $(nm_t "Alerts on/off for a tunnel" "روشن/خاموش کردن هشدار یک تونل")"
+    say "   7) $(nm_t "Turn one alert kind on/off (number from the list)" "روشن/خاموش کردن یک نوع هشدار (شماره از فهرست)")"
+    say "   8) $(nm_t "Thresholds (KEY=VALUE, e.g. cpu_pressure_pct=40)" "آستانه‌ها (KEY=VALUE، مثلاً cpu_pressure_pct=40)")"
+    say "   9) $(nm_t "Quiet hours (only critical alerts at night)" "ساعت سکوت (شب فقط هشدار بحرانی)")"
+    say "   s) $(nm_t "Daily summary: time and content" "خلاصهٔ روزانه: ساعت و محتوا")"
+    say "   h) $(nm_t "History of the last 7 days" "تاریخچهٔ ۷ روز گذشته")"
+    say "   n) $(nm_t "Send the summary now" "فرستادن خلاصه همین حالا")"
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|b|B|q|"") return 0 ;;
+      1) read -rsp "$(nm_t "Bot token from @BotFather (input hidden, empty = remove): " "توکن ربات از @BotFather (ورودی پنهان، خالی = حذف): ")" v </dev/tty || v=""; echo >&2
+         printf '%s\n' "$v" | "$BIN" alert conf token --lang "$NM_LANG" >&2 || true; v=""; nm_pause ;;
+      2) nm_ask v "$(nm_t "Chat id (123456789, -100… or @channel; empty = remove): " "شناسهٔ چت (123456789، -100… یا @channel؛ خالی = حذف): ")"
+         "$BIN" alert conf set "chat_id=$v" --lang "$NM_LANG" >&2 || true; nm_pause ;;
+      3) "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true
+         nm_ask v "$(nm_t "Proxy (socks5://host:port or http://host:port; empty = none): " "پراکسی (socks5://host:port یا http://host:port؛ خالی = ندارد): ")"
+         "$BIN" alert conf set "proxy=$v" --lang "$NM_LANG" >&2 || true
+         [ -n "$v" ] && { "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true; }
+         nm_pause ;;
+      4) nm_ask v "$(nm_t "Language [fa/en]: " "زبان [fa/en]: ")"
+         [ -n "$v" ] && { "$BIN" alert conf set "lang=$v" --lang "$NM_LANG" >&2 || true; nm_pause; } ;;
+      5) "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true
+         if nm_pick_unit; then "$BIN" alert -c "$NM_CFG" -u "$NM_U" -test >&2 || true; fi; nm_pause ;;
+      6) if nm_pick_unit; then
+           if [ "$(id -u)" != 0 ]; then warn "$(nm_t "Needs root (sudo hs2-menu)." "نیاز به root دارد (sudo hs2-menu).")"
+           elif alert_timer_on "$NM_U"; then alert_disable "$NM_U"; else alert_enable "$NM_U" "$NM_CFG"; fi
+           nm_pause
+         fi ;;
+      7) nm_ask v "$(nm_t "Alert kind number (1-11): " "شمارهٔ نوع هشدار (1 تا 11): ")"
+         k=$(nm_alert_kind "$v")
+         if [ -z "$k" ]; then warn "$(nm_t "No such alert kind." "چنین نوعی نیست.")"
+         elif "$BIN" alert conf show 2>/dev/null | grep -Eq "^ +$v\) +$k +OFF"; then "$BIN" alert rule "$k" on --lang "$NM_LANG" >&2 || true
+         else "$BIN" alert rule "$k" off --lang "$NM_LANG" >&2 || true; fi ;;
+      8) say "  ${C_D}resend_min · rtt_factor · rtt_min_add_ms · cpu_pressure_pct · cert_days · flap_cuts · probe=off|tcp|tls${C_0}"
+         nm_ask v "KEY=VALUE: "
+         case "$v" in *=*) "$BIN" alert conf set "$v" --lang "$NM_LANG" >&2 || true; nm_pause ;; esac ;;
+      9) nm_ask v "$(nm_t "Quiet hours HH:MM-HH:MM (e.g. 23:30-07:00, may cross midnight) or off: " "ساعت سکوت HH:MM-HH:MM (مثلاً 23:30-07:00، از نیمه‌شب هم می‌گذرد) یا off: ")"
+         [ -n "$v" ] && { "$BIN" alert conf set "quiet_hours=$v" --lang "$NM_LANG" >&2 || true; nm_pause; } ;;
+      s|S) nm_ask v "$(nm_t "Summary time HH:MM or off (Enter = keep): " "ساعت خلاصه HH:MM یا off (Enter = بدون تغییر): ")"
+         [ -n "$v" ] && { "$BIN" alert conf set "summary_time=$v" --lang "$NM_LANG" >&2 || true; }
+         nm_ask v "$(nm_t "Content: comma list of users,mbit,rtt,cuts,restarts,alerts (Enter = keep, all = everything): " "محتوا: فهرست با کاما از users,mbit,rtt,cuts,restarts,alerts (Enter = بدون تغییر، all = همه): ")"
+         case "$v" in "") ;; all) "$BIN" alert conf set "summary_items=" --lang "$NM_LANG" >&2 || true ;; *) "$BIN" alert conf set "summary_items=$v" --lang "$NM_LANG" >&2 || true ;; esac
+         nm_pause ;;
+      h|H) nm_alx history --days 7 >&2; nm_pause ;;
+      n|N) nm_alx summary-now >&2; nm_pause ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+}
+
+# Screen 7 "Server doctor" (menu M6): `hs2 doctor --deep --fixes [--only CAT]`.
+# Each finding with a safe automatic fix gets a number; `hs2 doctor --fix N`
+# shows the preview and runs an hs2 command that has its own safety net (safe
+# apply with auto-rollback, measured-and-reverted, timed park, dry run). x-ui /
+# xray / panel findings never get a fix: advice text only.
+nm_has_docfix(){ [ -x "$BIN" ] && "$BIN" doctor --supported >/dev/null 2>&1; }
+nm_doctor_run(){ # [category]
+  local only=() out
+  [ -n "${1:-}" ] && only=(--only "$1")
+  info "$(nm_t "Inspecting this server (about 10 s, read-only)…" "در حال بررسی سرور (حدود ۱۰ ثانیه، فقط خواندنی)…")"
+  out=$("$BIN" doctor --deep --fixes ${only[@]+"${only[@]}"} --lang "$NM_LANG" 2>&1) || true
+  printf '%s\n' "$out" | sed 's/^/  /' >&2
+  NM_DOC_FIXES=$(printf '%s\n' "$out" | grep -cE '^ +(fix:|اصلاح:) [0-9]+\)' || true)
+}
+NM_DOC_FIXES_FILE=/run/hs2/doctor-fixes.json
+nm_doctor_kind(){ # N → kind of fix N of the last run
+  grep -o '"kind":"[a-z]*"' "$NM_DOC_FIXES_FILE" 2>/dev/null | sed -n "${1}p" | cut -d'"' -f4 || true
+}
+nm_doctor(){
+  local c v h cats=(network cpu tunnel reality panel)
+  if ! nm_has_docfix; then server_doctor; nm_pause; return 0; fi
+  NM_DOC_FIXES=0
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "7) Server doctor" "۷) پزشک سرور")${C_0}"; hr
+    say "   1) $(nm_t "Run all checks" "اجرای همهٔ بررسی‌ها")"
+    say "   2) $(nm_t "Network (NIC, paths without the tunnel)" "شبکه (کارت شبکه، مسیرها بدون تونل)")"
+    say "   3) $(nm_t "CPU (pressure, netdev_budget)" "پردازنده (فشار، netdev_budget)")"
+    say "   4) $(nm_t "Tunnel (health, restarts, monitoring, certificates)" "تونل (سلامت، ری‌استارت، پایش، گواهی)")"
+    say "   5) $(nm_t "Reality / xray dest" "Reality / مقصد xray")"
+    say "   6) $(nm_t "Panel (x-ui): advice only" "پنل (x-ui): فقط توصیه")"
+    if [ "${NM_DOC_FIXES:-0}" -gt 0 ]; then say "   f) $(nm_t "Apply a fix (number from the report; preview first)" "اعمال یک اصلاح (شماره از گزارش؛ اول پیش‌نمایش)") [$NM_DOC_FIXES]"; fi
+    say "   r) $(nm_t "Save a report file for support" "ذخیرهٔ فایل گزارش برای پشتیبانی")"
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|b|B|q|"") return 0 ;;
+      1) nm_doctor_run; nm_pause ;;
+      [2-6]) nm_doctor_run "${cats[$((c - 2))]}"; nm_pause ;;
+      f|F) nm_ask v "$(nm_t "Fix number: " "شمارهٔ اصلاح: ")"
+           case "$v" in ''|*[!0-9]*) continue ;; esac
+           case "$(nm_doctor_kind "$v")" in
+             alerts) nm_alerts; continue ;;
+             park) nm_ask h "$(nm_t "Park for how many hours [6]: " "چند ساعت پارک شود [6]: ")"; case "$h" in ''|*[!0-9.]*) h=6 ;; esac ;;
+             *) h=6 ;;
+           esac
+           nm_lock && { "$BIN" doctor --fix "$v" --hours "$h" --lang "$NM_LANG" </dev/tty >&2 || true; nm_unlock; }
+           nm_pause ;;
+      r|R) if [ "$(id -u)" = 0 ]; then v="/root/hs2-doctor-$(date +%Y%m%d-%H%M%S).txt"; else v="${HOME:-/tmp}/hs2-doctor-$(date +%Y%m%d-%H%M%S).txt"; fi
+           info "$(nm_t "Inspecting this server (about 10 s, read-only)…" "در حال بررسی سرور (حدود ۱۰ ثانیه، فقط خواندنی)…")"
+           "$BIN" doctor --deep --report "$v" --lang "$NM_LANG" >/dev/null 2>&1 || true
+           if [ -s "$v" ]; then ok "$(nm_t "Report saved: $v (no keys or passwords in it)" "گزارش ذخیره شد: $v (بدون کلید یا رمز)")"; else warn "$(nm_t "Could not write $v" "نوشتن $v ممکن نشد")"; fi
+           nm_pause ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+}
 
 nm_maint(){
   local c a
@@ -5776,7 +5918,7 @@ nm_main(){
     say "  5) $(nm_t "Speed & performance" "سرعت و کارایی")"
     say "  6) $(nm_t "Monitoring & alerts" "پایش و هشدارها")"
     say "  7) $(nm_t "Server doctor" "پزشک سرور")"
-    [ -n "$adv" ] && say "     ${C_D}$(nm_t "hs2 doctor --deep: NIC, CPU, paths, Reality, x-ui (read-only)" "hs2 doctor --deep: کارت شبکه، پردازنده، مسیرها، Reality، x-ui (فقط خواندنی)")${C_0}"
+    [ -n "$adv" ] && say "     ${C_D}$(nm_t "hs2 doctor --deep: NIC, CPU, paths, Reality, x-ui; numbered safe fixes with preview" "hs2 doctor --deep: کارت شبکه، پردازنده، مسیرها، Reality، x-ui؛ اصلاح امن شماره‌دار با پیش‌نمایش")${C_0}"
     say "  8) $(nm_t "Maintenance" "نگهداری")"
     say "  9) $(nm_t "Menu settings" "تنظیمات منو")"
     say "  0) $(nm_t "Exit" "خروج")"
