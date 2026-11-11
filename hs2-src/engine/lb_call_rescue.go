@@ -30,7 +30,13 @@ import (
 //     is on a lowered link (rescueAllow's rate bound, as the light rescue).
 var lbCallRescue bool // loadEnvKeys: HS2_LB_CALL_RESCUE
 
-const callRescueEvery = time.Second
+const (
+	callRescueEvery = time.Second
+	// callRescueTTL: a connection call-like this recently is still a call
+	// (a call stuck on a bad path stops looking steady: its sends burst as
+	// the stalled link drains).
+	callRescueTTL = 30 * time.Second
+)
 
 // callRescueOpened / callRescueMoved: fresh subs opened for calls all on
 // lowered links; subs on lowered links given up once a call had a good one.
@@ -43,7 +49,7 @@ type callRescueMark struct{}
 // callRescueOnLocked: the key is on and m is a call (Iran, lite).
 func (m *mConn) callRescueOnLocked(now time.Time) bool {
 	return lbCallRescue && lbRescue && m.iran && m.lite &&
-		(m.callOn || m.callUp || (!m.callLikeAt.IsZero() && now.Sub(m.callLikeAt) < callFreeTTL))
+		(m.callOn || m.callUp || (!m.callLikeAt.IsZero() && now.Sub(m.callLikeAt) < callRescueTTL))
 }
 
 // callRescueAvoidLocked adds the mark for a call's sub.
