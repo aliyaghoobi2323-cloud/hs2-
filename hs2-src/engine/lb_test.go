@@ -418,3 +418,66 @@ func TestLBPeerNotUpYetNoBackoff(t *testing.T) {
 		t.Fatalf("%d dials to a failing path in 3 s with the peer up, want the start back-off (<= 15)", bad)
 	}
 }
+
+// rel51: a whole-peer outage past the start (every link gone, every path
+// refusing for a few seconds) cools no path: once the peer is back the
+// rebuilt pool spreads over all paths, not onto the primary alone.
+func TestLBPeerOutageNoCool(t *testing.T) {
+	paths := append(twoPaths(34, 33), LBPath{Local: "10.0.0.3", Remote: "10.1.0.3", Addr: "10.1.0.3:443", Weight: 33})
+	lb, _ := NewLB(paths, nil)
+	clock := time.Unix(1e9, 0)
+	lb.now = func() time.Time { return clock }
+	var links []any
+	for k := 0; k < 90; k++ {
+		l, _ := lb.dialVia(func(p LBPath) (any, error) { return new(int), nil })
+		links = append(links, l)
+	}
+	clock = clock.Add(lbStartGrace + time.Second) // past the start grace
+	for _, l := range links {                     // the peer goes down: every link ends
+		lb.release(l)
+	}
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	for k := 0; k < 6; k++ { // 3 s of refused redial bursts (the pool dials in parallel)
+		clock = clock.Add(500 * time.Millisecond)
+		var in []int
+		lb.mu.Lock()
+		for c := 0; c < 30; c++ {
+			i, _ := lb.acquireLocked()
+			in = append(in, i)
+		}
+		lb.mu.Unlock()
+		for _, i := range in {
+			lb.result(i, false, nil, refused)
+		}
+	}
+	for i, st := range lb.Stats() {
+		if st.State == "cooling" || st.State == "probing" {
+			t.Fatalf("path %d cooled by a whole-peer outage: %+v", i, lb.Stats())
+		}
+	}
+	n := map[string]int{}
+	for k := 0; k < 90; k++ { // the peer is back
+		clock = clock.Add(10 * time.Millisecond)
+		lb.dialVia(func(p LBPath) (any, error) { n[p.Local]++; return new(int), nil })
+	}
+	for _, l := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
+		if n[l] < 20 {
+			t.Fatalf("links per path after the outage %v: %s got %d of 90", n, l, n[l])
+		}
+	}
+	// a path that fails while the others carry links is still cooled
+	bad := 0
+	for k := 0; k < 30; k++ {
+		clock = clock.Add(10 * time.Millisecond)
+		lb.dialVia(func(p LBPath) (any, error) {
+			if p.Local == "10.0.0.3" {
+				bad++
+				return nil, errors.New("EOF")
+			}
+			return new(int), nil
+		})
+	}
+	if st := lb.Stats(); st[2].State != "cooling" {
+		t.Fatalf("a failing path with the peer up was not cooled (%d dials): %+v", bad, st)
+	}
+}

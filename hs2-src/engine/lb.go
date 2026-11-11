@@ -126,27 +126,28 @@ func (b *LB) startedLocked() bool {
 
 // LB places links on paths. It is safe for concurrent use.
 type LB struct {
-	mu      sync.Mutex
-	paths   []LBPath
-	links   []int // live links + dials in flight
-	fails   []int
-	total   []uint64
-	until   []time.Time // cooling until (zero = not cooled)
-	probing []bool      // the one probe dial after a cooldown is in flight
-	backoff []time.Time // start grace: skipped until (not a cooldown, no probe)
-	held    map[any]int // live link -> path index
-	hooks   map[any]lbHooks
-	auto    bool      // mode auto: weights follow path quality (lb_auto.go)
-	mult    []float64 // per path quality factor in [lbMultMin, lbMultMax] (1 in fixed)
-	qual    []lbQual
-	qprev   map[any]qPrev // a link's TCP_INFO counters at the last quality tick
-	dials   []int         // dials started on each path since the last quality tick
-	dfails  []int         // ... of which failed
-	cfails  []int         // ... of which failed before TCP connected (lb_judgedata.go)
-	rebal   []uint64      // idle links retired from each path to rebalance
-	peerLB  bool          // the peer's latest kindInfo answer has capLB (status)
-	peerKnw bool          // a kindInfo answer has been seen (peerLB is real)
-	upAt    time.Time     // the first dial that succeeded, on any path (startedLocked)
+	mu       sync.Mutex
+	paths    []LBPath
+	links    []int // live links + dials in flight
+	fails    []int
+	total    []uint64
+	until    []time.Time // cooling until (zero = not cooled)
+	probing  []bool      // the one probe dial after a cooldown is in flight
+	backoff  []time.Time // start grace: skipped until (not a cooldown, no probe)
+	peerDown bool        // rel51: a dial failed with no live link on any path (resultLocked)
+	held     map[any]int // live link -> path index
+	hooks    map[any]lbHooks
+	auto     bool      // mode auto: weights follow path quality (lb_auto.go)
+	mult     []float64 // per path quality factor in [lbMultMin, lbMultMax] (1 in fixed)
+	qual     []lbQual
+	qprev    map[any]qPrev // a link's TCP_INFO counters at the last quality tick
+	dials    []int         // dials started on each path since the last quality tick
+	dfails   []int         // ... of which failed
+	cfails   []int         // ... of which failed before TCP connected (lb_judgedata.go)
+	rebal    []uint64      // idle links retired from each path to rebalance
+	peerLB   bool          // the peer's latest kindInfo answer has capLB (status)
+	peerKnw  bool          // a kindInfo answer has been seen (peerLB is real)
+	upAt     time.Time     // the first dial that succeeded, on any path (startedLocked)
 	// HS2_LB_AUTO2 (lb_auto2.go): the fast judge, the IP names for its
 	// verdicts, and the drain guard (retires in the last minute, the link
 	// count at the last retire and when).
@@ -395,6 +396,16 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 		if dialConnectStage(err) {
 			b.cfails[i]++
 		}
+		// rel51: with no live link on any path (held empty) past the start,
+		// the peer itself is down (a restart, a whole-peer outage): every
+		// path refuses alike, so a refusal says nothing about this path. Not
+		// cooled and not backed off then (the primary never is, so the
+		// rebuilt pool would land on it for a whole cooldown); the first
+		// dial that works again starts the other paths clean (peerBack).
+		if len(b.held) == 0 && !b.upAt.IsZero() && !probe {
+			b.peerDown = true
+			return
+		}
 		if !p.Primary && (probe || b.fails[i] >= lbFailMax && b.startedLocked()) {
 			wasCool := !b.until[i].IsZero()
 			cd := b.cooldownLocked()
@@ -421,6 +432,17 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 	b.until[i] = time.Time{}
 	if i < len(b.backoff) {
 		b.backoff[i] = time.Time{}
+	}
+	if b.peerDown {
+		b.peerDown = false
+		for j := range b.paths {
+			if j != i && b.until[j].IsZero() {
+				b.fails[j] = 0
+				if j < len(b.backoff) {
+					b.backoff[j] = time.Time{}
+				}
+			}
+		}
 	}
 	if b.upAt.IsZero() {
 		b.upAt = b.now()
