@@ -3017,3 +3017,128 @@ to 10 s for both (0 in 90). `ports_menu_test.sh`: not reproduced (6 loaded
 runs with go on PATH, 38/38 each); reading: all input is typed ahead through
 `printf | script`; if a menu read flushes or times out, keys are lost —
 next: 20+ looped runs keeping the failing output.
+
+### 11.11 rel52 (2026-11-11): final release candidate — ee51 merged, the whole-peer outage in the lab, game trace, stripe narrowing after a mass kill
+
+Branch rel52 = rel51 (fa50b7d9) + merge ee51 (6eab1839: the vendored uTLS fork
+in `hs2-src/third_party/utls`, §11.8.3) + the commits below. Merge conflict
+only in CHANGELOG (both entries kept); go.mod took both `replace` lines
+(smux, utls). gofmt excludes the vendored upstream uTLS files (only the hs2
+additions `third_party/utls/hs2_*.go` are checked), and
+`install/tests/release_files_test.sh` now runs that gofmt check when gofmt is
+on PATH. Binary: build a53160876016 (`CGO_ENABLED=0 -trimpath -ldflags="-s -w"`),
+sha256 48c05e9503e9edbb7284303221f5ee5b77816b3750f23bdb62caffb972d58e15.
+
+#### 11.11.1 Whole-peer outage, in the lab (§11.10.2)
+
+r47 harness on lab 1 (reverse l3mtcp, 3 lb paths, 150 links, crowd 3000 +
+call + game + iperf down x8, 74 ms RTT, 1 % loss), new `ir.sh` events:
+`irstop` (SIGSTOP the Iran hs2 process by its exact PID for `IRSTOP_S` s,
+default 3, then SIGCONT) and `irdown` (every link of the tunnel port reset
+with `ss -K` and new dials refused with a TCP reset for `IRDOWN_S` s, default
+3: every link gone, every path refusing). Arms `hs2-r52` vs `hs2-r52pre`
+(cb7c95ee, the tree before the fix); driver `lab/r47/go52.sh`. Links per
+path (A, B, C) on the kharej:
+
+| event | arm | n | links at +5 / +10 / +20 s | paths at +20 s | call p99 ms | call late % |
+|---|---|---|---|---|---|---|
+| irstop 3 s at 30 s | rel52 | 4 | 150 throughout (51/50/49) | ok ok ok | 2872 [2809-2957] | — |
+| irstop 3 s | before | 4 | 150 throughout | ok ok ok | 3002 [2835-3248] | — |
+| irstop 12 s at 25 s | rel52 / before | 4 / 4 | 150 throughout | ok ok ok | ~12.1 s (the freeze) | 26-36 |
+| **irdown 3 s at 30 s** | **rel52** | 4 | [1-5 each] / [29-46 each] / **[51, 50, 49]** | ok ok ok | 218 [204-250] | 9 [5-16] |
+| **irdown 3 s** | **before** | 4 | [2-10, 0, 0] / [74-123, 0, 0] / **[150, 0, 0]** | ok **cooling cooling** | 218 [179-376] | 6 [4-41] |
+
+A frozen Iran process (SIGSTOP, 3 or 12 s) loses no link: TCP keeps them and
+l3 stream links are declared dead only after 30 s, so the users see the
+freeze (p99 = its length) and there is nothing to recover; both arms equal.
+A real outage (`irdown`) reproduces §11.10.2 on the old tree: the rebuilt
+pool sits entirely on the primary with B and C cooled ("lb: path … cooled
+for 20s after 5 failed dial(s): … connection refused"); rel52 rebuilds on all
+three paths within 10 s and is back at 51/50/49 by +20 s (0 cool lines).
+Crowd fails 3000 in both arms (every crowd connection rode a reset link).
+
+#### 11.11.2 Game p99 outliers (§11.10.1 open 1)
+
+`HS2_MCONN_TRACE_GAME=1` (lab only, off by default) adds a game-like band to
+the trace (8-200 kbit/s over the first 10 s, the smaller direction at least
+half the larger, so crowd request/reply pairs stay out; `TestMTraceGameBand`).
+Scenario c (B degraded at 15 s), rel52 + trace, n=8: game p99 190 ms
+[154-216], late 1-10 %; the traced game connection had all its subs on B in
+**0 of 8** runs (it sat on A or C, with a second sub on B in 4). No bad game
+run (470/561 ms in §11.10.1) occurred in these 8 traced runs, so "all subs on
+B" is **not confirmed** and no game trigger was added. Plan: keep the trace
+key in c batteries; act only on a run where the game p99 is bad and its subs
+sit on B. The concurrently run arms were noisier than in §11.10 (c rel51
+`hs2-r51` n=4 call p99 241 [168-580]; c rel52 n=4 212 [162-577]; c rel52 with the
+call trace n=8 322 [187-746]): every light metric (crowd, ping, call, game)
+rose together in those runs, i.e. lab load (3 slots plus the outage arms),
+not one flow and not the merge (rel51 and rel52 equally affected).
+
+#### 11.11.3 Scenario s throughput (§11.10.1 open 2)
+
+s (live front switches of A at 10/16/24/30 s), `hs2-r52` vs `hs2-r52a`
+(cb7c95ee^: before the call-stuck change), interleaved, n=8+8: Mbps median 1185 vs 1138 (mean 1186 vs 1154), Mann-Whitney exact p=0.57; crowd p99 181 vs 220 (p=0.72), call p99 219 vs 277 (p=0.57).
+The 1176 vs 1314 of §11.10 was noise.
+
+#### 11.11.4 u8: light users in the 10 s after the kill; stripe narrowing (§11.10.3)
+
+s49 harness on lab 2, `u8w` (u8: 8 upload streams, 75 % of the links killed
+at 12 s; probe `-warm 12s -t 22s`, so crowd/call/game stats cover only
+12-22 s) vs `u8n` (same window, no kill); resend on (rel52 binary).
+
+| arm | n | crowd p99 | call p99 | call late % | game p99 | Mbps | crowd fails |
+|---|---|---|---|---|---|---|---|
+| u8n (no kill) | 8 | 174 [132-269] | 193 [162-253] | 5 [2-24] | 172 | 1404 | 0 |
+| u8w (kill) | 8 | 261 [182-548] | 198 [146-597] | 45 [11-100] | 160 | 1011 | 1685 |
+| u8w, `HS2_MCONN_STRIPE=0` | 6 | 279 [179-585] | 142 [112-157] | 21 [11-72] | 128 | 634 | 1670 |
+
+Light users are clearly worse after the kill (crowd p99 U=56/64; call late
+45 % vs 5 %). New key **`HS2_MCONN_STRIPE_REBUILD=1`** (off by default; Iran):
+when the reverse pool falls under half of its peak of the last 10 s (peak at
+least 8 links), striped uploads use at most one stripe sub beside the primary
+for `HS2_MCONN_STRIPE_REBUILD_MS` (5000); log line "mconn stripe: pool A -> B
+links (under half): uploads use 1 stripe sub …" (`TestStripeRebuildWindow`).
+A/B on lab 2, one binary, the key on the Iran side, u8w, n=6+6 interleaved:
+
+| u8w | crowd p99 | call p99 | call late % | game p99 | Mbps |
+|---|---|---|---|---|---|
+| key off | 265 [198-301] | 227 [132-318] | 47 [12-100] | 183 | 956 [679-1147] |
+| key on | 196 [160-230] | 204 [161-264] | 7 [2-67] | 182 | 1072 (n=5) |
+| Mann-Whitney exact p | 0.03 | 0.66 | 0.03 | 0.79 | 0.25 |
+
+Engaged in 6/6 key-on runs (one window per kill, pool 99-116 -> 29-56) and
+0/6 off. It stays **off by default** pending acceptance (n=6). Plan for
+default-on: a second battery with c0/c1/u1 (no kill) showing it never
+fires without a mass loss, and u8w n>=8 on lab 1. Limit: one process-wide
+window, so a server with several tunnels narrows all its uploads when one
+pool collapses.
+
+#### 11.11.5 ports_menu_test.sh flakiness
+
+105 looped real runs with go on PATH (lab 2: 25 + 2 x 30 in parallel at load
+up to 37; lab 1: 20 at load 45 beside the battery): 105/105 pass, 38/38
+checks each, 0 SKIP; there was no failing output to keep, so no root cause.
+Plan: keep the loop (`N=25`) as a release step; a failure keeps its output and
+names the check. The suspect stays typed-ahead input lost by `script(1)`
+when its stdin reaches EOF before the menu reads.
+
+#### 11.11.6 Final checks and upgrade
+
+Lab 3, clean checkout of a5316087 (the final code tree): gofmt 0 files
+(vendored upstream excluded), `go vet ./...` ok, `go test ./...` ok (rc=0);
+`-race` on the new/changed tests (call stuck, peer outage, EE parity,
+post-Finished, ticket pads, stripe incl. rebuild, game trace; fork:
+ServerNameAck, Clone) ok; the fork's package ok (its `examples/`
+need network modules: not run); installer sh tests 23/23 (incl. release_files with the gofmt check, ports_menu 38/38) and tun_ports ok; multi_tunnel
+alone (no mtir/mtkh netns before, /tmp 5.1 GB free) 46 PASS / 0 FAIL when this was written, still running (rel51: 57/0).
+
+Upgrade (labs 2/3, Iran = lab 2): r31 binary (15922dc1170f) + an r31-style
+reverse l3mtcp lb config, upgraded in place with `install.sh upgrade`
+(`HS2_YES=1`, local binary): mixed A (new kharej + r31 Iran) 120 s at
+50 Mbit/s, 0 % ping loss; both new: 8/8 links, config byte-identical,
+`hs2 doctor --deep` 0 bad / 0 warnings on both; mixed B (r31 kharej + new
+Iran) 120 s, 0 % loss; then both on the final binary a53160876016: 8/8,
+config unchanged, 20 s 0 % loss (doctor then: 1 BAD on lab 2 = CPU pressure
+from the u8 battery running there, not the tunnel). The upgrade/mixed runs
+before the last step used rel52 builds of fe481c10 and 781db358 (no code change since
+but the lab trace and the off-by-default rebuild key).

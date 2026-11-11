@@ -3,6 +3,8 @@
 # P3_EV="SEC:ACTION ..." : bbad (path B +80ms, 3% corrupt) | tblk (B target blackholed) | trej (B target refuses: RST)
 #   | tslow (B target +2.5 s each way) | tok (B target healthy) | a2both a2real a2tls (live front of A, SIGHUP)
 #   | irstop (rel52: SIGSTOP this Iran hs2 process, exact PID, for IRSTOP_S s (default 3), then SIGCONT)
+#   | irdown (rel52: whole-peer outage — every link of the tunnel port reset (ss -K) and new dials refused
+#     with a TCP reset for IRDOWN_S s (default 3), then accepted again)
 F=$3; D=/opt/hs2lab/r47; X=${LAB_ID:-30}; TNS=tgt$X
 PK=PrCGs2qJvvkEWoWFzk0xIzf0ulkunIGCxlIVLmKqQbc
 ip netns del $TNS 2>/dev/null; ip link del vt$X-a 2>/dev/null; ip netns add $TNS
@@ -55,6 +57,9 @@ OUT=${P3_OUT:-/tmp/p3}; mkdir -p $OUT
       a2real) setfront reality; kill -HUP $ME;;
       a2tls) setfront tls; kill -HUP $ME;;
       irstop) kill -STOP $ME; sleep ${IRSTOP_S:-3}; kill -CONT $ME;;
+      irdown) iptables -I INPUT -p tcp --dport 2096 -j REJECT --reject-with tcp-reset
+        ss -K "( sport = :2096 )" >/dev/null 2>&1; sleep ${IRDOWN_S:-3}
+        iptables -D INPUT -p tcp --dport 2096 -j REJECT --reject-with tcp-reset;;
     esac
     echo "$(date +%T) t=$at $act" >> $OUT/events.txt
   done ) </dev/null >/dev/null 2>&1 &

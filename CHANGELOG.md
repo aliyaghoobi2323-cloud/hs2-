@@ -19,6 +19,66 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel52 — final release candidate: everything since rel40, with EE parity (binary)
+
+One binary (build a53160876016, sha256 48c05e95…) = rel51 + ee51 + the rel52
+commits. Since rel40, per area (details in the entries below and in
+docs/reality-architecture.md §11):
+
+- **Start and LB** — branch start42 start window (refill wait, start dial,
+  on by default); rel47: refused dials before the peer listens no longer put
+  the extra paths into the start back-off; rel51: a whole-peer outage no
+  longer cools the non-primary paths. **rel52 shows it in the lab** (new r47
+  `ir.sh` event `irdown`: every link reset and every dial refused for 3 s):
+  20 s later rel52 is at 51/50/49 links on A/B/C, the tree before the fix at
+  150/0/0 with B and C cooling (n=4 vs 4). A 3 s or 12 s SIGSTOP of the Iran
+  process (`irstop`) drops no link (l3 links die only after 30 s): users see
+  the freeze, nothing to rebuild, both arms equal (n=4+4 each).
+- **Calls** — rel51: the stuck-call trigger also runs under
+  `HS2_LB_CALL_LATE` alone. rel52: the same reading for the game flow
+  (`HS2_MCONN_TRACE_GAME`, lab trace, off) found its subs all on the
+  degraded path in 0 of 8 traced runs and no bad game run: not confirmed,
+  no game trigger added.
+- **Reality** — rel44 cold dialer, suite parity without the global lock,
+  bounded target wait; rel45 no switch stall; rel47 fast fail of a plain tls
+  dial to a pure-reality IP; rel48 direct `both`, rotate-sid, target suite;
+  rel50 `both` downgrades only on real refusals, installer names; **ee51
+  EncryptedExtensions parity** (uTLS v1.8.0 vendored as
+  `hs2-src/third_party/utls`, `Config.ServerNameAck`: the EE acks the SNI
+  when the target does, EE 36 = 36 B) and **post-Finished records replayed
+  in the target's observed order**; ClientHello bytes unchanged.
+- **Heavy upload after a link kill (u8)** — rel49 resend + last-sub grace,
+  `HS2_MCONN_STRIPE_RESEND=1` default on both sides. rel52: light users in
+  the 10 s after a 75 % kill are clearly worse (crowd p99 261 vs 174 ms
+  without a kill, call late 45 % vs 5 %, n=8+8). New
+  **`HS2_MCONN_STRIPE_REBUILD=1`** (off by default, Iran): after the pool
+  falls under half of its recent peak, striped uploads use one stripe sub
+  beside the primary for `HS2_MCONN_STRIPE_REBUILD_MS` (5000). Lab 2, n=6+6:
+  crowd p99 265 -> 196 ms (p=0.03), call late 47 -> 7 % (p=0.03), Mbps not
+  lower (956 vs 1072); engaged 6/6, 0/6 off. Off until accepted.
+- **Scenario s** — rel52 vs before the call-stuck change, n=8+8: Mbps 1185 vs 1138, Mann-Whitney p=0.57 (the rel51 1176 vs 1314 at n=4 was noise).
+- **Release tooling** — gofmt excludes the vendored upstream uTLS files
+  (only `third_party/utls/hs2_*.go` is checked); `release_files_test.sh`
+  runs that check when gofmt is on PATH.
+- **Tests** — `TestRealityRSAKeyAndTicketPads` deterministic (rel51);
+  `ports_menu_test.sh`: 105 looped real runs at load up to 45, 105 pass, not
+  reproduced; new `TestMTraceGameBand`, `TestStripeRebuildWindow`.
+
+Defaults that change for an **r31** deployment (reverse l3mtcp only; not
+under `HS2_DEFAULTS=legacy`): `HS2_LB_JUDGE_DATA` (both), `HS2_LB_RESCUE`,
+`HS2_LB_RESCUE_CALLFREE`, `HS2_LB_CALL_LATE`, `HS2_REFILL_WAIT_MS=300`,
+`HS2_REFILL_WAIT_BYTES=1` (Iran), `HS2_START_DIAL` (kharej),
+`HS2_MCONN_STRIPE_RESEND` (both); `hs2-menu` opens the new menu. How to get
+the old behaviour back: README "Upgrading from r31 / r34".
+
+Final checks (lab 3, clean checkout of a5316087): gofmt 0, `go vet ./...`
+ok, `go test ./...` ok (rc=0), `-race` on the new/changed tests ok, sh
+tests 23/23, multi_tunnel alone (no mtir/mtkh netns before, /tmp 5.1 GB free) 46 PASS / 0 FAIL when this was written, still running (rel51: 57/0). Upgrade test (labs 2/3): r31 + an
+r31-style reverse l3mtcp lb config, `install.sh upgrade` in place on both
+sides: 8/8 links, config byte-identical, traffic 0 % loss, `hs2 doctor
+--deep` 0 bad / 0 warnings; mixed versions (new kharej + r31 Iran and the
+reverse) 120 s each, 0 % loss. docs/reality-architecture.md §11.11.
+
 ## rel51 — release candidate: everything since rel40 in one build (binary)
 
 One binary (build c0c1afbb7de6, sha256 95379063…) that merges rel47, rel49
