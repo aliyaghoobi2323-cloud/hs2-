@@ -1994,3 +1994,175 @@ both.
 Not measured on the lab: link setup with a target ~70 ms from the listener
 (the harness target is on the listener's host); the in-process burst gives
 150 links in 197 ms with a 70 ms target vs 148 ms with a 1 ms one.
+
+### 11.5 rel45 (2026-11-11): reality vs tls ping, the switch stall, harness fixes
+
+Branch rel45 = rel44 (2d6bfe5c) + the commits below. Lab 1, harness
+`hs2-src/lab/s45` (copy of s41 with the changes in 11.5.3/11.5.4), binary
+built from the branch, 3 slots in parallel, arms interleaved. Release binary:
+build 7e2a6198222c, sha256 e31a18af….
+
+#### 11.5.1 Ping p99: reality vs tls (noise, not a cost)
+
+Battery (lab 1, rel45 build = rel44 code + the pprof option, c1 and u8,
+reality (dialer pinned) vs tls, interleaved, arm order alternating per rep;
+3 runs broken by a harness edit were dropped and rerun). Means ± sd, medians
+in brackets, two-sided Mann-Whitney p (20000 permutations, `lab/s45/mw.py`):
+
+| c1 | reality | tls | diff | p |
+|---|---|---|---|---|
+| ping p99 ms, n8+8 | 129.2 ± 9.2 [129.0] | 132.0 ± 22.6 [126.5] | -2.8 | 0.86 |
+| ping p99 ms, n13+13 (with the later reps) | 132.5 ± 13.1 [133.0] | 138.9 ± 26.0 [137.0] | -6.5 | 0.56 |
+| echo p99 ms, n13+13 | 150.8 ± 29.7 | 150.9 ± 36.6 | -0.1 | 0.92 |
+| call p99 ms, n13+13 | 210.0 ± 43.7 | 196.4 ± 30.1 | +13.7 | 0.55 |
+| game p99 ms, n13+13 | 150.9 ± 20.3 | 158.2 ± 19.3 | -7.3 | 0.22 |
+| crowd p99 ms, n13+13 | 153.7 ± 7.7 | 159.1 ± 18.0 | -5.4 | 0.21 |
+| Mbps, n13+13 | 1162 ± 125 [1157] | 1310 ± 129 [1316] | -148 | **0.009** |
+
+| u8, n8+8 | reality | tls | diff | p |
+|---|---|---|---|---|
+| ping p99 ms | 139.6 ± 38.5 [132] | 169.4 ± 35.4 [163] | -29.8 | 0.12 |
+| crowd p99 ms | 152.4 ± 26.2 | 190.0 ± 19.2 | -37.6 | 0.006 |
+| Mbps (whole run, see 11.5.3) | 797 ± 339 | 676 ± 202 | +121 | 0.46 |
+
+**Ping: noise.** The 7-20 ms of §11.4 does not reproduce: at n=8 and n=13
+reality's ping p99 mean is 3-7 ms *below* tls in c1 (p 0.56-0.86) and 30 ms
+below in u8 (p 0.12). A run's ping p99 is the 3rd largest of ~224 samples,
+so one late burst moves it by tens of ms (tls sd 23-26 ms). Every latency
+metric is within noise in c1; in u8 reality is, if anything, better (crowd
+p99 p 0.006, the only "significant" latency difference, in reality's favour,
+most likely run order: not a front effect).
+
+Profiles (one profiled c1 run per arm, `PPROF=1 PPROF_LOCKS=100`, 39 s
+during the heavy flow; CPU + mutex + block, both sides): CPU totals Iran
+67.9 vs 66.5 s, kharej 74.6 vs 74.2 s (reality vs tls); same top frames
+(syscalls 24.4 vs 24.4 s, AES-GCM decrypt 3.6 vs 4.0 s, memmove, selectgo);
+the uTLS write path 24.3 vs 23.7 s cumulative on the sender. Mutex delay
+Iran 38 vs 40 s, kharej 62 vs 81 s, all in the runtime/smux/engine (no
+tlscarrier frame); block profiles identical (selectgo, Cond.Wait in the
+stream readers). No per-record, TCP-tuning or write-path difference shows:
+both carriers end in the same batchConn, `tuneTCP` and keepalive settings, and
+the reality listener's per-link work (target hello, NST pads, parity) is done
+before the link carries data. Nothing to fix for ping.
+
+**Mbps: a new, real difference in c1.** With n=13+13 reality's c1 Mbps is
+11 % lower (p 0.009; rel44: 1193 vs 1283, c0 1608 vs 1698 — same sign every
+time). Not CPU (≈1.8 of 7 cores, same cores per Gbit/s, busiest thread 0.14).
+Suspect: the cipher. Suite parity makes reality use the target's suite
+(openssl: TLS_AES_256_GCM_SHA384), tls uses Go's TLS_AES_128_GCM_SHA256. Arm
+`r128` (the lab target forced to AES-128, so reality uses it too), n=8:
+1241 ± 135 Mbps — between reality (p 0.16) and tls (p 0.50); its latency was
+worse (crowd p99 190 vs 154, p 0.01) but 3 of its runs shared one round, so
+it is confounded. Not resolved; see 11.5.5.
+
+#### 11.5.2 No 10 s stall when an IP switches both -> reality (fixed)
+
+§11.4's announcement arm: the listener switched `both -> reality` while a
+tls dial (the dialer's "both" fallback, or a path that had not yet heard the
+announcement) was in flight; the pure reality listener spliced that hello to
+the target and the dial waited out its 10 s auth deadline
+(`reading server proof: i/o timeout`).
+
+Two fixes, each enough on its own:
+
+* **Listener: switch grace** (`cmd/hs2/front.go`, `RealityServer.TLSUntil`).
+  When a reload turns an IP that served our tls name (tls, or `both`) into
+  pure `reality`, the new listener still answers hellos for our tls name with
+  our tls front for 30 s (`HS2_REALITY_SWITCH_GRACE_S`, 0 = off); the log
+  says `our tls name is still served for 30s (switch grace)`. Every other
+  hello is classified as before; the target is still dialed at accept (pure
+  reality timing). Not at start (no dial can be in flight to a new process),
+  not for reality -> reality (key/name change: no tls before either), not
+  when the tunnel's own front was not tls. Camouflage cost: for 30 s after
+  the switch a prober using our tls name sees what it saw a moment before.
+* **Dialer: fail fast** (`tlscarrier.ErrTargetAnswered`). The tls leg of a
+  `both` (or reality) path checks the leaf certificate: valid for one of the
+  profile's `server_names` and not for our SNI = the target answered (the
+  listener is pure reality), so the dial fails at the handshake instead of
+  waiting 10 s for a proof. A plain tls path never checks (no profile), and a
+  tls front that borrows the target's name (SNI = a server name) is never
+  refused.
+
+Tests: `TestRealitySwitchGrace` (pure reality listener with a 1.5 s grace and
+a target that reads and never answers, like `openssl s_server -www`: inside
+the grace a tls dial with our name is served and reality still works; after
+it the tls leg of "both" fails with `ErrTargetAnswered` in < 2 s and never
+reaches tls), `TestTargetCertCheck`, `TestSwitchGrace` (when a grace applies).
+
+Lab demo (lab 1, c1, arm `an` = rel44 code + pprof option, arm `anb` = this
+build; both: tls at start, `both` at 8 s, pure `reality` at 14 s by SIGHUP,
+dialer not pinned; an `openssl s_client` with our tls name from the dialer's
+namespace 1 s and 32 s after the switch; n=5 each):
+
+| | an (old) | anb (new) |
+|---|---|---|
+| hello with our tls name, 1 s after the switch | target's cert (4/4) | our cert (3/3), counted `tls` |
+| same, 32 s after (grace over) | target's cert (4/4) | target's cert (3/3) |
+| listener counters after the switch | cover 2 | tls 1, cover 1 |
+| `switch grace` log lines | 0 | 3 (one per IP) |
+| 150 links s | 20.1-22.1 | 19.9-20.4 |
+| proof timeouts | 0 | 0 |
+
+The probe shows the mechanism on the wire: with the old build a tls hello
+sent just after the switch is spliced to the target (a tunnel dial there
+waits 10 s for its proof); with the new one it is served. The natural race
+(a link dial in flight at the switch) did not happen in these 10 runs (rel44:
+1 link in 2 of 3 runs), so the 10 s stall itself is shown by the unit test.
+
+#### 11.5.3 u8 harness: the iperf3 control connection off the links (fixed)
+
+u8 kills 75 % of the links at 12 s; the iperf3 control connection rode a
+link in most runs and died ("control socket has closed unexpectedly"), so no
+Mbps. Now (`HEAVY_CTL=direct` in the lab's run.sh, u8 only) the control
+connection goes over the bare path (Iran 127.0.0.1:8450 -> a relay ->
+kharej 192.168.50.2:5299 -> 127.0.0.1:5202, never a link, so the kill cannot
+reach it) and the data streams (`--cport 41000+i`) are DNATed to the tunnel's
+port 8444 as before.
+
+Result: Mbps reported in 15 of 16 u8 runs (rel44: control died in most
+runs); one run (reality) still had an empty iperf3 JSON. The numbers show
+why the u8 Mbps spread is so wide, in both arms: the heavy upload runs at
+1.4-2.1 Gbit/s before the kill and then, in 4 of the 7 runs whose per-second
+series were kept, stays at **0 for the remaining 19 s** (the other 3 recover
+to 470-750 Mbit/s). It is not front-related (tls 2 of 3, reality 2 of 4) and
+was hidden before because the control connection died first. See 11.5.5.
+
+#### 11.5.4 Link setup with a 70 ms target
+
+`r70`: the target in its own namespace `tgtN`, a veth with netem 35 ms each
+way (70 ms RTT) to the listener's namespace, target `10.199.N.2:9443`, a
+concurrent TLS server (`lab/s45/tgt.py`); `rpy` = the same server on the
+listener's loopback (control); `reality` = openssl s_server on loopback.
+Seconds from the start of the run (c1):
+
+| | reality (lo, s_server) n8 | rpy (lo, tgt.py) n3 | r70 (70 ms, tgt.py) n4 |
+|---|---|---|---|
+| first link | 2.0-2.3 | 2.0-2.1 | 2.0-2.3 |
+| 100 links | 4.1 [4.0-6.0] | 4.2 [4.1-6.2] | 4.1 [4.0-4.3] |
+| 150 links | 20.0 [18.1-20.3] | 20.3 [18.2-20.3] | 20.1 [20.0-20.2] |
+| rejected / target_slow | 0 | 0 | 0 |
+
+A 70 ms target adds one listener->target round trip or so to each
+authenticated link (in process: 150 links in 197 vs 148 ms, §11.3); at the
+pool level it does not show: the pool's pace (the start gate, the 100-link
+fill, the 20 s start grace) is far slower than one link. The first r70 run
+used `openssl s_server` in the namespace, which serves one connection at a
+time: 100 links took 12.4 s instead of 4.1 (each authenticated link waits for
+its own target ServerHello). A target that serializes or throttles
+connections from our IP slows the pool build that way; the 3 s
+`authTargetBudget` bounds each link, not the pool.
+
+#### 11.5.5 Open, with a plan
+
+* **c1 Mbps reality -11 %** (11.5.1). Next: r128 vs reality vs tls
+  interleaved in every round (no same-arm rounds), n>=8 each, c0 and c1;
+  sample `ss -ti` of the link sockets in both arms (cwnd, rtt, retrans, rate)
+  every second; if AES-256 explains it, it is the price of suite parity with
+  an AES-256 target (choose a target that picks AES-128, or accept); if not,
+  compare record sizes on the wire (tcpdump of one link per arm).
+* **Heavy upload freezes after a 75 % link kill** (11.5.3): 4 of 7 u8 runs,
+  both fronts, 0 Mbit/s for 19 s with iperf3 still connected. Next: keep the
+  per-second series for all runs, log the Iran side's mconn/stripe state of
+  the heavy streams at the kill (which links each of the 8 streams' stripes
+  were on, whether the dead ones are replaced), and test with
+  `HS2_MCONN_STRIPE_JUMP_MS` on the Iran side too (it is kharej-only today).

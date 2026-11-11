@@ -19,6 +19,26 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel45 — no stall when an IP switches both -> reality; reality vs tls measured (binary)
+
+- **Switch grace (listener)**: an IP switched live from tls or `both` to pure
+  `reality` still serves our own tls name for 30 s
+  (`HS2_REALITY_SWITCH_GRACE_S`, 0 = off), so a tls dial already in flight
+  is served instead of spliced to the target, where it waited out the
+  dialer's 10 s auth deadline. Not at start, not for reality -> reality.
+- **Fail fast (dialer)**: the tls leg of a `both` path fails at the handshake
+  (`ErrTargetAnswered`) when the certificate is for one of the profile's
+  `server_names` and not for our SNI, instead of waiting 10 s for a proof.
+- `HS2_PPROF_LOCKS=N` (with `HS2_PPROF`): mutex and block profiles.
+- Lab (docs/reality-architecture.md §11.5, harness `hs2-src/lab/s45`): the
+  reality ping p99 penalty of rel44 was noise (n=13+13: 132.5 vs 138.9 ms,
+  p 0.56; CPU/mutex/block profiles equal); c1 Mbps is 11 % lower with reality
+  (p 0.009, open: cipher suite parity suspected); a 70 ms target does not
+  change pool setup; u8 Mbps now measurable (iperf3 control off the links),
+  which exposed a heavy-upload freeze after a 75 % link kill (both fronts,
+  open).
+- Release binary: build 7e2a6198222c, sha256 e31a18af….
+
 ## rel44 — Reality cold dialer, parity without a lock, bounded target wait (binary + menu)
 
 - **Cold dialer fixed**: the dialing side remembers the announced reality
