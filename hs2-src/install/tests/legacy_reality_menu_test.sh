@@ -15,6 +15,6 @@ o=$(run "$T/old.json" en); f=$(run "$T/old.json" fa); n=$(run "$T/new.json" en)
 check "tunnel list warns for carrier reality (en)" '[[ "$o" == *"old experimental carrier"* ]]'
 check "tunnel list warns for carrier reality (fa)" '[[ "$f" == *"کریر قدیمی"* ]]'
 check "no warning for a reality FRONT on l3mtcp" '[ -z "$n" ]'
-check "tm_list calls it for every tunnel" 'sed -n "/^tm_list(){/,/^}/p" "$INST" | grep -q "tm_legacy_reality \"\$cfg\""'
-check "upgrade (migrate_config) warns, does not rewrite" 'sed -n "/^migrate_config(){/,/^}/p" "$INST" | grep -q "OLD experimental carrier"'
+check "tm_list calls it for every tunnel" 'sed -n "/^tm_list(){/,/^}/p" "$INST" | grep -c "tm_legacy_reality \"\$cfg\"" >/dev/null'
+check "upgrade (migrate_config) warns, does not rewrite" 'sed -n "/^migrate_config(){/,/^}/p" "$INST" | grep -c "OLD experimental carrier" >/dev/null'
 exit $fail

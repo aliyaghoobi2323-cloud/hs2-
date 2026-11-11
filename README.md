@@ -1431,6 +1431,14 @@ Common flags (before or after the positional value): `--confirm-within 5m`,
   `hs2 reality front … reality` refuses to make the last tls-capable IP pure
   reality until the dialer has shown it has the key (or `--dialer-has-key`);
   the doctor's `reality cold start` check covers both sides.
+- **`both` and resets** (rel50): only a refusal that the key or the
+  listener explains (the certificate did not prove the key; our listener
+  closed because its target is down) moves a path to tls for 10 minutes; a
+  reset or timeout of the reality handshake counts as a path failure for the
+  LB instead, so a censor resetting Reality cannot push the tunnel onto tls.
+  The classic installer now writes the tunnel's name (`sni`) on the
+  listening side too. The old `"carrier": "reality"` is still accepted but
+  warned about in the tunnel list, on upgrade and in `hs2 doctor`.
 - **Weights** must name every IP of this side and sum to 100 (`--equal`
   splits evenly, the remainder to the first).
 - **Park** sets the IP's weight to 0 and gives its share to the others in

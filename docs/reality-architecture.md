@@ -2321,3 +2321,150 @@ alternate between two `openssl s_server`s), heavy x4 + crowd, path c (weight
 * **Judge recovery** in the scale case: not back within 11 s after the loss
   ended; rerun sc with T=75 s to time the recovery.
 * Direct l3mtcp reality cold restart 16.3 s to 90 % (n1): rerun `k` x3.
+
+### 11.8 rel50 (2026-11-11): the Reality throughput gap measured out, smarter `both`, installer names
+
+Branch rel50 = rel48 (1dcbb6c4) + the commits below. Harness
+`hs2-src/lab/s50` (s48's labsrc, `run4.sh`/`w4.sh`): l3mtcp, 3 lb IPs, 150
+links, 74 ms RTT, 1 Gbit/s, crowd 3000 + call + game + heavy download x8
+(25 s); c0 = no loss, c1 = 1 % loss on every path; arms tls / reality /
+`r128` (reality with an openssl target limited to TLS_AES_128_GCM_SHA256)
+run in every round, order rotated, n = 7-8 per arm and cell, lab 1 + lab 2
+(3 slots each). Binary for the battery: rel48 (d3e00fa3; the rel50 code
+changes do not touch the tls/reality data path).
+
+#### 11.8.1 Item 1: the throughput gap — not reproduced; no data-path cost
+
+Mbit/s, mean ± sd (n), two-sided permutation p on the mean (5000):
+
+| cell | tls | reality | r128 | p reality/tls | p r128/tls | p reality/r128 |
+|---|---|---|---|---|---|---|
+| direct c0 | 1227 ± 195 (7) | 1226 ± 225 (7) | 1009 ± 464 (7) | 0.99 | 0.31 | 0.34 |
+| direct c1 | 986 ± 155 (7) | 842 ± 143 (7) | 955 ± 65 (8) | 0.10 | 0.60 | 0.07 |
+| reverse c0 | 1251 ± 120 (7) | 1195 ± 164 (7) | 1204 ± 162 (7) | 0.49 | 0.54 | 0.92 |
+| reverse c1 | 1024 ± 189 (8) | 1150 ± 131 (8) | 977 ± 169 (8) | 0.14 | 0.60 | **0.036** |
+
+* Lossless: reality = tls in both directions. With 1 % loss the sign
+  flips between directions (direct -15 %, reverse +12 %), neither
+  significant; the heavy flow's run-to-run sd under loss is 13-19 % per arm,
+  the size of every gap reported before (rel45 -11 %, rel48 -24 % at
+  n = 2-4). Latency (crowd/call/ping p99) overlaps in every cell.
+* `r128` is not consistently better than reality: better in direct c1
+  (p 0.07), **worse** in reverse c1 (p 0.036). The AES-256 parity is not
+  the cause, and `HS2_REALITY_PREFER_AES128` stays **off** by default.
+* Root-cause checks (where a cost would have to be), one per arm:
+  * **CPU profile** of the sending side (direct c1, kharej = the reality
+    listener, `PPROF=1`, 19 s): tls 44.4 s of samples, reality 44.6 s;
+    AES-GCM encrypt 5.15 % vs 5.33 % (AES-256 adds ~0.2 % of the process),
+    `Conn.Write` 33.6 % (crypto/tls) vs 35.8 % (uTLS); syscalls 39-40 %,
+    smux and mconn the same. This pair ran reality 1179 vs tls 1009 Mbit/s.
+  * **Per-byte cost** (`BenchmarkSuiteCost`: one core encrypting and
+    decrypting over loopback, Xeon E5-2697 v4, n = 3): crypto/tls AES-128
+    447-587 MB/s, uTLS AES-128 406-533, uTLS AES-256 450-473, ChaCha20
+    253-352. At ~1.2 Gbit/s per side AES-256 costs ~3 % of one core more.
+  * **Records on the wire** (`tlsrec.py` on a 3 s full capture of one busy
+    link, reverse c1): reality 992 records, 50 % at 16 KiB, mean 8685 B;
+    tls 1197 records, 54 % at 16 KiB, mean 9203 B — the same shaper
+    (`HS2_SHAPE_BULK`) sizing; no NST or pad records after setup (the NST
+    pads are sent once, at link setup); the same write path
+    (`Carrier.WriteRaw` -> TLS conn -> batchConn) and the same TLS config
+    (no `DynamicRecordSizingDisabled` on either).
+  * **`ss -ti`** of the ~120 link sockets on the sender: bbr on both, the
+    same mss/wscale/rto/rtt; cwnd and unacked follow the momentary rate.
+* Verdict: reality is within noise of tls at n = 7-8 in all four cells; no
+  code change (there is no cost to remove). "Keep the AES-256 parity on the
+  handshake, run the data phase on AES-128" is therefore not needed. It
+  would be invisible to a passive observer (GCM's 16 B tag either way, the
+  same record lengths) but needs a re-keyed record layer in a patched uTLS
+  on both ends — a second crypto path to keep correct for ~0.2 % CPU.
+
+#### 11.8.2 Item 2: cold restart 16.3 s — not reproduced
+
+Direct l3mtcp, cold dialer restart at 16 s (`k`: warm file and status
+removed), n = 3 each, interleaved; first link / 90 % of the links: reality
+2.36/8.63, 2.45/8.44, 2.31/8.45 s; tls 2.43/8.54, 2.22/8.65, 2.70/8.53 s.
+The rel48 16.3 s (n = 1) was a one-off; nothing to fix.
+
+#### 11.8.3 Item 3: EncryptedExtensions 32 vs 36 B — documented, not patched
+
+uTLS v1.8.0's `encryptedExtensionsMsg.marshal` writes ALPN / QUIC params /
+early_data / ECH retry configs only; an OpenSSL `s_server` target acks the
+SNI (an empty `server_name`, 4 B). Each TLS 1.3 handshake message is its
+own record on both sides, so the gap shows only against targets that ack
+the SNI (nginx does not: EE 42 vs 42, §8.4). Not done in this pass: a uTLS
+fork needs the whole suite re-run after it, which did not fit next to the
+battery. Plan: copy uTLS v1.8.0 to `third_party/utls` (3.4 MB, 78 files;
+`replace` in go.mod, like third_party/smux); add `serverNameAck bool` to
+`encryptedExtensionsMsg` (marshal `0x0000 0x0000` first, as OpenSSL does)
+set from a new `Config.ServerNameAck`; the mirror probe records whether the
+target acks (it already sees the EE record length through its tap);
+`TestRealityEEParity`: our EE length = an openssl target's (ack) and a Go
+target's (no ack).
+
+#### 11.8.4 Item 4: `both` downgrades only on real refusals (fixed)
+
+Before: any reality failure past the TCP connect — wrong key, target down,
+**or a reset/timeout by a censor** — counted toward N = 3, then the path
+dialed tls for 10 min. Now (`tlscarrier/hybrid.go`, `RealityRefusal`):
+
+* counts, and is retried with tls at once as before: `ErrRealityCert` (the
+  certificate did not prove the key: wrong key/short id, clock skew, the
+  target answered) and a clean close by the listener (EOF: our listener
+  refused the hello because its target is down or slow, §11.3);
+* a reset, a timeout or any other network error during the reality
+  handshake is a **path** problem: the dial fails to the LB (its usual
+  dead-path handling), no tls retry, no count (`path_fail` in the both
+  status);
+* a tls dial answered by the reality target (`ErrTargetAnswered`: the
+  listener is pure reality now) ends the cool-down at once.
+
+Limit: a censor that injects a FIN (not an RST) after the reality hello
+still looks like our listener's refusal. Tests: `TestBothResetIsPathProblem`
+(10 resets + 1 timeout: 0 tls dials, no cool-down, `path_fail` 11; cert
+failures still cool down; `ErrTargetAnswered` ends it);
+`TestBothFallbackTargetDown` (target down -> tls) unchanged and passing.
+
+#### 11.8.5 Item 5: the classic installer writes the tls name on the listener (fixed)
+
+The two direct listener templates that carry a certificate (`tcp`, `tun`
+over tcp) now write `"sni": "$DOMAIN"`, like the new menu; the dialer side
+already did (hs2 also falls back to the certificate's names since rel48).
+Test `install/tests/listener_sni_test.sh` (fails on the rel48 installer).
+
+#### 11.8.6 Item 6: judge recovery after a bad IP heals (T = 75 s)
+
+Reverse l3mtcp, 6 IPs 40/20/15/10/10/5, per-IP keys, path c (weight 15) at
+30 % loss for 20 s, n = 3 per front, interleaved. Path c's link target in
+the dialer status: 16 before, below half 21-23 s into the run (~4 s after
+the loss began), back to >= 80 % at 56-60 s. Drop -> back: reality 34 / 39
+/ 38 s, tls 34 / 39 / 34 s, i.e. ~15-19 s after the loss ended, the same for
+both fronts (the judge does not depend on the front). Mbit/s 1031 ± 159 vs
+1038 ± 122.
+
+#### 11.8.7 Item 7: the legacy `"carrier": "reality"` warning is visible
+
+Still warning-only (removal needs the operator's OK). `hs2 doctor` / `hs2
+check` already warned (`sec41_test.go`); now the tunnel manager list prints
+it under such a tunnel (both languages) and the upgrade (`migrate_config`)
+warns without rewriting. Test `install/tests/legacy_reality_menu_test.sh`.
+
+#### 11.8.8 Regression check and defaults
+
+Reverse l3mtcp, reality front, rel48 (d3e00fa3) vs rel50 (384be0c3) in
+alternating order, lab 1 + lab 2: `s` (crowd 3000 + call + game, no heavy)
+and `c` (c1: the same + heavy x8 at 1 % loss). ms, mean ± sd (n), permutation p:
+
+| scenario | metric | rel48 | rel50 | p |
+|---|---|---|---|---|
+| s | crowd p99 | 85 ± 4 (6) | 87 ± 6 (5) | 0.58 |
+| s | call p99 | 86 ± 4 (6) | 88 ± 7 (5) | 0.48 |
+| s | ping p99 | 102 ± 14 (6) | 96 ± 24 (5) | 0.59 |
+| c | crowd p99 | 241 ± 81 (5) | 212 ± 68 (4) | 0.60 |
+| c | call p99 | 278 ± 89 (5) | 253 ± 50 (4) | 0.61 |
+| c | ping p99 | 190 ± 52 (5) | 192 ± 28 (4) | 0.98 |
+| c | Mbit/s | 1148 ± 85 (5) | 1100 ± 199 (4) | 0.65 |
+
+No regression (the rel50 changes are off the tls/reality data path; the
+`both` policy only acts on failed dials).
+
+Defaults unchanged; `HS2_REALITY_PREFER_AES128` stays off.

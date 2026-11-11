@@ -3,8 +3,8 @@
 #   DIR d|r; FARM tls|reality|r128; VAR c0 (no loss) | c1 (1 % loss) | k (cold dialer restart at 16 s) | sc (6 IPs, path c 30 % loss 12-32 s, T=75 s)
 #   TCPD=1: the data sender's netns captures one link 3 s (full packets) at 15 s and samples ss -ti per second (w4.sh).
 set -u
-NAME=$1; DIRM=$2; export FARM=$3; V=$4; D=/opt/hs2lab/r50
-export HS2BIN=${HS2BIN:-$D/hs2}
+NAME=$1; DIRM=$2; export FARM=$3; V=${4%%:*}; D=/opt/hs2lab/r50
+B=${4#*:}; [ "$B" = "$4" ] && B=""; export HS2BIN=${HS2BIN:-$D/hs2$B}  # VAR "c1:-r50" runs hs2-r50 (default: hs2)
 L=$D/labsrc/hs2-src/lab
 export P3_OUT=$D/res/$NAME; rm -rf $P3_OUT; mkdir -p $P3_OUT
 COMMON="HS2_SHAPE_FAST=1 HS2_SHAPE_SMALL=1 HS2_L3_LANE=1 HS2_HEAVY_BACKLOG=1 HS2_L3_DUP=1 HS2_MCONN=lite HS2_FAST_LINK=1 HS2_MCONN_BATCH=1 HS2_SHAPE_BULK=1 HS2_QUIET_IDLE=1 HS2_TLS_RESUME=1 HS2_AUTH_PAD=1 HS2_COVER_NGINX=1 HS2_MCONN_DEADLINE_FIX=1 HS2_MCONN_CLOSE_HS=1 HS2_LB_AUTO2=1 HS2_MCONN_CALL=1 HS2_MCONN_CALL_AVOID=1 HS2_MCONN_STRIPE=8 HS2_LB_JUDGE_DATA=1 HS2_LB_FAST_VERDICT=1 HS2_LB_RESCUE=1 HS2_LB_RESCUE_CALLFREE=1 ${XENV:-}"
@@ -12,16 +12,17 @@ IRP="HS2_SMUX_AUTOWIN=1 HS2_SMUX_AUTOWIN_REL=1 HS2_SMUX_AUTOWIN_SHARE_MB=32 HS2_
 KHP="HS2_SMUX_AUTOWIN=1 HS2_SMUX_AUTOWIN_REL=1 HS2_SMUX_AUTOWIN_SHARE_MB=32 HS2_MCONN_STRIPE_JUMP_MS=1500 HS2_LB_FAST_RECOVER=1 HS2_LB_START_GRACE_S=20 HS2_LB_FILL_PCT=25 HS2_LB_SPARE_PER_ROUND=3 HS2_LB_REC_CONFIRM=1"
 export KHAREJ_EXTRA="\"max_links\":150,\"min_links\":100,"
 PATHS=3; LD=0; REV=1; [ $DIRM = d ] && { LD=1; REV=0; }
-LOSS=0; HP=8; T=25s; CR=3000; CKV=0; SC=0; LW=""; LE=""
+LOSS=0; HV=down; HP=8; T=25s; CR=3000; CKV=0; SC=0; LW=""; LE=""
 case $V in
   c0) ;; c1) LOSS=0.01;;
+  s) HV=""; T=30s;;
   k) CKV=1; T=30s;;
   sc) PATHS=6; SC=1; LW=40,20,15,10,10,5; LE="12:2:0.3 32:2:-"; T=75s; HP=4;;
 esac
 export HOME=/root GOPATH=/root/go PATH=$PATH:/usr/local/go/bin MODE=l3mtcp EMU=kernel RATE=1000mbit DELAY=37ms QUEUE=100ms
 export T BULK=0 CALL=2mbit GAME=1 MIN_LINKS=100 MAX_LINKS=150 CROWD=$CR REVERSE=$REV LB_DIRECT=$LD NOWARM=1 WORKDIR=/tmp/r50w$NAME PATHS LB_MODE=auto LOSS KILL_AT=0 KILL_PCT=75
-export HEAVY_CTL=direct PPROF=0 CK=$CKV SCALE=$SC LB_WEIGHTS=${LW:-50,50} LOSS_EVENTS="$LE" TCPD=${TCPD:-0}
-env BIN=$D/w4.sh BIN_KH=$D/w4.sh IR_ENV="$COMMON HS2_LINK_PROBATION=1 HS2_PARTIAL_REFILL=1 HS2_PICK_LANE=on HS2_QUEUE_CTL_UP=1 $IRP" KH_ENV="$COMMON HS2_QUEUE_CTL=1 $KHP" HEAVY=down HEAVY_P=$HP LOGDIR=$P3_OUT RUNTAG=$NAME bash $L/run.sh > $P3_OUT/run.out 2> $P3_OUT/run.err
+export HEAVY_CTL=direct PPROF=${PPROF:-0} CK=$CKV SCALE=$SC LB_WEIGHTS=${LW:-50,50} LOSS_EVENTS="$LE" TCPD=${TCPD:-0}
+env BIN=$D/w4.sh BIN_KH=$D/w4.sh IR_ENV="$COMMON HS2_LINK_PROBATION=1 HS2_PARTIAL_REFILL=1 HS2_PICK_LANE=on HS2_QUEUE_CTL_UP=1 $IRP" KH_ENV="$COMMON HS2_QUEUE_CTL=1 $KHP" HEAVY=$HV HEAVY_P=$HP LOGDIR=$P3_OUT RUNTAG=$NAME bash $L/run.sh > $P3_OUT/run.out 2> $P3_OUT/run.err
 tail -1 $P3_OUT/run.out > $P3_OUT/result.json
 for p in $(cat $P3_OUT/tpids 2>/dev/null); do kill $p 2>/dev/null; done
 rm -rf /tmp/r50w$NAME

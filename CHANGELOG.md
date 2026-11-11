@@ -19,6 +19,34 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel50 — Reality throughput gap measured out; `both` downgrades only on real refusals; installer names (binary)
+
+- **Throughput gap (item 1): not a Reality cost.** Interleaved tls / reality /
+  reality-with-AES-128-target, n = 7-8, direct and reverse l3mtcp, lossless
+  and 1 % loss: reality = tls without loss; with loss -15 % (direct, p 0.10)
+  and +12 % (reverse, p 0.14) — the heavy flow's own run-to-run noise. CPU
+  profiles of the sender identical (AES-GCM 5.15 vs 5.33 %), same record
+  sizes on the wire, same socket state. AES-128 targets are not consistently
+  faster, so `HS2_REALITY_PREFER_AES128` stays off. `docs/reality-architecture.md` §11.8.
+- **`both` front (item 4)**: only a reality refusal that the key or our
+  listener explains (`ErrRealityCert`, the listener's clean close when its
+  target is down/slow) counts toward the 10-minute tls cool-down. A reset
+  or timeout during the reality handshake is now a path problem for the LB
+  (no tls retry, no count, `path_fail`), so a censor that resets reality
+  handshakes no longer pushes the path onto tls. A tls dial answered by the
+  reality target ends the cool-down at once (`TestBothResetIsPathProblem`).
+- **Installer (item 5)**: the classic direct listener (tcp, tun over tcp)
+  writes `"sni"` on the listening side too, like the new menu
+  (`listener_sni_test.sh`).
+- **Legacy `"carrier": "reality"` (item 7)**: still warning-only; the warning
+  now shows in the tunnel manager list and on upgrade, not only in `hs2
+  doctor` (`legacy_reality_menu_test.sh`).
+- Measured, nothing to fix: the direct reality cold restart (8.4-8.6 s to 90 %
+  of the links vs tls 8.5-8.7 s, n = 3; rel48's 16.3 s was a one-off) and the
+  judge's recovery after a bad IP heals (~15-19 s after the loss ends, the
+  same for reality and tls, n = 3). Open with a plan: the 4-byte
+  EncryptedExtensions gap against SNI-acking targets (patched uTLS, §11.8.3).
+
 ## rel48 — direct-mode `both` fixed; rotate-sid; target suite; mode matrix (binary)
 
 - **Direct mode + `both` (fixed)**: a direct-mode listener has no `sni`

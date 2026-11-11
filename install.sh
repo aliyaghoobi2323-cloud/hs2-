@@ -2022,7 +2022,7 @@ kharej_listener(){
     write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
-  "addr": "$BINDADDR:$TPORT",
+  "addr": "$BINDADDR:$TPORT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "backend_addr": "builtin",
   "cover_seed": "$COVER_SEED",
@@ -2048,7 +2048,7 @@ EOF
     write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
-  "addr": "$BINDADDR:$TPORT",
+  "addr": "$BINDADDR:$TPORT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "cover_seed": "$COVER_SEED",
@@ -2848,6 +2848,13 @@ tm_peer_ok(){ # unit cfg
   return "$res"
 }
 
+# tm_legacy_reality CFG: a visible warning for the OLD experimental
+# "carrier": "reality" (sec41: replayable by an active prober, unlimited relay
+# to cover_addr). Warning only — it keeps running; hs2 doctor says the same.
+tm_legacy_reality(){ # cfg
+  grep -Eq '"carrier"[[:space:]]*:[[:space:]]*"reality"' "$1" 2>/dev/null || return 0
+  say "      ${C_R}⚠ $(nm_t 'old experimental carrier "reality": replayable by an active prober, unlimited relay to cover_addr — move to l3mtcp/mtcp/tls + Reality front (hs2 reality front)' 'کریر قدیمی و آزمایشی «reality»: با پروب فعال تکرارپذیر و رله بی‌حد به cover_addr — به l3mtcp/mtcp/tls با جلوی Reality منتقل کنید (hs2 reality front)')${C_0}"
+}
 tm_list(){
   local units=() u cfg st i=0 links extra
   mapfile -t units < <(tm_units)
@@ -2873,6 +2880,9 @@ tm_list(){
     say "  $i) ${C_B}$u${C_0}  $(tm_state_label "$st")$extra"
     if [ -f "$cfg" ]; then
       say "      $(tm_role "$cfg") · $(tm_dir "$cfg") · $(tm_transport "$cfg") · $(tm_endpoint "$cfg")"
+      # sec41/rel50: the old "carrier":"reality" stays usable (removing it needs
+      # the operator's OK) but is never silent: no replay window, unbounded relay.
+      tm_legacy_reality "$cfg"
     else
       say "      ${C_R}config file missing: ${cfg:-?}${C_0}"
     fi
@@ -5209,6 +5219,9 @@ migrate_config(){
   # here. Just let the operator know the new option exists. (Detected, not changed.)
   local car ifc
   car=$(cfg_field carrier); ifc=$(cfg_field iface)
+  if [ "$car" = reality ]; then
+    warn "This tunnel uses the OLD experimental carrier \"reality\" (replayable by an active prober, unlimited relay to cover_addr). It keeps running; move it to l3mtcp/mtcp/tls with the Reality front (hs2 reality front). hs2 doctor shows the same warning."
+  fi
   if [ "$car" = l3mtcp ] || [ "$car" = l3 ]; then
     info "This is a classic tun over multi-link TLS (l3mtcp) — still supported and unchanged."
     info "New: a datagram tun (udp/icmp/gre/ipip/ipx, no TCP-in-TCP) is available. To switch, reconfigure BOTH servers (menu → Iran/Kharej → tun) with the same encapsulation."
