@@ -100,9 +100,10 @@ var Table = []Key{
 	{"HS2_REFILL_WAIT_BYTES", "1", Edge},
 	// up57: a single upload's stripe widens fast and early (Iran, the
 	// stripe's sender); the upload gate reads the light users' queue per path
-	// rel54b: HS2_MCONN_STRIPE_FAST is NOT a default (whole-lab u1: light p99
-	// crowd +3.0 ms, echo +7.7 ms, p<0.001); EARLY_MS and SOLO take effect only
-	// when the operator sets HS2_MCONN_STRIPE_FAST=1
+	// rel54c: on by default by the operator's decision (whole-lab u1: upload
+	// +35-60 %, light p99 crowd +3.0 ms, echo +7.7 ms during one heavy
+	// upload); HS2_MCONN_STRIPE_FAST=0 on Iran turns it off
+	{"HS2_MCONN_STRIPE_FAST", "1", Edge},
 	{"HS2_MCONN_STRIPE_FAST_EARLY_MS", "200", Edge},
 	// rel54b: the fast rule only for an upload that stripes alone (u8 crowd p99)
 	{"HS2_MCONN_STRIPE_FAST_SOLO", "1", Edge},
