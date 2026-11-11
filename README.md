@@ -1522,6 +1522,8 @@ findings carry no keys or passwords.
 Only real tunnel units are counted in the doctor's "restarts / panics"
 lines: a unit whose `ExecStart` is `hs2 run -c /etc/hs2/<name>.json`.
 `hs2-coreguard`, `hs2-alert-*`, `hs2-stats`, `hs2-lb-park` are not tunnels.
+A stale status file that belongs to no config in `/etc/hs2` (a deleted tunnel,
+a test run) is reported as INFO with the `rm` command, not as a stopped tunnel.
 
 ## The three ports (they are different things)
 
