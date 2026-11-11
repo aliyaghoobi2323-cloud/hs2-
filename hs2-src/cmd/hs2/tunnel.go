@@ -319,6 +319,13 @@ func buildConfig(s tunnelSpec, coverSeed string) ([]byte, error) {
 			m["backend_addr"] = "builtin"
 			m["cover_seed"] = coverSeed
 			m["cert_file"], m["key_file"] = s.Cert, s.Key
+			// the listener's own tls name too: the per-IP "both" front
+			// answers tls only for it (tlsNames), reality server_names
+			// must differ from it, and codes / clones made from this
+			// config carry the domain (specFromConfig)
+			if s.Domain != "" {
+				m["sni"] = s.Domain
+			}
 		}
 	} else {
 		m["addr"] = net.JoinHostPort(strings.Trim(s.Peer, "[]"), strconv.Itoa(s.Port))

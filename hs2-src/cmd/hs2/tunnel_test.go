@@ -274,9 +274,16 @@ func TestPreflightFixtures(t *testing.T) {
 	if !strings.Contains(out, "warn domain DNS ex.com points to 198.51.100.1") || !strings.Contains(out, "fail certificate") {
 		t.Fatalf("%s", out)
 	}
+	// the listener keeps its domain as its tls name ("both" needs it)
+	if fc := cfgOf(t, b); fc.SNI != "ex.com" || !strings.HasPrefix(fc.Addr, "0.0.0.0:") || len(tlsNames(fc)) != 1 {
+		t.Fatalf("listener sni %q addr %q", fc.SNI, fc.Addr)
+	}
 	// no domain: a warning that suggests ACME DNS-01 / Reality, not a failure
 	s.Domain, s.Cert = "", "self"
 	b, _ = buildConfig(s, "00")
+	if fc := cfgOf(t, b); fc.SNI != "" {
+		t.Fatalf("sni without a domain: %q", fc.SNI)
+	}
 	pc := preflight(s, b, configForUnit(s.Name), h)
 	if preflightFailed(pc) || !strings.Contains(fmtChecks(pc), "DNS-01") {
 		t.Fatalf("%s", fmtChecks(pc))
