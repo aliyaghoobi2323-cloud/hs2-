@@ -66,21 +66,34 @@ func stripeDirN(ml *managedLink, up, hinted bool) *atomic.Int32 {
 func (m *LinkManager) pickStripeXDirLocked(avoid []any, pool *peerInfo, up bool) *managedLink {
 	var best *managedLink
 	var bestN int32
+	var nOn, nUser, nSame, nPressed int // diagnostics (HS2_MCONN_STRIPE_LOG)
 	for _, ml := range m.links {
-		if !ml.serving() || ml.pressed {
+		if !ml.serving() {
 			continue
 		}
 		if m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() || !linkMConn(ml, pool) {
 			continue
 		}
 		same, other := ml.stDnN.Load(), ml.stUpN.Load()
-		if ml.users.Load() > same+other {
-			continue // a user rides it (placeLocked counts each stripe sub as one)
-		}
 		if up {
 			same, other = other, same
 		}
-		if same > 0 || other <= 0 || !stripeOn(ml) || avoided(ml.link, avoid) {
+		if other <= 0 || !stripeOn(ml) {
+			continue
+		}
+		nOn++
+		switch {
+		case ml.pressed:
+			nPressed++
+			continue
+		case ml.users.Load() > same+other:
+			nUser++
+			continue // a user rides it (placeLocked counts each stripe sub as one)
+		case same > 0:
+			nSame++
+			continue
+		}
+		if avoided(ml.link, avoid) {
 			continue
 		}
 		if best == nil || other < bestN || other == bestN && ml.recent < best.recent {
@@ -89,6 +102,9 @@ func (m *LinkManager) pickStripeXDirLocked(avoid []any, pool *peerInfo, up bool)
 	}
 	if best != nil {
 		stripeXDirPicks.Add(1)
+	}
+	if stripeLog {
+		stripeLogf("stripe xdir: up=%v picked=%v other-dir links=%d (pressed %d, with a user %d, same dir %d)", up, best != nil, nOn, nPressed, nUser, nSame)
 	}
 	return best
 }
