@@ -137,3 +137,44 @@ func TestRealitySpliceNetBudgetCharged(t *testing.T) {
 		t.Fatalf("got %d B in 2 s", n)
 	}
 }
+
+// sec41: idle connections from one /24 are capped before their hello (each
+// would hold a target connection); the cap frees as hellos arrive.
+func TestRealityPreHelloCap(t *testing.T) {
+	rt := newRawTarget(t, "T", 0)
+	l := newRealityLab(t, rt.ln.Addr().String(), nil)
+	var cs []net.Conn
+	defer func() {
+		for _, c := range cs {
+			c.Close()
+		}
+	}()
+	for i := 0; i < preMaxNet; i++ {
+		c, err := net.Dial("tcp", l.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cs = append(cs, c)
+	}
+	time.Sleep(200 * time.Millisecond)
+	c, err := net.Dial("tcp", l.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("connection over the pre-hello cap: %v, want a FIN", err)
+	}
+	c.Close()
+	for _, c := range cs[:8] {
+		c.Write([]byte("GET / HTTP/1.1\r\n\r\n")) // decided: no longer pre-hello
+	}
+	time.Sleep(300 * time.Millisecond)
+	c2, _ := net.Dial("tcp", l.addr)
+	defer c2.Close()
+	c2.Write([]byte("GET / HTTP/1.1\r\n\r\n"))
+	c2.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if b, _ := io.ReadAll(c2); len(b) == 0 {
+		t.Fatal("a connection after the cap freed got nothing from the target")
+	}
+}

@@ -607,6 +607,8 @@ type RealityServer struct {
 	fbMax, fbMaxNet int
 	// budget: free cover bytes per client net per minute (sec41)
 	budget netBudget
+	// pre: connections before their hello (sec41)
+	pre preCount
 }
 
 func clientNet(a net.Addr) string {
@@ -1058,6 +1060,24 @@ func (r *RealityServer) dialTarget(ctx context.Context, tch chan<- struct {
 // forwarding it to the target as it arrives; an authenticated hello gets our
 // own TLS 1.3 and the tunnel auth, anything else the target, byte for byte.
 func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel func(*Carrier)) {
+	// sec41: every accepted connection dials the target before its hello is
+	// read; without a cap a stranger's idle connections were mirrored 1:1 to
+	// the target (lab: 200 idle sockets from one /24 -> 200 target
+	// connections held 10 s each).
+	preRelease, ok := r.preAcquire(raw.RemoteAddr())
+	if !ok {
+		realityReject("prehello_cap")
+		capClose(raw)
+		return
+	}
+	preDone := false
+	endPre := func() {
+		if !preDone {
+			preDone = true
+			preRelease()
+		}
+	}
+	defer endPre()
 	tuneTCP(raw)
 	if QuietIdle {
 		if tc, ok := raw.(*net.TCPConn); ok {
@@ -1160,6 +1180,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 		}
 	}
 	raw.SetReadDeadline(time.Time{})
+	endPre()
 	if preDial != nil {
 		preDial.Stop()
 	}

@@ -247,3 +247,39 @@ func (r *RealityServer) toUTLSConfig(c *tls.Config, th targetHello, ok bool) *ut
 	}
 	return u
 }
+
+// Connections still before their hello (each holds a target connection):
+// per client /24 (/64) and per listener.
+const (
+	preMaxNet = 64
+	preMax    = 4096
+)
+
+type preCount struct {
+	mu  sync.Mutex
+	all int
+	net map[string]int
+}
+
+func (r *RealityServer) preAcquire(a net.Addr) (release func(), ok bool) {
+	k := clientNet(a)
+	p := &r.pre
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.net == nil {
+		p.net = map[string]int{}
+	}
+	if p.all >= preMax || p.net[k] >= preMaxNet {
+		return nil, false
+	}
+	p.all++
+	p.net[k]++
+	return func() {
+		p.mu.Lock()
+		p.all--
+		if p.net[k]--; p.net[k] <= 0 {
+			delete(p.net, k)
+		}
+		p.mu.Unlock()
+	}, true
+}
