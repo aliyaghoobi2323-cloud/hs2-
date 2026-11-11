@@ -39,7 +39,8 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   `TestHS2EncryptedExtensionsServerNameAck` (fork module). Full suite on a
   clean bundle (lab 3): gofmt 0, `go vet ./...` ok, `go test ./...` ok
   except `TestMeteredConnBlockedTime` (engine, timing: 22 % under load
-  average 120 from a neighbour job; 5/5 pass alone), `-race` tlscarrier ok,
+  average 120 from a neighbour job; 5/5 alone, and the whole engine package
+  passes on a rerun at load 2), `-race` tlscarrier ok,
   the fork module's own suite ok. `docs/reality-architecture.md` §11.8.3.
 
 ## rel50 — Reality throughput gap measured out; `both` downgrades only on real refusals; installer names (binary)
