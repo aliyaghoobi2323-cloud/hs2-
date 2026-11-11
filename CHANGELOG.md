@@ -47,12 +47,13 @@ server an older upgrade damaged; do not upgrade with rel52's `install.sh`.
   behaviour) and the flaky `TestMConnStripeSlots` (now checks the
   connection's own slot, not the process-wide counter).
 - **Iran-side memory (investigated, not fixed in rel53):** the rel52 soak's
-  Iran RSS growth reproduces with the **r31 binary and r31 keys** on the same
-  harness (r31 1.58 GB vs rel53 1.70 GB after ~18 min), so it is not new in
-  rel52/rel53; what grows is live heap of 16 KB mconn receive chunks
-  (`msub.readLoop` → `getChunk`), not goroutines or fds, and it is not
-  sync.Pool caching (three forced GCs keep it). A traced run on a second lab
-  (no other jobs) stayed flat at the same point. Details and the plan:
+  Iran RSS climb reproduces with the **r31 binary and r31 keys** on the same
+  harness (lab1: r31 peak 1.56 GB, rel53 1.89 GB; kharej flat), so it is not
+  new in rel52/rel53. For r31 it is mostly runtime retention (live heap after
+  two forced GCs 378 MB at RSS 1.55 GB). rel53 on lab1 once held 1.05 GB of
+  live 16 KB mconn receive chunks after three GCs; a traced rel53 run on a
+  quiet lab (lab2) stayed at 0.6–0.65 GB with 17 MB of chunks live.
+  Goroutines and fds are flat. Not root-caused; tables and the plan:
   `rel53-notes.md`.
 
 ### rev53a — installer/menu review
