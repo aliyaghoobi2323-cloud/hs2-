@@ -129,6 +129,7 @@ type q2Path struct {
 	fastResets int     // HS2_LB_FAST_RECOVER: smoothed-loss resets
 	flap       q2Flap  // HS2_LB_FLAP_PEN
 	overRuns   int     // HS2_LB_REC_CONFIRM: raw readings in a row at/over the bar while cut
+	fast       bool    // HS2_LB_FAST_VERDICT: the last reading was a clear degradation (lb_fastverdict.go)
 	factor     float64 // the edge's applied weight (the dialing side keeps its own)
 	target     float64
 	reason     string
@@ -223,6 +224,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			q.bad = 0
 		}
 	}
+	j.fastVerdicts(now, rs, isBad) // HS2_LB_FAST_VERDICT (lb_fastverdict.go)
 	// IP verdicts (j.ipVerdicts): every path of one IP bad in this reading,
 	// relative to the best IP, and not confounded by its partners.
 	ipBad := map[string]string{}
@@ -378,13 +380,20 @@ func (j *q2Judge) targets() {
 			if gmax > 0 {
 				r = q2Goodness(q) / gmax
 			}
-			if r >= lb2Dead {
+			if r >= lb2Dead && !q.fast {
 				q.target, q.reason = 1, "ok"
 			} else {
 				q.target = math.Max(j.floor, r*r)
 				q.reason = fmt.Sprintf("lower: loss %.1f%%", 100*q.ewma)
+				if q.fast {
+					q.target = j.floor
+					q.reason = fmt.Sprintf("lower at once: loss %.1f%% and delay +%.0fms", 100*q.raw, q.queueMs)
+				}
 				if q.queueMs > 25 {
 					q.reason += fmt.Sprintf(", queue %.0fms", q.queueMs)
+				}
+				if q.fail > 0 {
+					q.reason += fmt.Sprintf(", dial fail %.0f%%", 100*q.fail)
 				}
 			}
 		}
@@ -726,11 +735,13 @@ type lbSteerState struct {
 	repUsed                    time.Time
 	// the fresh report by edge path key (steerTickLocked): effective share %,
 	// factor, cut, sender loss (fraction). Empty: no fresh report.
-	repShare  map[string]float64
-	repFactor map[string]float64
-	repCut    map[string]bool
-	repLoss   map[string]float64
-	logs      []string
+	repShare     map[string]float64
+	repFactor    map[string]float64
+	repCut       map[string]bool
+	repLoss      map[string]float64
+	logs         []string
+	rescued      map[any]bool // HS2_LB_RESCUE: links marked lowered (lb_rescue.go)
+	rescueLogged int64
 }
 
 func newSteerState() *lbSteerState {
@@ -889,6 +900,7 @@ func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
 		}
 		st.active = len(st.repShare) >= 2
 	}
+	m.steerRescueLocked(byPath) // HS2_LB_RESCUE (lb_rescue.go)
 	for p, ls := range byPath {
 		cut := st.active && st.repCut[p]
 		// The keepers: the lb2Keep serving links that take new connections on

@@ -90,6 +90,8 @@ var Table = []Key{
 	{"HS2_LB_SPARE_PER_ROUND", "3", Exit},
 	{"HS2_LB_REC_CONFIRM", "1", Exit},
 	{"HS2_LB_FLAP_PEN", "1", Exit},
+	{"HS2_LB_JUDGE_DATA", "1", Both},
+	{"HS2_LB_RESCUE", "1", Edge},
 }
 
 var byName = func() map[string]Key {

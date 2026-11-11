@@ -56,12 +56,15 @@ func TestApplyDefaults(t *testing.T) {
 	if lbFillPct != 0 || lbSparePerRound != 1 || lbRecConfirm || lbFlapPen {
 		t.Fatal("edge: exit-only keys on")
 	}
+	if !lbRescue || lbFastVerdict {
+		t.Fatal("edge: HS2_LB_RESCUE should default on, HS2_LB_FAST_VERDICT off")
+	}
 
 	ApplyDefaults(false)
 	if lbFillPct != 25 || lbSparePerRound != 3 || !lbRecConfirm || !lbFlapPen {
 		t.Fatal("exit: exit-only keys off")
 	}
-	if stripeAWHeavy != 0 || stripeAWSolo || pickLane != 0 || linkProbation || partialRefill {
+	if stripeAWHeavy != 0 || stripeAWSolo || pickLane != 0 || linkProbation || partialRefill || lbRescue {
 		t.Fatal("exit: edge-only keys on")
 	}
 
@@ -75,6 +78,9 @@ func TestApplyDefaults(t *testing.T) {
 	if !mconnLite.Load() {
 		t.Fatal("other defaults lost with one key off")
 	}
+	if !lbJudgeData || lbEvac {
+		t.Fatal("HS2_LB_JUDGE_DATA should default on, HS2_LB_EVAC off")
+	}
 
 	os.Setenv("HS2_DEFAULTS", "legacy")
 	envdef.Deactivate()
@@ -83,7 +89,7 @@ func TestApplyDefaults(t *testing.T) {
 	if ApplyDefaults(true) != nil {
 		t.Fatal("legacy: defaults applied")
 	}
-	if mconnOn.Load() || lbAuto2 || tlscarrier.QuietIdle || lbFlapPen {
+	if mconnOn.Load() || lbAuto2 || tlscarrier.QuietIdle || lbFlapPen || lbJudgeData {
 		t.Fatal("legacy: defaults in force")
 	}
 }

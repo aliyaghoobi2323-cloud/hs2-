@@ -142,6 +142,7 @@ type LB struct {
 	qprev   map[any]qPrev // a link's TCP_INFO counters at the last quality tick
 	dials   []int         // dials started on each path since the last quality tick
 	dfails  []int         // ... of which failed
+	cfails  []int         // ... of which failed before TCP connected (lb_judgedata.go)
 	rebal   []uint64      // idle links retired from each path to rebalance
 	peerLB  bool          // the peer's latest kindInfo answer has capLB (status)
 	peerKnw bool          // a kindInfo answer has been seen (peerLB is real)
@@ -187,7 +188,7 @@ func NewLB(paths []LBPath, logf func(string, ...any)) (*LB, error) {
 	return &LB{paths: append([]LBPath(nil), paths...), links: make([]int, n), fails: make([]int, n),
 		total: make([]uint64, n), until: make([]time.Time, n), probing: make([]bool, n), backoff: make([]time.Time, n),
 		held: map[any]int{}, hooks: map[any]lbHooks{}, mult: ones(n), qual: make([]lbQual, n),
-		qprev: map[any]qPrev{}, dials: make([]int, n), dfails: make([]int, n), rebal: make([]uint64, n),
+		qprev: map[any]qPrev{}, dials: make([]int, n), dfails: make([]int, n), cfails: make([]int, n), rebal: make([]uint64, n),
 		now: time.Now, log: logf}, nil
 }
 
@@ -391,6 +392,9 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 		b.fails[i]++
 		b.total[i]++
 		b.dfails[i]++
+		if dialConnectStage(err) {
+			b.cfails[i]++
+		}
 		if !p.Primary && (probe || b.fails[i] >= lbFailMax && b.startedLocked()) {
 			wasCool := !b.until[i].IsZero()
 			cd := b.cooldownLocked()

@@ -905,18 +905,24 @@ defaults; ...)`.
 | `HS2_QUIET_IDLE`, `HS2_TLS_RESUME`, `HS2_AUTH_PAD`, `HS2_COVER_NGINX` | `1` | both |
 | `HS2_LB_AUTO2`, `HS2_LB_CUT_DRAIN`, `HS2_LB_FAST_RECOVER` | `1` | both |
 | `HS2_LB_START_GRACE_S` | `20` | both |
+| `HS2_LB_JUDGE_DATA` | `1` | both |
 | `HS2_SMUX_AUTOWIN`, `HS2_SMUX_AUTOWIN_REL` | `1` | both |
 | `HS2_SMUX_AUTOWIN_SHARE_MB` | `32` | both |
 | `HS2_LINK_PROBATION`, `HS2_PARTIAL_REFILL` | `1` | Iran (edge) |
 | `HS2_PICK_LANE` | `on` | Iran (edge) |
 | `HS2_STRIPE_AW_SOLO` | `1` | Iran (edge) |
 | `HS2_STRIPE_AW_HEAVY` | `2` | Iran (edge) |
+| `HS2_LB_RESCUE` | `1` | Iran (edge) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
 | `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
 | `HS2_LB_FLAP_PEN` | `1` | kharej (exit) |
 
-Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain) and every
+Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain), `HS2_LB_EVAC`
+(light-user evacuation off cut paths: no measurable gain in the lab, see
+`docs/reality-architecture.md` 8.5), `HS2_LB_FAST_VERDICT` (floor a path at
+its first clearly bad reading: no measurable gain, the plain rule already does
+it, 8.6) and every
 key not in this table. The side is the config's `mode`: `dial` = Iran (edge),
 `listen` = kharej (exit). Every default-on key works against an older peer
 (new behaviour is announced by a capability bit or carried in a field older
