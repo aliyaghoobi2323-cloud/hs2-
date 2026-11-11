@@ -2344,10 +2344,14 @@ peer's tls IP (our cert) is never refused. Test
   mixed fronts is not proven; the likely cause is placement at the call's
   start: B's reality links come up later (each waits for its target's
   ServerHello; the lab target is a Python server in a netns) and are the
-  emptiest links when the call opens its subs. Plan: (1) traced runs
-  (`XENV=HS2_MCONN_TRACE=1`, arm `c:mixtrC` in go47.sh; 3 queued at the
-  end of this session) to log each sub's path at the call's start and at
-  the cut; (2) if confirmed, place a call's subs on two paths or more when
+  emptiest links when the call opens its subs. Traced so far (`c-mixtr` n4
+  rel45, `c-mixtrC` n2 final binary): no run with the call wholly on B
+  (one had both subs on C, which did not degrade; in `c-mixtrC-2` the subs
+  were on A and B and call late moved the B sub at the cut: "late copy on
+  sub 1 path 192.168.51.1 … srtt 235 vs 82 ms") — the trace may change the
+  timing. Plan: (1) more traced runs (arm
+  `c:mixtrC` in go47.sh) until a bad one shows each sub's path at the
+  call's start and at the cut; (2) if confirmed, place a call's subs on two paths or more when
   the pool has them (path diversity in the call pick, not only link
   business), and/or let the stuck trigger (every sub on one lowered path)
   run under `HS2_LB_CALL_LATE` alone; (3) c mix vs tls, n>=8 each.
