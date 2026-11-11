@@ -117,6 +117,13 @@ func tlsRecordHeaderLooksLikeHTTP(h [5]byte) bool {
 // authorised client it returns a ready carrier via onTunnel; otherwise it
 // proxies the decrypted stream to the backend so the peer gets real content.
 func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrier)) {
+	s.handle(ctx, raw, onTunnel, nil)
+}
+
+// handle is Handle with an optional cover dialer: non-nil replaces the
+// backend of an unauthenticated connection (a "both" IP proxies it to the
+// reality target, phase 4).
+func (s *Server) handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrier), cover func(context.Context) (net.Conn, error)) {
 	s.init()
 	tuneTCP(raw)
 	if QuietIdle { // Chrome's 45 s instead of the listener's 15 s (dpi.go)
@@ -179,7 +186,7 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 				backend = b
 			}
 		}
-		s.forward(ctx, tconn, first, backend)
+		s.forward(ctx, tconn, first, backend, cover)
 		return
 	}
 	tconn.SetDeadline(time.Now().Add(authTimeout))
@@ -215,9 +222,15 @@ func (s *Server) logRare(f string, a ...any) {
 
 // forward proxies the TLS-decrypted stream to the real backend, replaying the
 // bytes already read, so a probe receives a genuine response from a real site.
-func (s *Server) forward(ctx context.Context, tconn *tls.Conn, already []byte, backend string) {
+func (s *Server) forward(ctx context.Context, tconn *tls.Conn, already []byte, backend string, cover func(context.Context) (net.Conn, error)) {
 	defer tconn.Close()
-	up, err := net.DialTimeout("tcp", backend, 8*time.Second)
+	var up net.Conn
+	var err error
+	if cover != nil {
+		up, err = cover(ctx)
+	} else {
+		up, err = net.DialTimeout("tcp", backend, 8*time.Second)
+	}
 	if err != nil {
 		return
 	}
