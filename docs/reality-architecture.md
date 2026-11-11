@@ -1252,7 +1252,10 @@ Findings from the lab demo (fixed or guarded here):
   from a listener config now carry the domain. The classic installer still
   writes it on the dialer only (an existing listener: set "sni" or a per-IP
   sni before "both").
-* Open: `hs2 lb add-ip` of the only IP on
-  a dialer without bind_local_ip fails the weight check (primary "" joins
-  with 50 %): the documented `tunnel join --update` path works; plan: use the
-  added IP as the primary when the dialer has no bind and one public IP.
+* Fixed in int39 (menu M7): `hs2 lb add-ip` of the only IP on a dialer
+  without bind_local_ip failed the weight check (primary "" joined with
+  50 %). `withOwnList` now makes the listed IP the default route leaves from
+  (else the first listed) the dialer's primary (`bind_local_ip`); a bound
+  primary left unlisted scales the listed weights to 100 minus its share;
+  remove-ip of the bound primary moves it to a listed IP. Lab-verified via
+  the menu (health gate + confirm, 8/8 links).
