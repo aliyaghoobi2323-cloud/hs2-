@@ -64,7 +64,8 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   interleaved flags, presets → env per side, effective keys incl. legacy, NIC
   fixtures, cores guard, budget verdict, iperf parsing, drop-in apply +
   rollback, stats timer units), `install/tests/lb_perf_menu_test.sh`
-  (22 pty checks).
+  (22 pty checks); `new_menu_test.sh`: item 5 is now the Speed screen,
+  item 4 still the M5 preview (25 checks).
 
 ## Menu redesign M3 — Tunnels: wizard, connection code, edit, renew, clone (binary + installer)
 

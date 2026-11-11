@@ -76,7 +76,12 @@ check "rollback declined: nothing rolled back" '! grep -q "^rollback" "$T/calls"
 out=$(run '2\n0\n')
 check "2) tunnels: the M3 Tunnels screen (hs2 tunnel list)" 'grep -q "^tunnel list --lang en" "$T/calls"'
 out=$(run '5\n0\n0\n')
-check "5) speed: marked as a preview of M5" 'echo "$out" | grep -q "arrives in M5"'
+check "5) speed: the M4 Speed & performance screen (hs2 perf show)" 'grep -q "^perf show -u hs2-x" "$T/calls" && ! echo "$out" | grep -q "arrives in M"'
+out=$(run '4
+0
+0
+')
+check "4) security: still marked as a preview of M5" 'echo "$out" | grep -q "arrives in M5"'
 out=$(run 'x\n0\n')
 check "invalid choice survives (menu drawn again)" 'echo "$out" | grep -q "Invalid choice" && [ "$(echo "$out" | grep -c "1) Live dashboard")" -ge 2 ]'
 out=$(run '9\n4\n0\n0\n')
