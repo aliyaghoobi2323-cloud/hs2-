@@ -289,7 +289,31 @@ func getChunk(kind byte) *mchunk {
 	return c
 }
 
-func putChunk(c *mchunk) { mchunks.Put(c) }
+func putChunk(c *mchunk) {
+	if c != nil { // nil: a compacted receive entry (compactLocked)
+		mchunks.Put(c)
+	}
+}
+
+// mCompactMax: a received record this small that has to wait (the app or the
+// gap is behind) is copied out of its 16 KB chunk. The receive limits
+// (mRecvBuf, oooMax) count payload bytes, so without it a reader that stops
+// while the other end writes small messages (a backgrounded phone, a push
+// channel, a destination that does not read an upload) held one 16 KB chunk
+// per message: 100 B records made 4 MB of payload pin ~650 MB.
+const mCompactMax = 4 << 10
+
+// compactRecv returns the entry for payload b of chunk c: c itself, or (b
+// small and others already waiting) a right-sized copy with c returned.
+func compactRecv(c *mchunk, off uint64, b []byte, waiting bool) rchunk {
+	if !waiting || len(b) > mCompactMax {
+		return rchunk{c: c, off: off, b: b}
+	}
+	nb := make([]byte, len(b))
+	copy(nb, b)
+	putChunk(c)
+	return rchunk{off: off, b: nb}
+}
 
 // unref drops one send-side reference; the last one returns the chunk.
 func (c *mchunk) unref() {
@@ -1455,7 +1479,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			if m.lite {
 				liteBud.add(time.Now().Unix(), int(end-r.next), 0)
 			}
-			r.appendReadyLocked(rchunk{c: c, off: r.next, b: c.buf[r.next-off : n]})
+			r.appendReadyLocked(compactRecv(c, r.next, c.buf[r.next-off:n], r.head < len(r.ready)))
 			r.pullLocked()
 			r.lastProgress = time.Now()
 			r.cond.Broadcast()
@@ -1479,7 +1503,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 		if m.lite {
 			liteBud.add(time.Now().Unix(), n, 0)
 		}
-		r.insertLocked(rchunk{c: c, off: off, b: c.buf[:n]})
+		r.insertLocked(compactRecv(c, off, c.buf[:n], len(r.ooo) > 0))
 		m.traceFirstLocked(s, end, n)
 		m.traceRecvLocked(s, n)
 		r.mu.Unlock()
