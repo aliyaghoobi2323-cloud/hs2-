@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -508,5 +511,113 @@ func TestAlertAutoRestartBetweenChecks(t *testing.T) {
 	}
 	if st.Day.Restarts != 1 {
 		t.Fatal("daily restart count")
+	}
+}
+
+// rev53c: a failed Telegram send (no route from Iran, proxy down, 429) used to
+// drop the lines — a critical alert or its recovery was simply lost. Now they
+// wait in the state and go first, stamped, at the next check.
+func TestAlertTelegramFailureIsQueued(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	status := 429
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		v, _ := url.ParseQuery(string(b))
+		mu.Lock()
+		defer mu.Unlock()
+		if status != 200 {
+			w.WriteHeader(status)
+			w.Write([]byte(`{"ok":false,"description":"Too Many Requests: retry after 5"}`))
+			return
+		}
+		got = append(got, v.Get("text"))
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	cfg := defaultAlertCfg()
+	cfg.APIURL, cfg.BotToken, cfg.ChatID = srv.URL, "T", "42"
+	cfg.LogFile = filepath.Join(t.TempDir(), "alert.log")
+	st := newAlertState()
+	t1 := time.Date(2026, 11, 11, 3, 4, 0, 0, time.Local)
+	if err := deliverQueued(cfg, "hs2", []alertMsg{{Key: "down", Sev: sevCrit, Text: "tunnel down"}}, st, t1); err == nil {
+		t.Fatal("429 must be reported")
+	}
+	if len(st.Pending) != 1 || !strings.HasPrefix(st.Pending[0], "03:04 ") || !strings.Contains(st.Pending[0], "tunnel down") {
+		t.Fatalf("failed line not kept with its time: %q", st.Pending)
+	}
+	// still failing next minute: both lines kept, the old one not stamped twice
+	deliverQueued(cfg, "hs2", []alertMsg{{Key: "down", Sev: sevOK, Text: "tunnel back"}}, st, t1.Add(time.Minute))
+	if len(st.Pending) != 2 || strings.HasPrefix(st.Pending[0], "03:04 03:04") || !strings.HasPrefix(st.Pending[1], "03:05 ") {
+		t.Fatalf("pending after 2nd failure: %q", st.Pending)
+	}
+	mu.Lock()
+	status = 200
+	mu.Unlock()
+	if err := deliverQueued(cfg, "hs2", nil, st, t1.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Pending) != 0 || len(got) != 1 || !strings.Contains(got[0], "tunnel down") || !strings.Contains(got[0], "tunnel back") {
+		t.Fatalf("queued lines not delivered once recovered: pending %q got %q", st.Pending, got)
+	}
+	// the queue is capped (Telegram blocked for days)
+	mu.Lock()
+	status = 502
+	mu.Unlock()
+	for i := 0; i < 100; i++ {
+		deliverQueued(cfg, "hs2", []alertMsg{{Key: "x", Sev: sevWarn, Text: fmt.Sprint("flap ", i)}}, st, t1)
+	}
+	if len(st.Pending) != alertPendingMax || !strings.Contains(st.Pending[alertPendingMax-1], "flap 99") {
+		t.Fatalf("queue not capped to the newest %d: %d", alertPendingMax, len(st.Pending))
+	}
+}
+
+// rev53c: many messages at once (a storm on a server with 7 paths) went out as
+// one text over Telegram's 4096-character limit and were refused (HTTP 400).
+func TestAlertLongMessageIsSplit(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		v, _ := url.ParseQuery(string(b))
+		if n := len([]rune(v.Get("text"))); n > 4096 {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"ok":false,"description":"Bad Request: message is too long"}`))
+			return
+		}
+		got = append(got, v.Get("text"))
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	cfg := defaultAlertCfg()
+	cfg.APIURL, cfg.BotToken, cfg.ChatID = srv.URL, "T", "42"
+	cfg.LogFile = filepath.Join(t.TempDir(), "alert.log")
+	var ms []alertMsg
+	for i := 0; i < 60; i++ {
+		ms = append(ms, alertMsg{Key: fmt.Sprint(i), Sev: sevWarn, Text: fmt.Sprintf("مسیر %d قطع شد — %s", i, strings.Repeat("x", 120))})
+	}
+	ms = append(ms, alertMsg{Key: "huge", Sev: sevWarn, Text: strings.Repeat("y", 9000)})
+	if err := deliver(cfg, "hs2", ms); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(got, "\n")
+	if len(got) < 3 || !strings.Contains(all, "مسیر 0 ") || !strings.Contains(all, "مسیر 59 ") || !strings.Contains(all, "yyy…") {
+		t.Fatalf("split lost lines: %d chunks", len(got))
+	}
+}
+
+// rev53c: the alert log had no rotation and grew for ever.
+func TestAlertLogRotates(t *testing.T) {
+	old := alertLogMax
+	alertLogMax = 1000
+	defer func() { alertLogMax = old }()
+	cfg := defaultAlertCfg()
+	cfg.LogFile = filepath.Join(t.TempDir(), "alert.log")
+	for i := 0; i < 200; i++ {
+		writeAlertLog(cfg, "hs2", strings.Repeat("z", 50))
+	}
+	a, err1 := os.Stat(cfg.LogFile)
+	b, err2 := os.Stat(cfg.LogFile + ".1")
+	if err1 != nil || err2 != nil || a.Size() > 1100 || b.Size() > 1100 {
+		t.Fatalf("log not rotated: %v %v", err1, err2)
 	}
 }

@@ -154,6 +154,7 @@ type alertState struct {
 	LastCheck int64                   `json:"last_check"`
 	Recent    []string                `json:"recent,omitempty"`   // last messages (for the menu)
 	FrontFB   map[string]int64        `json:"front_fb,omitempty"` // "both" path -> fallbacks counter seen last
+	Pending   []string                `json:"pending,omitempty"`  // lines Telegram has not taken yet (sent first at the next check)
 }
 
 type activeAlert struct {
