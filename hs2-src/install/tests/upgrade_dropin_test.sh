@@ -56,4 +56,14 @@ body=$(sed -n '/^upgrade(){/,/^}/p' "$INST")
 check "upgrade calls dropin_exec_sync and checks the running binary" 'echo "$body" | grep -q "dropin_exec_sync \"\$u\"" && echo "$body" | grep -q "running_exe_ok \"\$u\""'
 bk=$(sed -n '/^backup(){/,/^}/p' "$INST")
 check "backup keeps each tunnel's drop-ins (its HS2_ keys)" 'echo "$bk" | grep -q "items+=(\"\${UNIT_DIR#/}/\$u.service.d\")"'
+# tm_units: the helper units (alert/stats/lb-park timers' services) are not tunnels
+sed -n '/^tm_units(){/,/^}/p' "$INST" > "$T/tmu.sh"
+mkdir -p "$T/u2"
+printf '[Service]\nType=simple\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/config.json\n' > "$T/u2/hs2.service"
+printf '[Service]\nType=simple\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/de1.json\n' > "$T/u2/hs2-de1.service"
+printf '[Service]\nType=oneshot\nNice=10\nExecStart=/usr/local/bin/hs2 alert -c /etc/hs2/config.json -u hs2\n' > "$T/u2/hs2-alert-hs2.service"
+printf '[Unit]\nDescription=x\n[Service]\nType=oneshot\nNice=19\nExecStart=/usr/local/bin/hs2 stats sample\n' > "$T/u2/hs2-stats.service"
+ln -s /dev/null "$T/u2/hs2-masked.service"
+got=$(bash -c "UNIT_DIR='$T/u2'; source '$T/tmu.sh'; tm_units" | tr '\n' ' ')
+check "tm_units: tunnels and a masked unit, never hs2-alert-*/hs2-stats (got: $got)" '[ "$got" = "hs2 hs2-de1 hs2-masked " ]'
 exit $fail

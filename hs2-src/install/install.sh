@@ -2733,10 +2733,19 @@ status_fresh(){
 # tm_units lists every tunnel (hs2.service first, then hs2-*.service by name).
 # A MASKED unit is a /dev/null symlink, not a tunnel file — it is listed too, so
 # setting one up again (which unmasks it) and the manager can see it.
+# The helper units share the hs2- prefix (hs2-alert-<unit>, hs2-stats,
+# hs2-lb-park …) and are NOT tunnels: a oneshot unit is skipped. Without this,
+# upgrade treated hs2-alert-hs2.service (ExecStart=… alert -c CONFIG) as a
+# tunnel, rewrote it as `hs2 run -c CONFIG` and started a second daemon on the
+# live tunnel's config.
 tm_units(){
   local f
   for f in "$UNIT_DIR/hs2.service" "$UNIT_DIR"/hs2-*.service; do
-    { [ -f "$f" ] || [ -L "$f" ]; } && basename "$f" .service
+    { [ -f "$f" ] || [ -L "$f" ]; } || continue
+    if [ -f "$f" ] && ! [ -L "$f" ] && grep -qE '^[[:space:]]*Type[[:space:]]*=[[:space:]]*oneshot' "$f" 2>/dev/null; then
+      continue
+    fi
+    basename "$f" .service
   done
   return 0
 }

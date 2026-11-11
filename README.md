@@ -754,6 +754,18 @@ If the Iran server cannot reach GitHub, copy the new binary from kharej first
 (`scp /usr/local/bin/hs2 root@IRAN_IP:/root/hs2/hs2-linux-amd64`), then on Iran
 run `cd /root/hs2 && bash install.sh upgrade`.
 
+The upgrade first saves a backup (`/root/hs2-backups/`: binary, units, their
+drop-ins, configs, certificates) and then restarts each tunnel and checks the
+**running** binary is the new one. A drop-in that runs another binary
+(`ExecStart=/usr/local/bin/hs2-r31 run -c …`, common on hand-tuned servers) is
+pointed at `/usr/local/bin/hs2` with the same arguments; the old file is kept
+as `override.conf.pre-upgrade`. Check with `systemctl cat hs2` and
+`readlink /proc/$(systemctl show -p MainPID --value hs2)/exe`.
+
+**Roll back** the binary and units to before the upgrade:
+`cd /root/hs2 && bash install.sh restore` (the newest backup; or name a file
+from `/root/hs2-backups/`). **Uninstall:** `bash install.sh uninstall`.
+
 Existing configs keep their mode. To switch, edit `"carrier"` in
 `/etc/hs2/config.json` on both servers and `systemctl restart hs2`.
 
