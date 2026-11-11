@@ -62,3 +62,22 @@ func TestStripeEarlyTicks(t *testing.T) {
 		t.Fatal("hot rule")
 	}
 }
+
+func TestStripeUpNoShareHint(t *testing.T) {
+	old := stripeUpNoShareOn.Load()
+	defer stripeUpNoShareOn.Store(old)
+	m := &mConn{}
+	m.stGrowUp = true
+	stripeUpNoShareOn.Store(false)
+	if stripeUpNoShare(m.stripeNoShareHintLocked(nil)) {
+		t.Fatal("key off")
+	}
+	stripeUpNoShareOn.Store(true)
+	if !stripeUpNoShare(m.stripeNoShareHintLocked(nil)) {
+		t.Fatal("upload: no share")
+	}
+	m.stGrowUp = false
+	if stripeUpNoShare(m.stripeNoShareHintLocked(nil)) {
+		t.Fatal("download keeps the shared pick")
+	}
+}

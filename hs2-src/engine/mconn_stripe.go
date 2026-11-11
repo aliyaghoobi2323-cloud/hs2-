@@ -323,6 +323,7 @@ func (m *mConn) stripeAvoidLocked() []any {
 	if m.stFastMore > 0 && stripeFastOn(m.stGrowUp) {
 		avoid = append(avoid, stripeWantHint{n: 1 + m.stFastMore}) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 	}
+	avoid = m.stripeNoShareHintLocked(avoid) // HS2_MCONN_STRIPE_UP_NOSHARE (mconn_stripe_noshare.go)
 	return avoid
 }
 
@@ -662,7 +663,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
 		}
 	}
-	if !xdir && (chosen == nil || !bestRes && free-1 < stripeKeepFree) && stripeShare {
+	if !xdir && (chosen == nil || !bestRes && free-1 < stripeKeepFree) && stripeShare && !stripeUpNoShare(avoid) {
 		// HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go): a busy pool has no
 		// link without a user — a lightly loaded one instead
 		if ml := m.pickStripeSharedLocked(avoid, pool); ml != nil {
