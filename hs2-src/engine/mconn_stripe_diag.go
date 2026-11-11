@@ -92,6 +92,7 @@ type StripeSnap struct {
 	Grow, Cut, Band, Hold, Token, Full uint64 // تصمیم‌های دروازه به تفکیک علت
 	Closed, NoMeasure                  uint64
 	GrowUnused, GrowRate, PickNone     uint64
+	FastChained, FastEarly, FastRetry  uint64 // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 	// بازهٔ گذشته (از خواندن قبلی)
 	Decisions          uint64
 	WAvg, LiveAvg      float64
@@ -115,6 +116,7 @@ func StripeObserved() StripeSnap {
 		Hold: d.dec[gwHold].Load(), Token: d.dec[gwToken].Load(), Full: d.dec[gwFull].Load(),
 		Closed: d.closed.Load(), NoMeasure: d.noMeas.Load(),
 		GrowUnused: d.growUnused.Load(), GrowRate: d.growRate.Load(), PickNone: d.pickNone.Load(),
+		FastChained: stripeFastStat.chained.Load(), FastEarly: stripeFastStat.early.Load(), FastRetry: stripeFastStat.retries.Load(),
 		QRawUs: d.lastQRaw.Load(), QUs: d.lastQ.Load(), BaseUs: d.lastBase.Load(), BusyLinks: d.lastBusy.Load(),
 	}
 	stripePathQ.mu.Lock()

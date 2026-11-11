@@ -333,6 +333,9 @@ func (m *mConn) rawTick() {
 		// HS2_MCONN_STRIPE: the upgrade's new sub is the first stripe sub
 		m.lightOpening = true
 		avoid := append([]any{m.raw1.key}, m.deadKeys...)
+		if m.stFastMore > 0 && stripeFastOn(m.stGrowUp) {
+			avoid = append(avoid, stripeWantHint{n: 1 + m.stFastMore}) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+		}
 		m.mu.Unlock()
 		m.openStripe(avoid, true) // in the timer's own goroutine
 		return

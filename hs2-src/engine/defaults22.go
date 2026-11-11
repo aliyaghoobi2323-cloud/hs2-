@@ -50,6 +50,7 @@ func loadEnvKeys() {
 	stripeUp.Store(envOn("HS2_MCONN_STRIPE_UP"))
 	stripeShare = envOn("HS2_MCONN_STRIPE_SHARE")
 	stripeRel = envOn("HS2_MCONN_STRIPE_REL")
+	stripeFast.Store(envOn("HS2_MCONN_STRIPE_FAST")) // up55 (mconn_stripe_fast.go)
 	stripeResend.Store(envOn("HS2_MCONN_STRIPE_RESEND"))
 	stripeRebuildOn.Store(envOn("HS2_MCONN_STRIPE_REBUILD"))
 	lbCutDrain = envOn("HS2_LB_CUT_DRAIN")

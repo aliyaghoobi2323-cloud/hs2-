@@ -230,7 +230,7 @@ func TestStripePoolSetAside(t *testing.T) {
 	}
 	// a set-aside link nobody takes goes back after stripeResFor
 	m.mu.Lock()
-	m.stripeAskLocked(now)
+	m.stripeAskLocked(now, 0)
 	ml2 := m.newManaged(newMCLink(caps), 10, now)
 	m.links = append(m.links, ml2)
 	m.mu.Unlock()
@@ -243,7 +243,7 @@ func TestStripePoolSetAside(t *testing.T) {
 	}
 	// a request lapses too
 	m.mu.Lock()
-	m.stripeAskLocked(now)
+	m.stripeAskLocked(now, 0)
 	m.mu.Unlock()
 	now = now.Add(stripeWantFor + time.Second)
 	if x := m.stripeExtra(); x != 0 {

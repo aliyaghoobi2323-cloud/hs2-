@@ -153,6 +153,9 @@ type stripeState struct {
 	stUp      bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
 	stGrowUp  bool // Iran: the last growth was for an upload (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
 
+	stFastMore int     // Iran: subs still to open in the doubling chain (HS2_MCONN_STRIPE_FAST, mconn_stripe_fast.go)
+	stFastRate float64 // Iran: the rate that started the chain
+
 	stWarmUntil time.Time // Iran: its stripe subs are kept until then (HS2_MCONN_STRIPE_SHARE, mconn_stripe_share.go)
 
 	firstRx atomic.Int64 // diagnostics (HS2_MCONN_STRIPE_LOG): unix ns of the first byte read raw
@@ -199,6 +202,9 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		}
 		return false
 	}
+	if m.stFastMore > 0 && !m.handshaking && !m.stOpening && !m.rawW.Load() && m.mode == planeLight && m.stripeFastNextLocked() {
+		return true // HS2_MCONN_STRIPE_FAST: the doubling chain after a raw upgrade (mconn_stripe_fast.go)
+	}
 	if m.stSample.IsZero() {
 		m.stSample, m.stSent, m.stRecvd = now, sent, recvd
 		return false
@@ -232,7 +238,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		}
 		return false
 	}
-	if m.stHot++; n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) {
+	if m.stHot++; n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) && !stripeFastOn(up) {
 		// only a long download stripes: a reel or a page's burst is over in
 		// a second or two, and each would take (and the pool dial) links
 		return false
@@ -271,6 +277,11 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	}
 	m.stOpening = true
 	m.stGrowUp = up
+	if n == 1 && stripeFastOn(up) && m.stHot < int(stripeHotTicks.Load()) {
+		stripeFastStat.early.Add(1)
+	}
+	m.stFastMore = m.stripeFastPlanLocked(n, rate, up) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+	m.stFastRate = rate
 	m.tr.ev("stripe: grow %d -> %d (%.1f Mbit/s)", n, n+1, rate*8/1e6)
 	return true
 }
@@ -299,6 +310,9 @@ func (m *mConn) stripeAvoidLocked() []any {
 	avoid = append(avoid, m.deadKeys...)
 	if stripeXDir {
 		avoid = append(avoid, stripeDirHint{up: m.stGrowUp}) // HS2_MCONN_STRIPE_XDIR (mconn_stripe_xdir.go)
+	}
+	if m.stFastMore > 0 && stripeFastOn(m.stGrowUp) {
+		avoid = append(avoid, stripeWantHint{n: 1 + m.stFastMore}) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 	}
 	return avoid
 }
@@ -332,21 +346,29 @@ func (m *mConn) stripeEnded() {
 func (m *mConn) openStripe(avoid []any, raw bool) {
 	if raw {
 		m.upgradeRawPlane(planeStripe, avoid)
+		for try := 0; m.stripeFastRawRetry(try); try++ {
+			m.upgradeRawPlane(planeStripe, avoid) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+		}
 		m.mu.Lock()
 		m.stOpening = false
 		if m.rawW.Load() { // the open failed: still raw
-			m.stRetryAt = time.Now().Add(mReopenBackoff)
+			m.stRetryAt = m.stripeRetryLocked(time.Now())
 			stripeStat.refused.Add(1)
 			m.stripeIdleLocked()
 		}
+		// HS2_MCONN_STRIPE_FAST: a chain left (stFastMore) goes on from the
+		// manager's tick once the upgrade's handshake is over
 		m.mu.Unlock()
 		return
 	}
 	sub, key, err := m.open(planeStripe, avoid)
+	for try := 0; err != nil && m.stripeFastRetry(try); try++ {
+		sub, key, err = m.open(planeStripe, avoid) // HS2_MCONN_STRIPE_FAST: the pool's set-aside link, soon
+	}
 	m.mu.Lock()
 	m.stOpening = false
 	if err != nil {
-		m.stRetryAt = time.Now().Add(mReopenBackoff)
+		m.stRetryAt = m.stripeRetryLocked(time.Now())
 		stripeStat.refused.Add(1)
 		m.stripeIdleLocked()
 		m.mu.Unlock()
@@ -354,6 +376,7 @@ func (m *mConn) openStripe(avoid []any, raw bool) {
 		return
 	}
 	if m.ended || m.closing || m.mode != planeLight {
+		m.stFastMore = 0
 		m.mu.Unlock()
 		sub.Close()
 		m.kickMgr()
@@ -362,8 +385,16 @@ func (m *mConn) openStripe(avoid []any, raw bool) {
 	s := m.addSubLocked(sub, key, false)
 	m.stripeJoinLocked(s)
 	m.sendCond.Broadcast()
+	next := m.stripeFastNextLocked() // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+	var av []any
+	if next {
+		av = m.stripeAvoidLocked()
+	}
 	m.mu.Unlock()
 	m.startSub(s)
+	if next {
+		go m.openStripe(av, false)
+	}
 }
 
 // stripeJoinLocked (Iran): s carries the stripe; the peer learns it from the
@@ -405,7 +436,8 @@ func (m *mConn) onStripe(s *msub) {
 			}
 		}
 		stripeStat.subs.Add(1)
-		m.stripeRxJoin() // HS2_MCONN_STRIPE_UP (mconn_stripe_up.go)
+		m.stripeUpSubWinLocked(s) // HS2_STRIPE_UP_SUB_WIN_MB (mconn_stripe_fast.go)
+		m.stripeRxJoin()          // HS2_MCONN_STRIPE_UP (mconn_stripe_up.go)
 		m.tr.ev("stripe: sub %d joins", s.idx)
 		m.sendCond.Broadcast()
 	}
@@ -632,7 +664,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	if !shared && !xdir && (chosen == nil || !bestRes && free-1 < stripeKeepFree) {
 		stripeDiag.pickNone.Add(1)
 		if stripeAlone {
-			m.stripeAskLocked(m.now())
+			m.stripeAskLocked(m.now(), stripeWantOf(avoid))
 		}
 		if stripeLog {
 			log.Printf("stripe pick: none (free=%d chosen=%v) — asked the pool for a link", free, chosen != nil)
