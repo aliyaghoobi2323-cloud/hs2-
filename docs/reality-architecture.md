@@ -3026,8 +3026,8 @@ only in CHANGELOG (both entries kept); go.mod took both `replace` lines
 (smux, utls). gofmt excludes the vendored upstream uTLS files (only the hs2
 additions `third_party/utls/hs2_*.go` are checked), and
 `install/tests/release_files_test.sh` now runs that gofmt check when gofmt is
-on PATH. Binary: build a53160876016 (`CGO_ENABLED=0 -trimpath -ldflags="-s -w"`),
-sha256 48c05e9503e9edbb7284303221f5ee5b77816b3750f23bdb62caffb972d58e15.
+on PATH. Binary: build c4562e3dbbed (rel52b, §11.11.7; was a53160876016 / 48c05e95… before it; `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`),
+sha256 bea01c7c3e9db7f40b7974edee1405df3583230bdfaca12323d996d205cb2043.
 
 #### 11.11.1 Whole-peer outage, in the lab (§11.10.2)
 
@@ -3199,3 +3199,14 @@ light users wait for in the 10 s window (sub placement vs pool refill
 order: `HS2_MCONN_TRACE` on the crowd port) before narrowing anything, and
 need one direction across both labs at n>=12.
 
+
+Final checks of this tree (lab 3, clean bundle of c4562e3d; with the key off
+the per-pool change and the atomic read leave behaviour as before): gofmt 0
+files (vendored upstream excluded), `go vet ./...` ok, `-race` on
+`TestStripe*`, `TestApplyDefaults`, `TestSides`, `TestExplicitWins` ok,
+`go test ./... -timeout 40m` rc=0, installer sh tests 23/23, multi_tunnel
+alone (no mtir/mtkh netns before or after) rc=0, 57 PASS / 0 FAIL. Binary
+rebuilt from the git checkout of c4562e3d: build c4562e3dbbed, sha256
+bea01c7c3e9db7f40b7974edee1405df3583230bdfaca12323d996d205cb2043 (Go sources
+identical to the tested bundle). The r31 upgrade runs of §11.11.6 used
+a53160876016; no upgrade-path code changed since.

@@ -21,7 +21,7 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ## rel52 — final release candidate: everything since rel40, with EE parity (binary)
 
-One binary (build a53160876016, sha256 48c05e95…) = rel51 + ee51 + the rel52
+One binary (build c4562e3dbbed, sha256 bea01c7c…; rel52b) = rel51 + ee51 + the rel52
 commits. Since rel40, per area (details in the entries below and in
 docs/reality-architecture.md §11):
 
