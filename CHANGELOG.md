@@ -19,6 +19,48 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel54b — fast upload off by default; `HS2_MCONN_STRIPE_FAST_SOLO` (binary)
+
+From rel54 (9eb3b199). Goal: remove the light-user cost of the fast upload
+with many parallel uploads (u8 crowd p99 +18 ms in rel54's confirmation).
+
+- **Isolation** (u8, whole lab per run via `labslot.sh --all`, all three lab
+  hosts, arms interleaved, n=12 each; A = rel53, B = rel54, D = B +
+  `FAST_RESERVE=0`, E = B + `FAST_EARLY_MS=0`, F = B + `FAST=0`;
+  Mann-Whitney vs A):
+  | arm | Mbit/s | s1–5 | crowd p99 | call | game | echo | ping |
+  |---|---|---|---|---|---|---|---|
+  | A | 2182 | 2006 | 130.0 | 160.4 | 125.5 | 117.1 | 101.7 |
+  | B | 2400 (p=0.009) | 2426 (p<0.001) | +3.4 (p=0.54) | −24.9 (0.93) | −4.2 (0.75) | +5.8 (0.75) | +0.9 (0.80) |
+  | D | 2395 (0.009) | 2405 (<0.001) | +2.8 (0.62) | −24.1 (0.93) | −4.7 (0.67) | +0.2 (0.71) | +11.4 (0.18) |
+  | E (n=11) | 2287 (0.26) | 2008 (1.0) | +1.7 (0.88) | +1.0 (0.78) | −4.1 (0.93) | −6.8 (0.83) | +9.4 (0.33) |
+  | F | 2168 (0.62) | 1928 (0.34) | −6.1 (0.37) | +3.4 (0.84) | −14.1 (0.24) | −3.1 (0.84) | +0.9 (0.53) |
+
+  rel54's +18 ms did not repeat at n=12 (+3.4, p=0.54). B vs F crowd +9.5 ms
+  (p=0.11): the fast rule costs a few ms with eight uploads; no single part
+  (reserve, EARLY_MS) carries it alone.
+- **`HS2_MCONN_STRIPE_FAST_SOLO`** (new, Iran, in the table as `1`; acts only
+  with `HS2_MCONN_STRIPE_FAST=1`): the fast rule (one hot sample, the doubling
+  chain, 250 ms retries) applies only to an upload that stripes alone; while
+  another connection's stripe last grew for an upload (process counter
+  `stripeUpActive`), uploads widen the rel53 way and a running chain stops.
+  `=0` gives rel54's behaviour. Unit tests `TestStripeFastSolo*`.
+- **Acceptance** (final code with FAST on = arm X vs A, whole lab, interleaved):
+  u8 n=11/12: Mbit/s 2133 → 2217 (p=0.26), crowd +5.3 (p=0.69), call −18.2
+  (0.34), game +0.7 (0.44), echo +13.3 (0.06), ping −1.2 (0.95) — passes
+  (p ≥ 0.05). **u1 n=12: 620 → 838 (+35 %, p=0.002), but light p99 crowd
+  +3.0 ms (p<0.001), echo +7.7 (p<0.001), game +1.6 (0.014), ping +2.0
+  (0.026)** — on all three hosts (crowd per run A 80.9–85.1, X 84.0–88.5).
+  c n=6/5: 363 → 616 (p=0.055), light equal or better; d1 n=6: 496 → 623
+  (0.13), echo +2.8 (0.02); d8 n=6: 1609 → 1667 (0.81), light ±5.
+- **Decision (operator rule: ~1–2 ms approved):** u1's light cost is above it
+  and significant, so `HS2_MCONN_STRIPE_FAST` is **no longer a default**: rel54
+  ships the mem55 memory fix (+ `HS2_MCONN_STRIPE_UP_PATHQ=1`). Turn the fast
+  upload on with `Environment=HS2_MCONN_STRIPE_FAST=1` on Iran (EARLY_MS 200 and
+  SOLO 1 then apply from the table). No wire change.
+- Final checks: see `rel54-notes.md` (rel54b section).
+- Binary ed6e7073, sha256 `70cc33e4…cd08c`.
+
 ## rel54 — release candidate: mem55 memory fix + fast upload on by default (binary)
 
 From rel53 (18c5a999): merge of mem55 (size-classed mconn chunks) and up57
