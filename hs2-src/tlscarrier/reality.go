@@ -29,10 +29,12 @@ package tlscarrier
 
 import (
 	"context"
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/hkdf"
 	"crypto/hmac"
@@ -50,6 +52,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	mrand "math/rand/v2"
 	"net"
 	"sort"
 	"strings"
@@ -192,9 +195,18 @@ func realityAEAD(authKey []byte) cipher.AEAD {
 	return a
 }
 
+// realityCapPad (signal byte 1, bit 0): the dialer skips post-handshake pad
+// records (NewSessionTicket mirroring, phase 4). Old listeners ignore bytes
+// 1-3; a listener sends pads only to a dialer that set the bit.
+const realityCapPad = 1
+
+// realityDialCaps is what this dialer announces (tests: 0 = an old dialer).
+var realityDialCaps byte = realityCapPad
+
 func realityPlain(t time.Time, sid [8]byte) []byte {
 	p := make([]byte, 16)
 	p[0] = realityVersion
+	p[1] = realityDialCaps
 	binary.BigEndian.PutUint32(p[4:], uint32(t.Unix()))
 	copy(p[8:], sid[:])
 	return p
@@ -540,7 +552,7 @@ func (RealityFront) DialFront(_ context.Context, p DialPath) (*Carrier, error) {
 	if _, err := u.Write(rec); err != nil {
 		return fail(err)
 	}
-	if err := readServerProof(u, p.Key, nonce, ekm); err != nil {
+	if err := readPadsThenProof(u, p.Key, nonce, ekm); err != nil {
 		return fail(err)
 	}
 	raw.SetDeadline(time.Time{})
@@ -557,11 +569,18 @@ type RealityServer struct {
 	priv     *ecdh.PrivateKey
 	shortIDs map[[8]byte]bool
 	names    map[string]bool
-	certKey  *ecdsa.PrivateKey
-	replay   *replayMem
-	maxBytes int64
-	rateBps  int64
-	maxDur   time.Duration
+	certKey  *ecdsa.PrivateKey  // the default (P-256) throw-away key
+	issuer   ed25519.PrivateKey // signs the throw-away certs (fixed-size signature)
+	padHint  sync.Map           // cert pad sizes that hit the wanted size
+	// key: the throw-away cert's key in use (the target leaf's type/size once
+	// measured, phase 4), with its cert base sizes.
+	key atomic.Pointer[certKey]
+	// floorWarned: the "target chain below our minimum" warning was logged.
+	floorWarned atomic.Int64
+	replay      *replayMem
+	maxBytes    int64
+	rateBps     int64
+	maxDur      time.Duration
 	// CertPad, if > 0, pads the throw-away certificate to about this many
 	// bytes: size mirroring of the target's certificate chain, so the
 	// encrypted Certificate message is about as long as the target's
@@ -659,7 +678,11 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &RealityServer{prof: *p, inner: inner, priv: priv, certKey: ck, replay: newReplayMem(),
+	_, iss, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	r := &RealityServer{prof: *p, inner: inner, priv: priv, certKey: ck, issuer: iss, replay: newReplayMem(),
 		shortIDs: map[[8]byte]bool{}, names: map[string]bool{}}
 	for _, s := range p.ShortIDs {
 		id, _ := parseShortID(s)
@@ -689,12 +712,53 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 	if inner != nil {
 		inner.init()
 	}
-	c, err := r.makeCert(make([]byte, 32), p.ServerNames[0])
+	k, err := r.newCertKey(ck, "ecdsa", 256)
 	if err != nil {
 		return nil, err
 	}
-	r.baseLen = len(c.Certificate[0])
+	r.key.Store(k)
+	r.baseLen = k.base
 	return r, nil
+}
+
+// newCertKey measures the cert base sizes (normal and minimal form) of a key.
+func (r *RealityServer) newCertKey(s crypto.Signer, kind string, bits int) (*certKey, error) {
+	k := &certKey{signer: s, kind: kind, bits: bits} // signed by the Ed25519 issuer: fixed size
+	for _, minimal := range []bool{false, true} {
+		der, err := r.buildCert(k, make([]byte, 32), r.prof.ServerNames[0], 0, minimal)
+		if err != nil {
+			return nil, err
+		}
+		if minimal {
+			k.minLen = len(der)
+		} else {
+			k.base = len(der)
+		}
+	}
+	return k, nil
+}
+
+// useLeafKey switches the throw-away cert to the target leaf's key type and
+// size (cached per process; generated outside the handshake path).
+func (r *RealityServer) useLeafKey(kind string, bits int) error {
+	if cur := r.key.Load(); cur != nil && cur.kind == kind && cur.bits == bits {
+		return nil
+	}
+	var s crypto.Signer
+	if kind == "ecdsa" && bits == 256 {
+		s = r.certKey
+	} else {
+		var err error
+		if s, err = cachedKey(kind, bits); err != nil {
+			return err
+		}
+	}
+	k, err := r.newCertKey(s, kind, bits)
+	if err != nil {
+		return err
+	}
+	r.key.Store(k)
+	return nil
 }
 
 // targetMirror is what the target chose for a Chrome-like offer (X25519MLKEM768
@@ -702,6 +766,73 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 type targetMirror struct {
 	Curve tls.CurveID
 	ALPN  string
+	// leaf key (CertificateVerify size) and the record lengths of the
+	// target's post-handshake NewSessionTickets (phase 4)
+	KeyKind string
+	KeyBits int
+	NST     []int // one probe's ticket records (the count)
+	// NSTSizes: every ticket record length seen over nstProbes probes (an
+	// OpenSSL ticket is 266 or 282 B at random): a pad picks one of these.
+	NSTSizes []int
+}
+
+// nstProbes: handshakes per mirror refresh that sample the ticket sizes.
+const nstProbes = 4
+
+// sampleNST adds nstProbes-1 more ticket size samples to the mirror (after
+// the cert size is installed: the first connections are not kept waiting).
+func (r *RealityServer) sampleNST(ctx context.Context) {
+	m := r.mirror.Load()
+	if m == nil || len(m.NST) == 0 {
+		return
+	}
+	sizes := append([]int(nil), m.NST...)
+	for i := 1; i < nstProbes; i++ {
+		sizes = append(sizes, r.probeNST(ctx)...)
+	}
+	m2 := *m
+	m2.NSTSizes = sizes
+	r.mirror.CompareAndSwap(m, &m2)
+}
+
+// drainFor reads (and drops) whatever comes for d: a ticket is consumed
+// inside Read, but a server that sends application data would end Read early.
+func drainFor(c *tls.Conn, d time.Duration) {
+	c.SetReadDeadline(time.Now().Add(d))
+	b := make([]byte, 4096)
+	for {
+		if _, err := c.Read(b); err != nil {
+			return
+		}
+	}
+}
+
+// probeNST does one handshake with the target and returns its ticket record
+// lengths.
+func (r *RealityServer) probeNST(ctx context.Context) []int {
+	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var raw net.Conn
+	var err error
+	if r.DialTarget != nil {
+		raw, err = r.DialTarget(dctx, r.prof.Target)
+	} else {
+		var d net.Dialer
+		raw, err = d.DialContext(dctx, "tcp", r.prof.Target)
+	}
+	if err != nil {
+		return nil
+	}
+	defer raw.Close()
+	raw.SetDeadline(time.Now().Add(8 * time.Second))
+	tap := &recordTap{Conn: raw}
+	c := tls.Client(tap, &tls.Config{ServerName: r.prof.ServerNames[0], InsecureSkipVerify: true, NextProtos: []string{"h2", "http/1.1"}})
+	if c.Handshake() != nil {
+		return nil
+	}
+	i0 := tap.count()
+	drainFor(c, nstWait)
+	return tap.since(i0)
 }
 
 // Mirror returns the target's observed group and ALPN (nil before the first
@@ -727,13 +858,28 @@ func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
 	}
 	defer raw.Close()
 	raw.SetDeadline(time.Now().Add(8 * time.Second))
-	c := tls.Client(raw, &tls.Config{ServerName: r.prof.ServerNames[0], InsecureSkipVerify: true, NextProtos: []string{"h2", "http/1.1"}})
+	tap := &recordTap{Conn: raw}
+	c := tls.Client(tap, &tls.Config{ServerName: r.prof.ServerNames[0], InsecureSkipVerify: true, NextProtos: []string{"h2", "http/1.1"}})
 	if err := c.Handshake(); err != nil {
 		return 0, err
 	}
+	// The tickets come after our Finished (which Handshake just sent): every
+	// record from here on within nstWait is one.
+	i0 := tap.count()
+	drainFor(c, nstWait)
 	var n int64
 	cs := c.ConnectionState()
-	r.mirror.Store(&targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol})
+	m := &targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol, NST: tap.since(i0)}
+	if len(cs.PeerCertificates) > 0 {
+		m.KeyKind, m.KeyBits = leafKey(cs.PeerCertificates[0])
+	}
+	if m.KeyKind != "" {
+		if err := r.useLeafKey(m.KeyKind, m.KeyBits); err != nil {
+			m.KeyKind = "" // keep the default key
+		}
+	}
+	m.NSTSizes = append([]int(nil), m.NST...)
+	r.mirror.Store(m)
 	for i, crt := range cs.PeerCertificates {
 		n += int64(len(crt.Raw))
 		if i > 0 {
@@ -753,8 +899,13 @@ func (r *RealityServer) StartSizeMirror(ctx context.Context, every time.Duration
 		for {
 			if n, err := r.targetChainSize(ctx); err == nil {
 				if old := r.CertPad.Swap(n); old != n && logf != nil {
-					logf("front: reality: target certificate chain %d B; mirroring its size", n)
+					m, k := r.Mirror(), r.key.Load()
+					logf("front: reality: target certificate chain %d B, leaf %s %d, tickets %v; mirroring them", n, m.KeyKind, m.KeyBits, m.NST)
+					if k != nil && n < int64(k.minLen) && r.floorWarned.Swap(n) != n {
+						logf("front: reality: WARNING the target's certificate chain (%d B) is smaller than our smallest throw-away certificate (%d B): an authenticated handshake's Certificate record is %d B longer than the target's (a passive observer can tell); pick a target with a larger chain", n, k.minLen, int64(k.minLen)-n)
+					}
 				}
+				r.sampleNST(ctx)
 			} else if logf != nil {
 				logf("front: reality: could not measure the target's certificate chain: %v", err)
 			}
@@ -770,14 +921,20 @@ func (r *RealityServer) StartSizeMirror(ctx context.Context, every time.Duration
 // check opens the signal of a complete hello. It returns the authKey or the
 // reject reason.
 func (r *RealityServer) check(h *realityHello) ([]byte, string) {
+	ak, _, reason := r.checkCaps(h)
+	return ak, reason
+}
+
+// checkCaps is check plus the dialer's capability bits (signal byte 1).
+func (r *RealityServer) checkCaps(h *realityHello) ([]byte, byte, string) {
 	if !r.names[strings.ToLower(h.sni)] {
-		return nil, "sni"
+		return nil, 0, "sni"
 	}
 	if len(h.sid) != 32 {
-		return nil, "no_session_id"
+		return nil, 0, "no_session_id"
 	}
 	if len(h.x25519) == 0 {
-		return nil, "no_x25519"
+		return nil, 0, "no_x25519"
 	}
 	aad := append([]byte(nil), h.msg...)
 	for i := h.sidOff; i < h.sidOff+32; i++ {
@@ -801,23 +958,23 @@ func (r *RealityServer) check(h *realityHello) ([]byte, string) {
 			continue
 		}
 		if plain[0] != realityVersion {
-			return nil, "version"
+			return nil, 0, "version"
 		}
 		t := time.Unix(int64(binary.BigEndian.Uint32(plain[4:8])), 0)
 		if d := realityNow().Sub(t); d > realitySkew || d < -realitySkew {
-			return nil, "time"
+			return nil, 0, "time"
 		}
 		var id [8]byte
 		copy(id[:], plain[8:16])
 		if !r.shortIDs[id] {
-			return nil, "short_id"
+			return nil, 0, "short_id"
 		}
 		if !r.replay.add(h.sid[:16]) {
-			return nil, "replay"
+			return nil, 0, "replay"
 		}
-		return ak, ""
+		return ak, plain[1], ""
 	}
-	return nil, "signal"
+	return nil, 0, "signal"
 }
 
 // prefixConn replays already-read bytes before the socket's.
@@ -837,6 +994,39 @@ func (c *prefixConn) Read(b []byte) (int, error) {
 
 // NetConn exposes the socket (Carrier.TCPConn walks wrappers with it).
 func (c *prefixConn) NetConn() net.Conn { return c.Conn }
+
+// certTries counts throw-away cert signings (benchmarks).
+var certTries atomic.Int64
+
+// lazyPreDial: a "both" connection without a complete hello after this long
+// dials the target anyway (see AcceptFront).
+var lazyPreDial = 10 * time.Millisecond
+
+// dialCoverHTTP is the cover backend of the tls front on a "both" IP: a TLS
+// connection to the target (its own name, http/1.1 as our tls front offers),
+// so the decrypted request of a client of OUR certificate is answered by the
+// target's HTTP server.
+func (r *RealityServer) dialCoverHTTP(ctx context.Context) (net.Conn, error) {
+	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var raw net.Conn
+	var err error
+	if r.DialTarget != nil {
+		raw, err = r.DialTarget(dctx, r.prof.Target)
+	} else {
+		var d net.Dialer
+		raw, err = d.DialContext(dctx, "tcp", r.prof.Target)
+	}
+	if err != nil {
+		return nil, err
+	}
+	c := tls.Client(raw, &tls.Config{ServerName: r.prof.ServerNames[0], InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}})
+	if err := c.HandshakeContext(dctx); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	return c, nil
+}
 
 func (r *RealityServer) dialTarget(ctx context.Context, tch chan<- struct {
 	c   net.Conn
@@ -880,16 +1070,27 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	// dials never touch the target. "reality" dials at accept (an
 	// authenticated hello needs the target up, see below).
 	lazy := r.TLS != nil && r.TLSName != nil
-	started := false
+	var dialOnce sync.Once
+	var startedA atomic.Bool
 	startDial := func() {
-		if started {
-			return
-		}
-		started = true
-		go r.dialTarget(ctx, tch)
+		dialOnce.Do(func() {
+			startedA.Store(true)
+			go r.dialTarget(ctx, tch)
+		})
 	}
+	// isStarted is exact even while the pre-dial timer's startDial runs (Do
+	// returns only after the first Do finished).
+	isStarted := func() bool { dialOnce.Do(func() {}); return startedA.Load() }
+	var preDial *time.Timer
 	if !lazy {
 		startDial()
+	} else {
+		// Timing parity (phase 4): a client that connects and stays silent
+		// (a prober sending its hello later) would otherwise wait one
+		// listener->target connect more for its ServerHello than with an
+		// eager dial. Real clients — our own dialer included — send the
+		// hello right after the connect, well inside lazyPreDial.
+		preDial = time.AfterFunc(lazyPreDial, startDial)
 	}
 	var target net.Conn
 	targetErr := false
@@ -897,7 +1098,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 		if target != nil || targetErr {
 			return
 		}
-		if !started {
+		if !startedA.Load() {
 			if !block {
 				return
 			}
@@ -953,13 +1154,20 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 		}
 	}
 	raw.SetReadDeadline(time.Time{})
+	if preDial != nil {
+		preDial.Stop()
+	}
 	var authKey []byte
+	var caps byte
 	if hello != nil {
-		authKey, reason = r.check(hello)
+		authKey, caps, reason = r.checkCaps(hello)
 	}
 	if authKey == nil && hello != nil && r.TLS != nil && r.TLSName != nil && r.TLSName(raw.LocalAddr(), hello.sni) {
-		// "both": our own tls name -> the tls front (its own cover included).
-		if started {
+		// "both": our own tls name -> the tls front. Its cover is the target
+		// too (phase 4): an unauthenticated request after our handshake is
+		// proxied to the target over TLS, so plain HTTP, other SNIs and our
+		// SNI all show one origin on this IP.
+		if isStarted() {
 			go func() {
 				getTarget(true)
 				if target != nil {
@@ -968,7 +1176,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 			}()
 		}
 		r.Counters.TLS.Add(1)
-		r.TLS.Handle(ctx, &prefixConn{Conn: raw, pre: buf}, onTunnel)
+		r.TLS.handle(ctx, &prefixConn{Conn: raw, pre: buf}, onTunnel, r.dialCoverHTTP)
 		return
 	}
 	if authKey == nil {
@@ -977,7 +1185,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 		release, ok := r.fbAcquire(raw.RemoteAddr())
 		if !ok {
 			realityReject("fallback_cap")
-			if started {
+			if isStarted() {
 				go func() {
 					getTarget(true)
 					if target != nil {
@@ -1005,26 +1213,67 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 		return
 	}
 	target.Close()
-	r.serveTunnel(ctx, raw, buf, hello, authKey, onTunnel)
+	r.serveTunnel(ctx, raw, buf, hello, authKey, caps, onTunnel)
 }
 
 func (r *RealityServer) makeCert(authKey []byte, sni string) (*tls.Certificate, error) {
-	spki, err := x509.MarshalPKIXPublicKey(&r.certKey.PublicKey)
+	k := r.key.Load()
+	want := r.CertPad.Load()
+	// The minimal form (no subject, no key usages) only when the target's
+	// chain is smaller than our normal unpadded cert (phase 4: the lab chain
+	// of 387 B was below the old ~412 B floor).
+	minimal := want > 0 && want < int64(k.base)
+	der, err := r.buildCert(k, authKey, sni, want, minimal)
 	if err != nil {
 		return nil, err
 	}
-	val := append([]byte{0x04, 32}, certTag(authKey, spki)...) // OCTET STRING
-	want := r.CertPad.Load()
-	pad := want - int64(r.baseLen) - 24
-	if r.baseLen == 0 || pad < 0 {
-		pad = 0
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k.signer}, nil
+}
+
+// buildCert makes the throw-away cert with key k, exactly want bytes long
+// when reachable (want 0: unpadded). Exact size, no jitter: an ECDSA
+// signature's DER varies by a byte or two, so re-sign until it has the modal
+// length; then nudge the padding until the DER is exactly the target's chain
+// size (a passive observer saw 441-443 B vs the target's fixed 417 B before).
+func (r *RealityServer) buildCert(k *certKey, authKey []byte, sni string, want int64, minimal bool) ([]byte, error) {
+	spki, err := x509.MarshalPKIXPublicKey(k.signer.Public())
+	if err != nil {
+		return nil, err
 	}
-	// Exact size, no jitter: the ECDSA signature's DER is 70-72 bytes, so
-	// re-sign until it is 71 (about half the tries); then nudge the padding
-	// until the DER is exactly the target's chain size (a passive observer
-	// saw 441-443 B vs the target's fixed 417 B before).
+	tag := certTag(authKey, spki)
+	base := k.base
+	if minimal {
+		base = k.minLen
+	}
+	// Two pads: up to tagSlack bytes ride in the tag's OCTET STRING after the
+	// 32-byte tag (the dialer reads Value[2:34]; the length stays one byte),
+	// a larger gap gets its own extension (~24 B of overhead).
+	const tagSlack = 90
+	gap := want - int64(base)
+	var extra, pad int64
+	switch {
+	case base == 0 || want == 0 || gap <= 0:
+	case gap <= tagSlack:
+		extra = gap
+	default:
+		pad = gap - 24
+	}
+	// the pad sizes that hit want last time (DER length bytes make the first
+	// estimate miss by a byte or two): one signing per cert
+	hk := fmt.Sprintf("%p/%d/%v/%d", k, want, minimal, len(sni))
+	if v, ok := r.padHint.Load(hk); ok && want > 0 && gap > 0 {
+		h := v.([2]int64)
+		extra, pad = h[0], h[1]
+	}
 	var der []byte
+	var err2 error
 	for try := 0; try < 64; try++ {
+		val := append([]byte{0x04, byte(32 + extra)}, tag...) // OCTET STRING
+		if extra > 0 {
+			x := make([]byte, extra)
+			rand.Read(x)
+			val = append(val, x...)
+		}
 		exts := []pkix.Extension{{Id: realityCertOID, Value: val}}
 		if pad > 0 {
 			p := make([]byte, pad)
@@ -1032,28 +1281,55 @@ func (r *RealityServer) makeCert(authKey []byte, sni string) (*tls.Certificate, 
 			v, _ := asn1.Marshal(p)
 			exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 55738, 1, 2}, Value: v})
 		}
-		sn, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
-		sn.SetBit(sn, 119, 1) // fixed serial length
 		now := time.Now()
-		tmpl := &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: sni}, DNSNames: []string{sni},
-			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), ExtraExtensions: exts,
-			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
-		der, err = x509.CreateCertificate(rand.Reader, tmpl, tmpl, &r.certKey.PublicKey, r.certKey)
-		if err != nil {
-			return nil, err
+		var tmpl *x509.Certificate
+		if minimal {
+			sn, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 64))
+			sn.SetBit(sn, 63, 1)
+			tmpl = &x509.Certificate{SerialNumber: sn, DNSNames: []string{sni},
+				NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), ExtraExtensions: exts}
+		} else {
+			sn, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
+			sn.SetBit(sn, 119, 1) // fixed serial length
+			tmpl = &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: sni}, DNSNames: []string{sni},
+				NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), ExtraExtensions: exts,
+				KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 		}
-		if c, perr := x509.ParseCertificate(der); perr != nil || len(c.Signature) != 71 {
-			continue
+		// Always signed by an Ed25519 issuer key: the cert's own signature is
+		// seen by nobody but our dialer (which checks only the tag), only its
+		// SIZE shows and the padding fixes that. Ed25519's fixed 64-byte
+		// signature makes the size exact in one signing (ECDSA's 70-72 B DER
+		// took ~4 signings, ~1 ms per cert on the handshake path; an RSA
+		// self-signature ~1.5 ms each). The SPKI is the mirrored key, so
+		// CertificateVerify is the target's size.
+		der, err2 = x509.CreateCertificate(rand.Reader, tmpl, tmpl, k.signer.Public(), r.issuer)
+		certTries.Add(1)
+		if err2 != nil {
+			return nil, err2
 		}
-		if r.baseLen == 0 || pad == 0 || int64(len(der)) == want {
+		if k.sigLen > 0 {
+			if c, perr := x509.ParseCertificate(der); perr != nil || len(c.Signature) != k.sigLen {
+				continue
+			}
+		}
+		d := want - int64(len(der))
+		if d == 0 && (extra > 0 || pad > 0) {
+			r.padHint.Store(hk, [2]int64{extra, pad})
+		}
+		if extra == 0 && pad == 0 || d == 0 {
 			break
 		}
-		pad += want - int64(len(der))
-		if pad < 1 {
-			pad = 1
+		if pad > 0 {
+			if pad += d; pad < 1 {
+				pad = 1
+			}
+		} else if extra += d; extra < 0 {
+			extra = 0
+		} else if extra > tagSlack {
+			extra = tagSlack
 		}
 	}
-	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: r.certKey}, nil
+	return der, nil
 }
 
 func (r *RealityServer) tunnelTLSConfig(cert *tls.Certificate) *tls.Config {
@@ -1071,7 +1347,7 @@ func (r *RealityServer) tunnelTLSConfig(cert *tls.Certificate) *tls.Config {
 	return tcfg
 }
 
-func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byte, h *realityHello, authKey []byte, onTunnel func(*Carrier)) {
+func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byte, h *realityHello, authKey []byte, caps byte, onTunnel func(*Carrier)) {
 	cert, err := r.makeCert(authKey, h.sni)
 	if err != nil {
 		realityReject("cert")
@@ -1091,6 +1367,22 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 	if err != nil {
 		raw.Close()
 		return
+	}
+	// NewSessionTicket parity (phase 4): the target (OpenSSL) sends its
+	// tickets right after the client's Finished — which Handshake just read —
+	// as records of fixed sizes; send pads of those sizes now, to a dialer
+	// that skips them. Go's own ticket (one 139 B record inside the first
+	// flight, before the client's Finished) stays off: a Go-only pattern.
+	if m := r.mirror.Load(); m != nil && caps&realityCapPad != 0 && len(m.NST) > 0 {
+		for range m.NST {
+			l := m.NSTSizes[mrand.IntN(len(m.NSTSizes))]
+			if p := padRecord(ekm, l); p != nil {
+				if _, err := tconn.Write(p); err != nil {
+					raw.Close()
+					return
+				}
+			}
+		}
 	}
 	tconn.SetDeadline(time.Now().Add(authTimeout))
 	b := make([]byte, 16<<10)

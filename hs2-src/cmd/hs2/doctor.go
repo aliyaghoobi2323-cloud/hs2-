@@ -71,6 +71,7 @@ func doctorCmd(args []string) {
 			}
 			checkLBCerts(d, fc)
 			checkLBAdvert(d, *cfgPath)
+			checkFrontSNI(d, fc)
 			checkACME(d, fc)
 			checkTun(d, fc)
 			checkTuning(d, fc)

@@ -171,6 +171,7 @@ func (m *frontMux) rebuild(fc fileConfig) {
 	}
 	m.fc = fc
 	m.byIP.Store(&next)
+	warnSNIResolve(fc, m.logf)
 }
 
 // AcceptFront dispatches by the local IP.
