@@ -912,7 +912,7 @@ defaults; ...)`.
 | `HS2_PICK_LANE` | `on` | Iran (edge) |
 | `HS2_STRIPE_AW_SOLO` | `1` | Iran (edge) |
 | `HS2_STRIPE_AW_HEAVY` | `2` | Iran (edge) |
-| `HS2_LB_RESCUE` | `1` | Iran (edge) |
+| `HS2_LB_RESCUE`, `HS2_LB_RESCUE_CALLFREE` | `1` | Iran (edge) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
 | `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
@@ -922,7 +922,7 @@ Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain), `HS2_LB_EVAC
 (light-user evacuation off cut paths: no measurable gain in the lab, see
 `docs/reality-architecture.md` 8.5), `HS2_LB_FAST_VERDICT` (floor a path at
 its first clearly bad reading: no measurable gain, the plain rule already does
-it, 8.6), `HS2_REFILL_WAIT_MS` (bound on a start-hold wait: start p99 -80% but crowd p95 or call p99 worse, 8.7), `HS2_LB_RESCUE_RAW` (the rescue also for raw single-sub connections when the duplication budget binds, which the default budget did not in the lab; 8.8) and every
+it, 8.6), `HS2_REFILL_WAIT_MS` (bound on a start-hold wait: start p99 -80% but crowd p95 or call p99 worse, 8.7), `HS2_REFILL_WAIT_BYTES` (v3 of the start-hold bound: start p99 1101 -> 161 ms, but ping p99 and heavy not yet proven unchanged, 8.9), `HS2_LB_RESCUE_RAW` (the rescue also for raw single-sub connections when the duplication budget binds, which the default budget did not in the lab; call p99 not yet proven unchanged, 8.8, 8.9) and every
 key not in this table. The side is the config's `mode`: `dial` = Iran (edge),
 `listen` = kharej (exit). Every default-on key works against an older peer
 (new behaviour is announced by a capability bit or carried in a field older

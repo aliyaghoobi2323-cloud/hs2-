@@ -39,7 +39,8 @@ import (
 //     side's fresh report: a path that recovers leaves it; the copies then
 //     follow lite's own rules (an idle second sub closes after mLiteIdle).
 //
-// Default on (edge, envdef). Lab (reality phase 4d, docs/reality-architecture.md
+// Default on (edge, envdef), with HS2_LB_RESCUE_CALLFREE (lb_rescue_callfree.go,
+// 8.9: copies off the call's links; without it call p99 367 vs 207 ms). Lab (reality phase 4d, docs/reality-architecture.md
 // 8.5; B +80 ms 3% corrupt from t=15 s): crowd p99 over the run 556 -> 385 ms
 // (all-tls 498 -> 320), p95 312 -> 180, after the cut 526 -> 283 ms; ~250-300
 // copy subs moved off B a run (the budget part did not bind there); 0 crowd

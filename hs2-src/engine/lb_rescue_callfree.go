@@ -23,6 +23,9 @@ import (
 //     none, the usual light pick;
 //   - rescuePerSec (HS2_LB_RESCUE_PER_SEC, default 100, was 400) spreads the
 //     burst over a few more seconds.
+//
+// Lab (8.9, c n=6+6): call p99 223 (199-405) vs 316 (188-1101) rescue off;
+// the old placement on the same binary: 525, 438, 6533. Crowd p95 178 vs 285.
 var lbRescueCallFree bool // loadEnvKeys: HS2_LB_RESCUE_CALLFREE
 
 // rescueCallFreeN: rescue copies placed off the call links and lowered paths.
