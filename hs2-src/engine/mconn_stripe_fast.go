@@ -44,6 +44,79 @@ func init() {
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_FAST_MBIT")), 64); err == nil && v > 0 {
 		stripeFastRate.Store(int64(v * 1e6 / 8))
 	}
+	stripeFastReserve.Store(stripeFastReserveFromEnv(os.Getenv("HS2_MCONN_STRIPE_FAST_RESERVE")))
+}
+
+// stripeFastReserve: HS2_MCONN_STRIPE_FAST_RESERVE (up56, with
+// HS2_MCONN_STRIPE_FAST; default 3, 0 turns it off, at most 6): the pool
+// keeps this many idle links set aside for the stripe at all times, so an
+// upload's first subs find links the moment it is hot instead of waiting
+// ~1.5-2 s for the pool to build them (up55's lab: seconds 1-5 of a single
+// upload 318 -> 336 Mbit/s only). The reserve comes ON TOP of the
+// autopilot's target (stripeExtra, capped by max_links) and a set-aside link
+// is heavy for every light pick (stripeAdoptLocked) - the light users keep
+// exactly the pool they had; a reserved link a user or download reached
+// anyway is not counted (and lapses as before). A sub that takes a reserved
+// link asks the pool for its replacement right away (pickStripe).
+var stripeFastReserve atomic.Int64
+
+func stripeFastReserveFromEnv(v string) int64 {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 3
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 3
+	}
+	return int64(min(n, 6))
+}
+
+// stripeReserveN: the standing reserve now (0: off).
+func stripeReserveN() int {
+	if !stripeFast.Load() {
+		return 0
+	}
+	return int(stripeFastReserve.Load())
+}
+
+// stripeReserveIdle: ml (set aside) still counts toward the reserve.
+func stripeReserveIdle(ml *managedLink) bool {
+	return !ml.stripeRes.IsZero() && ml.link.Alive() && ml.heavy == 0 && ml.flowing == 0 && ml.users.Load() == 0
+}
+
+// stripeReserveLocked (stripeExtra, under m.mu, each health tick): keep the
+// standing reserve - renew up to r idle set-aside links (they do not lapse)
+// and ask for the missing ones.
+func (m *LinkManager) stripeReserveLocked(now time.Time) {
+	r := stripeReserveN()
+	if r <= 0 {
+		return
+	}
+	kept := 0
+	for _, ml := range m.links {
+		if kept < r && stripeReserveIdle(ml) {
+			ml.stripeRes = now
+			kept++
+		}
+	}
+	stripeFastStat.reserved.Store(int64(kept))
+	if kept < r {
+		m.stripeWant = min(max(m.stripeWant, r-kept), stripeWantCap())
+		m.stripeWantUntil = now.Add(stripeWantFor)
+	}
+}
+
+// stripeReserveRefillLocked (pickStripe, under m.mu, a sub took a set-aside
+// link): ask the pool for its replacement now - and for the subs the fast
+// growth still opens (want) - instead of at the next health tick.
+func (m *LinkManager) stripeReserveRefillLocked(now time.Time, want int) {
+	if stripeReserveN() <= 0 {
+		return
+	}
+	m.stripeWant = min(m.stripeWant+1+max(want-1, 0), stripeWantCap())
+	m.stripeWantUntil = now.Add(stripeWantFor)
+	stripeFastStat.refills.Add(1)
 }
 
 const (
@@ -160,6 +233,10 @@ var stripeFastStat struct {
 	retries atomic.Uint64 // fast opens tried again after no link
 	chained atomic.Uint64 // subs opened by the doubling chain
 	early   atomic.Uint64 // uploads that striped after one hot sample
+
+	reserved atomic.Int64  // up56: idle links in the standing reserve (last health tick)
+	refills  atomic.Uint64 // up56: reserved links taken and asked again at once
+	hsKicks  atomic.Uint64 // up56: chains resumed the moment the upgrade's handshake ended
 }
 
 // stripeUpSubWin: HS2_STRIPE_UP_SUB_WIN_MB (the exit, 0/off by default, 3-8):

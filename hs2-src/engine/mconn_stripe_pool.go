@@ -74,6 +74,7 @@ func (m *LinkManager) stripeExtra() int {
 	now := m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.stripeReserveLocked(now) // HS2_MCONN_STRIPE_FAST_RESERVE (mconn_stripe_fast.go)
 	n := 0
 	for _, ml := range m.links {
 		if !ml.stripeRes.IsZero() && (now.Sub(ml.stripeRes) > stripeResFor || !ml.link.Alive()) {

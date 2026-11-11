@@ -306,6 +306,9 @@ type liveStatus struct {
 	StripeFastChained uint64  `json:"stripe_fast_chained,omitempty"`
 	StripeFastEarly   uint64  `json:"stripe_fast_early,omitempty"`
 	StripeFastRetry   uint64  `json:"stripe_fast_retry,omitempty"`
+	StripeFastRsv     int64   `json:"stripe_fast_reserved,omitempty"`
+	StripeFastRefill  uint64  `json:"stripe_fast_refills,omitempty"`
+	StripeFastHsKick  uint64  `json:"stripe_fast_hs_kicks,omitempty"`
 	StripeGrowUnused  uint64  `json:"stripe_grow_unused,omitempty"`
 	StripeGrowRate    uint64  `json:"stripe_grow_under_rate,omitempty"`
 	StripeGateGrow    uint64  `json:"stripe_gate_grow,omitempty"`
@@ -366,6 +369,7 @@ func fillStripe(ls *liveStatus, s engine.StripeSnap) {
 	ls.StripeActive, ls.StripeRxActive, ls.StripeSubs, ls.StripeBytes, ls.StripeSubBytes = s.Active, s.RxActive, s.Subs, s.Bytes, s.SubBytes
 	ls.StripeRefused, ls.StripePickNone, ls.StripeGrowUnused, ls.StripeGrowRate = s.Refused, s.PickNone, s.GrowUnused, s.GrowRate
 	ls.StripeFastChained, ls.StripeFastEarly, ls.StripeFastRetry = s.FastChained, s.FastEarly, s.FastRetry
+	ls.StripeFastRsv, ls.StripeFastRefill, ls.StripeFastHsKick = s.FastReserved, s.FastRefills, s.FastHsKicks
 	ls.StripeGateGrow, ls.StripeGateCut, ls.StripeGateBand, ls.StripeGateHold, ls.StripeGateToken, ls.StripeGateFull = s.Grow, s.Cut, s.Band, s.Hold, s.Token, s.Full
 	ls.StripeGateClosed, ls.StripeGateNoMeas, ls.StripeGateDec = s.Closed, s.NoMeasure, s.Decisions
 	ls.StripeStepRebase = s.StepRebase

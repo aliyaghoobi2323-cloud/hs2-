@@ -450,7 +450,14 @@ func (m *mConn) onUpgrade(s *msub, off uint64) bool {
 			}
 		}
 		m.tr.ev("raw: UPGRADE(%d) from the peer, first sub open", off)
+		chain := m.stFastMore > 0
 		m.mu.Unlock()
+		if chain {
+			// HS2_MCONN_STRIPE_FAST (up56): the doubling chain waited for the
+			// handshake's end - go on now, not at the next manager tick
+			stripeFastStat.hsKicks.Add(1)
+			m.kickMgr()
+		}
 		return true
 	}
 	if m.upgraded { // step 2
