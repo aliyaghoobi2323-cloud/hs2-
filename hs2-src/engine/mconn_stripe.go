@@ -673,7 +673,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	}
 	m.placeLocked(chosen)
 	if bestRes {
-		chosen.stripeRes = time.Time{}                            // its hold passes to the sub
+		chosen.stripeRes = time.Time{}       // its hold passes to the sub
 		m.stripeReserveRefillLocked(m.now()) // HS2_MCONN_STRIPE_FAST_RESERVE (mconn_stripe_fast.go)
 	} else {
 		stripeHold(chosen, 1)

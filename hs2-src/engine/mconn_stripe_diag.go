@@ -86,14 +86,14 @@ func stripeDiagGate(why, w, live int, qRaw, q, base time.Duration, busy int) {
 
 // StripeSnap: وضعیت stripe برای hs2 status.
 type StripeSnap struct {
-	Active, RxActive                   int32  // اتصال‌های دارای جای stripe (ایران / گیرندهٔ خارج)
-	Subs, Bytes, SubBytes, Refused     uint64 // از آغاز
-	Cuts                               uint64
-	Grow, Cut, Band, Hold, Token, Full uint64 // تصمیم‌های دروازه به تفکیک علت
-	Closed, NoMeasure                  uint64
-	GrowUnused, GrowRate, PickNone     uint64
-	FastChained, FastEarly, FastRetry  uint64 // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
-	FastReserved                       int64  // up56: HS2_MCONN_STRIPE_FAST_RESERVE idle links
+	Active, RxActive                    int32  // اتصال‌های دارای جای stripe (ایران / گیرندهٔ خارج)
+	Subs, Bytes, SubBytes, Refused      uint64 // از آغاز
+	Cuts                                uint64
+	Grow, Cut, Band, Hold, Token, Full  uint64 // تصمیم‌های دروازه به تفکیک علت
+	Closed, NoMeasure                   uint64
+	GrowUnused, GrowRate, PickNone      uint64
+	FastChained, FastEarly, FastRetry   uint64 // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+	FastReserved                        int64  // up56: HS2_MCONN_STRIPE_FAST_RESERVE idle links
 	FastRefills, FastHsKicks, FastBumps uint64 // up56
 	// بازهٔ گذشته (از خواندن قبلی)
 	Decisions          uint64
