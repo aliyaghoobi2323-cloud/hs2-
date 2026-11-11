@@ -109,6 +109,12 @@ type exitPool struct {
 	peers *linkPeers
 	// traffic: this exit's own count of user connections and throughput.
 	traffic *exitTraffic
+
+	// Start window (HS2_START_DIAL, startdial.go): dial turns from the start
+	// gate until startUntil, at most startLeft more.
+	startArmed, startUntil time.Time
+	startLeft, startArms   int
+	everUp                 bool // a link has been up since the pool started
 }
 
 type exitSlot struct {
@@ -137,6 +143,11 @@ func newExitPool(ctx context.Context, min, max int, dial func() (dialedLink, err
 		upCh: make(chan struct{})}
 	logp := func(f string, a ...any) { p.log(f, a...) } // p.log may be swapped (tests)
 	p.upLog = newBurstLog("mtcp: ", "exit links up", logp)
+	p.armStartLocked(time.Now(), false) // not shared yet: no lock needed
+	if startDial {
+		logp("mtcp: start dial (HS2_START_DIAL): the first %s of the pool, and of a pool back after an outage (at most once a minute), dial through the start gate — %d at a time, %s–%s apart — so the edge's refill hold is short",
+			fmtDur(startDialFor), startInflight, fmtDur(startGapMin), fmtDur(startGapMax))
+	}
 	p.downLog = newBurstLog("mtcp: ", "exit link ends", logp)
 	return p
 }
@@ -310,6 +321,7 @@ func (p *exitPool) dialed() int {
 	p.mu.Lock()
 	var line string
 	if p.outage {
+		p.armStartLocked(time.Now(), !p.everUp) // the edge is back: its pool starts over
 		p.outage, p.scout = false, nil
 		p.wakeLocked()
 		line = fmt.Sprintf("mtcp: a link to the edge is back after %s with none up (%d dial(s) failed meanwhile); the other slots redial now",
@@ -317,6 +329,7 @@ func (p *exitPool) dialed() int {
 		p.failN, p.failLog = 0, time.Time{} // the next failure is news again
 	}
 	p.live++
+	p.everUp = true
 	n := p.live
 	p.mu.Unlock()
 	if line != "" {
@@ -342,7 +355,7 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		// reserved, so after an outage the slots that must retire never hold
 		// up the ones that must dial.
 		retired := false
-		release, ok := p.gate.acquireIf(ctx, func() bool {
+		release, ok := p.gateFor().acquireIf(ctx, func() bool {
 			retired = p.retireIfOver(s)
 			return !retired
 		})

@@ -1270,7 +1270,7 @@ func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Dura
 func (m *LinkManager) runAccept(ctx context.Context) {
 	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
-	for {
+	for n := 1; ; n++ {
 		select {
 		case <-ctx.Done():
 			m.closeAll()
@@ -1281,6 +1281,11 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			m.drainTick()
 			m.sweepReverse()
 			m.publishStats()
+			if linkSpreadLog && n%5 == 0 { // every 10 s (lab diagnostic)
+				if line := m.spreadLine(); line != "" {
+					m.log("%s", line)
+				}
+			}
 		}
 	}
 }

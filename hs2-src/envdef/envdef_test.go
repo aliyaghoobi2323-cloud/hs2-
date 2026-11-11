@@ -56,9 +56,10 @@ func TestSides(t *testing.T) {
 		{"HS2_LB_RESCUE_CALLFREE", "1", ""},
 		{"HS2_LB_CALL_RESCUE", "", ""},
 		{"HS2_LB_CALL_LATE", "1", ""},
-		{"HS2_REFILL_WAIT_BYTES", "", ""},
+		{"HS2_REFILL_WAIT_BYTES", "1", ""},
+		{"HS2_START_DIAL", "", "1"},
 		{"HS2_LB_FAST_VERDICT", "", ""},
-		{"HS2_REFILL_WAIT_MS", "", ""},
+		{"HS2_REFILL_WAIT_MS", "300", ""},
 		{"HS2_MCONN_STRIPE", "8", "8"},
 		{"HS2_MCONN_STRIPE_JUMP_MS", "", ""},
 	}
@@ -121,7 +122,7 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 42 {
-		t.Fatalf("table has %d keys, want 42", len(Table))
+	if len(Table) != 45 {
+		t.Fatalf("table has %d keys, want 45", len(Table))
 	}
 }

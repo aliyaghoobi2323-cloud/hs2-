@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,8 @@ func loadEnvKeys() {
 	lbFastVerdict = envOn("HS2_LB_FAST_VERDICT")
 	refillWait = msFromEnv(envDefault("HS2_REFILL_WAIT_MS"), 0)
 	refillWaitBytes = envOn("HS2_REFILL_WAIT_BYTES")
+	startDial = envOn("HS2_START_DIAL")
+	linkSpreadLog = os.Getenv("HS2_LINK_SPREAD_LOG") == "1"
 }
 
 // msFromEnv is envMsDefault on a value already read.

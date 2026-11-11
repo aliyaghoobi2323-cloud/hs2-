@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 )
@@ -121,3 +123,50 @@ func (m *LinkManager) pickByBytesLocked(limit int) *managedLink {
 	}
 	return best
 }
+
+// linkSpreadLog (HS2_LINK_SPREAD_LOG=1, lab diagnostic, default off): every
+// 10 s the reverse edge logs how its open user connections spread over the
+// serving links, and the count of connections that left the start hold at the
+// bound so far — so a lab run shows whether the start window's placement
+// stays unbalanced for the rest of the run (docs 8.13).
+var linkSpreadLog bool // loadEnvKeys
+
+// spreadLine is that log line, "" with no serving link.
+func (m *LinkManager) spreadLine() string {
+	m.mu.Lock()
+	var u []int
+	for _, ml := range m.links {
+		if ml.serving() {
+			u = append(u, int(ml.users.Load()))
+		}
+	}
+	m.mu.Unlock()
+	if len(u) == 0 {
+		return ""
+	}
+	slices.Sort(u)
+	sum := 0
+	for _, x := range u {
+		sum += x
+	}
+	mean := float64(sum) / float64(len(u))
+	over := 0
+	for _, x := range u {
+		if float64(x) > 1.5*mean {
+			over++
+		}
+	}
+	return fmt.Sprintf("link spread: %d serving links, %d users, mean %.1f, p90 %d, max %d, %d links above 1.5x mean; %d left the start hold at the bound so far",
+		len(u), sum, mean, u[len(u)*9/10], u[len(u)-1], over, refillWaitCut.Load())
+}
+
+// refillCompleteMin: with the start-window bound on (HS2_REFILL_WAIT_MS > 0)
+// a start episode whose pool is complete stays on at least this long after it
+// began. With the exit's start dial (HS2_START_DIAL) the pool can be complete
+// before most users have connected; the episode then ended and the crowd
+// arriving a second later was placed by plain Pick — flowing streams first,
+// open connections last — which put 227 connections on one link (the fair
+// share was 40) for the rest of a lab run (docs 8.13). While the episode is
+// on, every link holds at most the fair share; with the pool complete nobody
+// waits for that. A partial-loss episode ends as before.
+var refillCompleteMin = 5 * time.Second

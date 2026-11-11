@@ -19,6 +19,21 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## After rel40 — branch start42: the start window (binary)
+
+- **`HS2_START_DIAL` (kharej, on by default)**: the first 4 s of the exit's pool
+  (and of a pool back after an outage, at most once a minute) dial through a
+  start gate, 32 at a time, 10-35 ms apart, jittered; steady-state redials
+  keep the ordinary gate.
+- **`HS2_REFILL_WAIT_MS=300` + `HS2_REFILL_WAIT_BYTES=1` (Iran, on by default)**:
+  the start hold's bound (v3 of §8.9) and a start episode that stays on at
+  least 5 s even when the pool is complete early.
+- Lab 1 (n=8+8, interleaved): crowd p99 of the first 5 s 1419 -> 157 ms, whole
+  crowd p95 125 -> 116, ping p99 mean 134 -> 136 (p 0.60), call and heavy
+  equal (§8.13). Why v3 alone cost ping: its early leavers stayed on the first
+  links all run (busiest link 90 vs 72).
+- Lab diagnostic `HS2_LINK_SPREAD_LOG=1` (edge, off, not in the table).
+
 ---
 
 ## Release rel40 — Reality front, the new menu, LB rescue (binary + installer)

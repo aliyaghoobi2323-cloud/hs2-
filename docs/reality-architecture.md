@@ -1498,6 +1498,113 @@ TestCallRescueMark/TestCallAvoidMark/TestMConnCallPick* ok, reality,
 tlscarrier, cmd/hs2, envdef ok, full engine suite ok (665 s, -timeout 40m);
 the default commit (envdef only) re-ran envdef and cmd/hs2.
 
+### 8.13 Phase 5g (2026-11-11, branch start42): the start window without the ping cost
+
+**Why v3 (8.9-8.10) cost ping p99 over the whole run.** Lab counters
+(`HS2_LINK_SPREAD_LOG=1`, a lab-only edge diagnostic: every 10 s the spread of
+open connections over the serving links and the count of hold leavers so far):
+
+- The bound fires only inside the start episode. Every s run has exactly one
+  episode (the start; `refillRearm` blocks another for a minute) and **0
+  connections left the hold after t = 10 s** in all 36 runs of this phase
+  (v3 alone: 1995-2149 leave, all in the first 10 s). So it is not later
+  refills, and the byte-rate tracking is not new work (`managedLink.rate` is
+  sampled anyway; `pickByBytesLocked` runs only for a leaver).
+- The leavers go to the few links up at 300 ms, up to 2x the fair share, and
+  user connections never move: the busiest link holds **83-108** connections
+  with v3 alone vs **69-95** in the base, and the line is flat from 10 s to
+  the end of the run (the same max at 10 s and at 45 s in every run). A light
+  user (ping, the side channel) that shares one of those links pays for it all
+  run. Cause: placement, set at the start and kept.
+
+**Fix: remove the cause — the pool is up before the crowd.**
+
+1. `HS2_START_DIAL` (exit, `startdial.go`): for the first 4 s of the exit's
+   pool, and again when a link is back after an outage with none up (the edge
+   restarted; at most once a minute, except the pool's very first link), the
+   slots take their dial turns from a start gate of their own: 32 handshakes at
+   a time, starts 10-35 ms apart (jittered, ~45 a second, never one burst;
+   the ordinary gate is 16 / 20-80 ms with HS2_FAST_LINK). 100 links are up
+   ~2.5 s after the first one instead of ~10 s; nothing else changes (TLS
+   fingerprint, auth, wire, placement); a redial or a target raised later uses
+   the ordinary gate (`TestStartDialSteadyStateOrdinary`). Reality per-IP gate:
+   no rejection in any run.
+2. The v3 bound (`HS2_REFILL_WAIT_MS=300`, `HS2_REFILL_WAIT_BYTES=1`, edge) on
+   top, for the few links that come late: a handful of handshakes on the
+   reality path hang for the 10 s auth timeout ("reading server proof: i/o
+   timeout", also seen in the base); without the bound the hold then waits for
+   its 3 s stall and the start p99 reaches 0.7-1.4 s (start dial alone: 3 of 8
+   runs). With the pool nearly full, the leavers are few and the busiest link
+   stays at the fair share.
+3. `refillCompleteMin` (edge, with the bound on): a start episode whose pool
+   is complete stays on at least 5 s. With the fast start the pool was
+   complete at 2.9 s in one run, before the crowd; the episode ended and plain
+   Pick (flowing streams first, open connections last) put **227** connections
+   on one link for the whole run (1 crowd failure). While the episode is on no
+   link takes more than the fair share; with every link up nobody waits for
+   it (`TestRefillCompleteMin`). Partial-loss episodes end as before.
+
+Lab 1, scenario s (equal paths, 45 s, crowd 3000, call, game, iperf down x8,
+`-crowdwin 5,10,15`), interleaved in two slots; w0 = rel40 defaults (all of
+this off); medians (ranges), mean; U = Mann-Whitney vs w0 (of 64), two-sided p:
+
+| arm | n | 0-5 s crowd p99 | whole crowd p95 | whole crowd p99 | call p99 | ping p99 | heavy Mbps | busiest link | fails |
+|---|--:|--|--|--|--|--|--|--|--|
+| w0 (base) | 8 | 1419 (595-3735), mean 1589 | 125 (123-137), mean 127.2 | 179 (166-1312) | 194 (179-235), mean 198.8 | 136 (108-166), mean 134.0 | 1194 (916-1348), mean 1180 | 72 (69-95) | 0 x8 |
+| v3 alone | 4 | 177 (165-189) | 130 (125-133) | 168 | 189 (178-229) | 144 (140-145), mean 143.0, p 0.15 | 1266 | **90 (83-108)** | 0 x4 |
+| start dial | 8 | 185 (150-1437), mean 501 | 123 (114-170) | 167 | 183 (170-274) | 132 (125-191), mean 141.8, p 0.79 | 1192 | 65 (63-72) | 1 run 1 |
+| start dial + v3 | 8 | **157 (150-172)**, mean 158, p<0.01 | **116 (114-128)**, mean 117.3, p 0.01 | **162 (159-167)**, p<0.01 | 190 (178-245), mean 201.4, p 0.87 | 141 (106-153), mean 136.2, p 0.60 | 1153 (1006-1324), mean 1150, p 0.49 | 64 (63-66; one run 227) | 1 run 1 (the 227 run) |
+| final build (3c32191e), keys set | 4 | **160 (156-164)**, mean 160 | 116 (114-122), mean 117.4 | 162 (162-165) | 185 (174-207), mean 187.8 | 137 (120-148), mean 135.5 | 1183 (1145-1249), mean 1190 | 63 (63-68) | 0 x4 |
+| final build, defaults only (no key set) | 2 | 172 (158-185) | 117 (115-119) | 163 | 190 (179-201) | 138 (114-162) | 1340 | 66 (63-69) | 0 x2 |
+
+Ping p99 with the fix: mean 136.2 vs 134.0 (+2), median 141 vs 136, U 37.5
+of 64, p 0.60 — equal within noise (v3 alone in the same batch: mean 143.0,
+the +9-14 of 8.10); heavy, call p99 equal; whole crowd p95 / p99 lower (the
+busiest link 64 instead of 72).
+
+The final build (with the 5 s minimum, rows 5-6): 0 failures in 6 runs, the
+busiest link 63-69 in every run, and with no key set the log shows the
+defaults in force (`defaults: production set on`, `start dial`, the hold
+"complete after 5.0s", 0 leavers: the pool was up before the crowd).
+
+Scenario c (all-tls, path B bad at 15 s, 60 s), n=4+4, base = rel40
+defaults, sdb = start dial only (hs2-s42, before the 5 s minimum):
+
+| arm | n | 0-5 s p99 | crowd p95 | crowd p99 | call p99 | ping p99 | heavy | fails |
+|---|--:|--|--|--|--|--|--|--|
+| base | 4 | 363 (303-369) | 176 (172-182) | 334 (311-348) | 231 (176-313), mean 238 | 191 (138-475), mean 249 | 1100 | 0 x4 |
+| start dial | 4 | 303 (290-341), p 0.11 | 173 (171-176), p 0.31 | **277 (266-299)**, p 0.03 | 248 (193-328), mean 254, p 0.67 | 182 (174-201), mean 185, p 1.0 | 1061, p 0.31 | 0 x4 |
+
+No regression (call p99 within the base's own spread, n=4); one sdb run had
+a busiest link of 97 with no hold episode at all (pool complete before the
+crowd) — the case the 5 s minimum closes.
+
+**Verdict: on by default** (envdef: `HS2_START_DIAL=1` exit,
+`HS2_REFILL_WAIT_MS=300` + `HS2_REFILL_WAIT_BYTES=1` edge; table 45 keys):
+start p99 -89 % (1419 -> 157-160 ms), whole-run crowd p95/p99 lower, ping
+p99, call p99 and heavy equal within noise (mean +2 ms, p 0.60), the busiest
+link at the fair share. Off: `HS2_START_DIAL=0` on the kharej,
+`HS2_REFILL_WAIT_MS=0` on Iran (the 5 s minimum goes with it).
+
+Open, with a plan: (1) scenario c with the final build (all three keys and the
+5 s minimum) is not yet measured — run `go42.sh` c base/def n=4+4 on
+hs2-s42m (base = `HS2_START_DIAL=0 HS2_REFILL_WAIT_MS=0`); (2) the final
+build has n=6 s runs, not 8 — two more interleaved pairs; (3) a few reality
+handshakes hang for the 10 s auth timeout at a start (base too): log the
+front's state for a dial that times out in "reading server proof" and check
+the reality server's accept/handshake path under 30 concurrent hellos.
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an42.py s s42a,s42b,s42c w0`; `an42.py
+s s42m,s42n w0` for the confirmation runs, `an42.py c s42a,s42b base`), driver
+`go42.sh` (arms w0, sd, sdv3, v3, def; c: base, sdb), binaries hs2-s42
+(d9ea8a4c + spread log 90e7f33d) and hs2-s42m (3c32191e).
+
+Final tree (lab 3, clean `git archive` of 3c32191e — the code and envdef; this
+commit adds only docs): gofmt (engine, envdef, cmd) clean, `go vet ./...`,
+envdef and cmd/hs2 ok, `-race` on TestStartDial*/TestRefillWait*/
+TestRefillCompleteMin/TestExitPool* ok, full engine suite ok (656 s,
+-timeout 40m).
+
 ## 9. Phase 5 = menu M5: Security & camouflage (branch menu37)
 
 Operator surface for the per-IP fronts: `cmd/hs2/reality_menu.go` (commands
