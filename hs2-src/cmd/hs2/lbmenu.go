@@ -37,12 +37,16 @@ import (
 )
 
 var (
-	parkDir      = "/var/lib/hs2"
-	lbParkTimer  = "hs2-lb-park.timer"
-	lbParkSvc    = "hs2-lb-park.service"
-	lbJournalFor = func(unit string, since time.Duration) string {
-		out, _ := exec.Command("journalctl", "-u", cleanUnit(unit)+".service", "--since", fmt.Sprintf("-%ds", int(since.Seconds())),
-			"-o", "short-iso", "--no-pager", "-q", "--grep", "lb auto2: (path|flap)").Output()
+	parkDir       = "/var/lib/hs2"
+	parkSystemctl = realSystemctl
+	lbParkTimer   = "hs2-lb-park.timer"
+	lbParkSvc     = "hs2-lb-park.service"
+	lbJournalFor  = func(unit string, since time.Duration) string {
+		args := []string{"-u", cleanUnit(unit) + ".service", "--since", fmt.Sprintf("-%ds", int(since.Seconds())), "-o", "short-iso", "--no-pager", "-q"}
+		out, err := exec.Command("journalctl", append(args, "--grep", "lb auto2: (path|flap)")...).Output()
+		if err != nil && len(out) == 0 { // journalctl without pcre2 (no --grep), or nothing matched: filter here
+			out, _ = exec.Command("journalctl", args...).Output()
+		}
 		return string(out)
 	}
 )
@@ -681,14 +685,14 @@ func ensureParkTimer(on bool) {
 		svc, tm := parkTimerTexts(selfBin())
 		writeFileAtomic(filepath.Join(systemdDir, lbParkSvc), []byte(svc))
 		writeFileAtomic(filepath.Join(systemdDir, lbParkTimer), []byte(tm))
-		realSystemctl("daemon-reload")
-		realSystemctl("enable", "--now", lbParkTimer)
+		parkSystemctl("daemon-reload")
+		parkSystemctl("enable", "--now", lbParkTimer)
 		return
 	}
-	realSystemctl("disable", "--now", lbParkTimer)
+	parkSystemctl("disable", "--now", lbParkTimer)
 	os.Remove(filepath.Join(systemdDir, lbParkTimer))
 	os.Remove(filepath.Join(systemdDir, lbParkSvc))
-	realSystemctl("daemon-reload")
+	parkSystemctl("daemon-reload")
 }
 
 func anyParks() bool {
@@ -733,6 +737,12 @@ func parkSweep(now time.Time) int {
 		}
 		due, _ := expiredParks(ps, now)
 		if len(due) == 0 {
+			continue
+		}
+		if _, err := os.Stat(configForUnit(u)); err != nil {
+			// the tunnel was deleted while parked: nothing to restore
+			fmt.Printf("%s: no config any more — park dropped\n", u)
+			saveParks(u, nil)
 			continue
 		}
 		path, fc, cur := loadUnit(u)

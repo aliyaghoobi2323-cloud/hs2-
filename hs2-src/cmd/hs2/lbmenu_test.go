@@ -244,3 +244,22 @@ func TestParseInterleaved(t *testing.T) {
 		t.Fatalf("%v %v %v", *u, *y, pos)
 	}
 }
+
+// A park whose tunnel was deleted is dropped by the sweep, and the timer
+// removes itself once nothing is parked.
+func TestParkSweepDeletedTunnel(t *testing.T) {
+	menuEnv(t)
+	old, oldSC := parkDir, parkSystemctl
+	parkDir = t.TempDir()
+	var calls []string
+	parkSystemctl = func(a ...string) error { calls = append(calls, strings.Join(a, " ")); return nil }
+	defer func() { parkDir, parkSystemctl = old, oldSC }()
+	saveParks("hs2-gone", []lbPark{{Unit: "hs2-gone", IP: "1.1.1.1", Until: 1}})
+	parkSweep(time.Now())
+	if anyParks() {
+		t.Fatal("park of a deleted tunnel kept")
+	}
+	if len(calls) == 0 || calls[0] != "disable --now "+lbParkTimer {
+		t.Fatalf("timer not removed: %v", calls)
+	}
+}
