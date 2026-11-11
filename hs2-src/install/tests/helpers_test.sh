@@ -129,8 +129,8 @@ fi
 # (ExecStart= reset + ExecStart=/opt/x/hs2 run -c /etc/hs2/t1.json). tm_cfg read
 # only the unit file (wrong config), and upgrade replaced $BIN but restarted the
 # tunnel on the drop-in's OLD binary while reporting it "upgraded".
-sed -n '/^tm_cfg(){/,/^}/p;/^tm_dropin_execs(){/,/^}/p;/^dropin_use_bin(){/,/^}/p' "$INST" > "$T/di.sh"
-for f in tm_cfg tm_dropin_execs dropin_use_bin; do check "$f exists in install.sh" "grep -q '^$f(){' '$T/di.sh'"; done
+sed -n '/^tm_cfg(){/,/^}/p;/^tm_dropin_execs(){/,/^}/p;/^dropin_exec_sync(){/,/^}/p' "$INST" > "$T/di.sh"
+for f in tm_cfg tm_dropin_execs dropin_exec_sync; do check "$f exists in install.sh" "grep -q '^$f(){' '$T/di.sh'"; done
 SD="$T/sd"; mkdir -p "$SD/hs2-t1.service.d" "$SD/hs2-plain.service.d"
 printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/hs2-t1.json\n' > "$SD/hs2-t1.service"
 printf '[Service]\nExecStart=\nExecStart=/opt/hs2-old/hs2 run -c /etc/hs2/tunnel1.json\n' > "$SD/hs2-t1.service.d/40-tunnel1.conf"
@@ -150,16 +150,16 @@ check "tm_cfg: an unknown unit prints nothing and is no error under set -e" '[ "
 out=$(bash -c "source '$T/di_run.sh'; tm_dropin_execs hs2-t1; tm_dropin_execs hs2-plain; echo END" 2>&1)
 check "tm_dropin_execs: only the drop-in that sets ExecStart is listed" '[ "$out" = "$(printf "%s\nEND" "$SD/hs2-t1.service.d/40-tunnel1.conf")" ]'
 : > "$T/sdlog"
-out=$(bash -c "source '$T/di_run.sh'; dropin_use_bin hs2-t1; dropin_use_bin hs2-plain; echo END" 2>&1)
-check "dropin_use_bin: the override now runs the upgraded \$BIN with its own -c" 'grep -qx "ExecStart=/usr/local/bin/hs2 run -c /etc/hs2/tunnel1.json" "$SD/hs2-t1.service.d/40-tunnel1.conf"'
-check "dropin_use_bin: the ExecStart= reset line is kept" 'grep -qx "ExecStart=" "$SD/hs2-t1.service.d/40-tunnel1.conf"'
-check "dropin_use_bin: the original is kept as .pre-upgrade (ignored by systemd)" 'grep -q /opt/hs2-old/hs2 "$SD/hs2-t1.service.d/40-tunnel1.conf.pre-upgrade"'
-check "dropin_use_bin: says what it changed and reloads systemd once" 'echo "$out" | grep -q "ran another binary" && [ "$(grep -c daemon-reload "$T/sdlog")" = 1 ]'
-check "dropin_use_bin: other drop-ins are untouched, no temp files left" '[ "$(cat "$SD/hs2-t1.service.d/50-cpu.conf")" = "$(printf "[Service]\nCPUAffinity=0 1")" ] && [ "$(ls "$SD/hs2-t1.service.d" | wc -l)" = 3 ] && [ "$(ls "$SD/hs2-plain.service.d" | wc -l)" = 1 ]'
+out=$(bash -c "source '$T/di_run.sh'; dropin_exec_sync hs2-t1; dropin_exec_sync hs2-plain; echo END" 2>&1)
+check "dropin_exec_sync: the override now runs the upgraded \$BIN with its own -c" 'grep -qx "ExecStart=/usr/local/bin/hs2 run -c /etc/hs2/tunnel1.json" "$SD/hs2-t1.service.d/40-tunnel1.conf"'
+check "dropin_exec_sync: the ExecStart= reset line is kept" 'grep -qx "ExecStart=" "$SD/hs2-t1.service.d/40-tunnel1.conf"'
+check "dropin_exec_sync: the original is kept as .pre-upgrade (ignored by systemd)" 'grep -q /opt/hs2-old/hs2 "$SD/hs2-t1.service.d/40-tunnel1.conf.pre-upgrade"'
+check "dropin_exec_sync: says what it changed and reloads systemd once" 'echo "$out" | grep -q "ran another binary" && [ "$(grep -c daemon-reload "$T/sdlog")" = 1 ]'
+check "dropin_exec_sync: other drop-ins are untouched, no temp files left" '[ "$(cat "$SD/hs2-t1.service.d/50-cpu.conf")" = "$(printf "[Service]\nCPUAffinity=0 1")" ] && [ "$(ls "$SD/hs2-t1.service.d" | wc -l)" = 3 ] && [ "$(ls "$SD/hs2-plain.service.d" | wc -l)" = 1 ]'
 : > "$T/sdlog"
-out=$(bash -c "source '$T/di_run.sh'; dropin_use_bin hs2-t1; echo END" 2>&1)
-check "dropin_use_bin: a second run changes nothing (idempotent, no reload)" '! echo "$out" | grep -q "ran another binary" && [ ! -s "$T/sdlog" ]'
-check "upgrade points drop-ins at the new binary and checks the running exe" 'sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "dropin_use_bin \"\$u\"" && sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "unit_exe \"\$u\""'
+out=$(bash -c "source '$T/di_run.sh'; dropin_exec_sync hs2-t1; echo END" 2>&1)
+check "dropin_exec_sync: a second run changes nothing (idempotent, no reload)" '! echo "$out" | grep -q "ran another binary" && [ ! -s "$T/sdlog" ]'
+check "upgrade points drop-ins at the new binary and checks the running exe" 'sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "dropin_exec_sync \"\$u\"" && sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "running_exe_ok \"\$u\""'
 check "backup includes the unit's drop-in folder" 'sed -n "/^backup(){/,/^}/p" "$INST" | grep -qF "\$u.service.d\")"'
 
 # ---- helper units are not tunnels; their names are reserved (rev53a) ----------

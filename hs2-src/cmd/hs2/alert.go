@@ -36,6 +36,10 @@ func parseAlertConf(text string) (alertCfg, error) {
 	c := defaultAlertCfg()
 	sc := bufio.NewScanner(strings.NewReader(text))
 	ln := 0
+	// a bad line is skipped and reported, the rest is still read: one typo
+	// (lang=farsi) must not silently drop the bot_token below it, which left
+	// the timer sending nothing to Telegram with only a journal line saying so
+	var firstErr error
 	for sc.Scan() {
 		ln++
 		l := strings.TrimSpace(sc.Text())
@@ -44,7 +48,8 @@ func parseAlertConf(text string) (alertCfg, error) {
 		}
 		k, v, ok := strings.Cut(l, "=")
 		if !ok {
-			return c, fmt.Errorf("line %d: want key=value", ln)
+			firstErr = firstNonNil(firstErr, fmt.Errorf("line %d: want key=value", ln))
+			continue
 		}
 		k = strings.ToLower(strings.TrimSpace(k))
 		v = strings.TrimSpace(v)
@@ -60,6 +65,7 @@ func parseAlertConf(text string) (alertCfg, error) {
 		}
 		var err error
 		var f float64
+		prev := c // a bad value leaves the key at its default
 		switch k {
 		case "bot_token":
 			c.BotToken = v
@@ -71,17 +77,20 @@ func parseAlertConf(text string) (alertCfg, error) {
 			c.APIURL = v
 		case "lang":
 			if v != "fa" && v != "en" {
-				return c, fmt.Errorf("line %d: lang is fa or en", ln)
+				err = fmt.Errorf("line %d: lang is fa or en", ln)
+			} else {
+				c.Lang = v
 			}
-			c.Lang = v
 		case "summary_time":
 			var h, m int
 			if v != "off" && v != "" {
 				if _, e := fmt.Sscanf(v, "%d:%d", &h, &m); e != nil || h > 23 || m > 59 || h < 0 || m < 0 {
-					return c, fmt.Errorf("line %d: summary_time is HH:MM or off", ln)
+					err = fmt.Errorf("line %d: summary_time is HH:MM or off", ln)
 				}
 			}
-			c.SummaryAt = v
+			if err == nil {
+				c.SummaryAt = v
+			}
 		case "resend_min":
 			f, err = num()
 			c.ResendMin = int(f)
@@ -102,9 +111,10 @@ func parseAlertConf(text string) (alertCfg, error) {
 			c.FlapCuts = int(f)
 		case "probe":
 			if v != "off" && v != "tcp" && v != "tls" {
-				return c, fmt.Errorf("line %d: probe is off, tcp or tls", ln)
+				err = fmt.Errorf("line %d: probe is off, tcp or tls", ln)
+			} else {
+				c.Probe = v
 			}
-			c.Probe = v
 		case "log_file":
 			c.LogFile = v
 		case "host":
@@ -129,12 +139,13 @@ func parseAlertConf(text string) (alertCfg, error) {
 		default:
 			// unknown keys are ignored (newer menu, older binary)
 		}
-		if err != nil {
-			if strings.HasPrefix(err.Error(), "line ") {
-				return c, err
-			}
-			return c, fmt.Errorf("line %d: %v", ln, err)
+		if err != nil && !strings.HasPrefix(err.Error(), "line ") {
+			err = fmt.Errorf("line %d: %v", ln, err)
 		}
+		if err != nil {
+			c = prev
+		}
+		firstErr = firstNonNil(firstErr, err)
 	}
 	if c.ResendMin < 1 {
 		c.ResendMin = 1
@@ -145,7 +156,14 @@ func parseAlertConf(text string) (alertCfg, error) {
 	if c.RTTFactor < 1 {
 		c.RTTFactor = 1
 	}
-	return c, sc.Err()
+	return c, firstNonNil(firstErr, sc.Err())
+}
+
+func firstNonNil(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 func loadAlertConf(path string) (alertCfg, []string) {
@@ -163,6 +181,7 @@ func loadAlertConf(path string) (alertCfg, []string) {
 	c, err := parseAlertConf(string(b))
 	if err != nil {
 		warns = append(warns, path+": "+err.Error())
+		c.ConfErr = path + ": " + err.Error()
 	}
 	return c, warns
 }
@@ -271,6 +290,15 @@ func runAlertOnce(cfg alertCfg, cfgPath, unit, stateDir string, dry bool) {
 	st := loadAlertState(sp)
 	msgs := filterDisabled(cfg, evalAlerts(cfg, st, snap))
 	sortMsgs(msgs)
+	if cfg.ConfErr != st.ConfErr {
+		// once per new error: the timer keeps running on the good lines, and
+		// the operator learns the bad one is ignored
+		if cfg.ConfErr != "" {
+			msgs = append(msgs, alertMsg{Key: "conf", Sev: sevWarn, Text: cfg.ConfErr + " — " +
+				alertText(cfg.Lang).pick("این خط نادیده گرفته شد؛ بقیهٔ تنظیمات اجرا می‌شود", "this line is ignored; the rest is in force")})
+		}
+		st.ConfErr = cfg.ConfErr
+	}
 	if dueSummary(cfg, st, now) {
 		msgs = append(msgs, alertMsg{Key: "summary", Sev: sevInfo, Text: takeSummary(cfg, st, now)})
 	}
@@ -280,8 +308,8 @@ func runAlertOnce(cfg alertCfg, cfgPath, unit, stateDir string, dry bool) {
 		}
 		return
 	}
-	if err := deliver(cfg, unit, msgs); err != nil {
-		writeAlertLog(cfg, unit, "telegram send failed: "+err.Error())
+	if err := deliverQueued(cfg, unit, msgs, st, now); err != nil {
+		writeAlertLog(cfg, unit, "telegram send failed (kept for the next check): "+err.Error())
 	}
 	for _, m := range msgs {
 		st.Recent = append(st.Recent, now.Format("01-02 15:04 ")+formatAlert(cfg.Host, unit, m))
@@ -299,13 +327,69 @@ func runAlertOnce(cfg alertCfg, cfgPath, unit, stateDir string, dry bool) {
 }
 
 // deliver writes every message to the journal and the log file, then (if
-// configured) sends them to Telegram as one message.
+// configured) sends them to Telegram (split to Telegram's length limit).
 func deliver(cfg alertCfg, unit string, msgs []alertMsg) error {
-	if len(msgs) == 0 {
+	lines := logAlertLines(cfg, unit, msgs, time.Now())
+	if cfg.BotToken == "" || cfg.ChatID == "" || len(lines) == 0 {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := sendTelegramChunks(ctx, cfg, lines)
+	return err
+}
+
+// alertPendingMax caps the lines kept for Telegram while it is unreachable
+// (no internet from Iran, proxy down, 429): the newest are kept.
+const alertPendingMax = 40
+
+// deliverQueued is deliver for the timer: lines Telegram did not take (no
+// route, proxy down, 429, 5xx) are kept in the state, stamped with their
+// time, and sent first at the next check — a critical alert or its recovery
+// is never lost to one failed send.
+func deliverQueued(cfg alertCfg, unit string, msgs []alertMsg, st *alertState, now time.Time) error {
+	lines := logAlertLines(cfg, unit, msgs, now)
+	if cfg.BotToken == "" || cfg.ChatID == "" {
+		st.Pending = nil
+		return nil
+	}
+	if len(st.Pending) > 0 {
+		var stamped []string
+		for _, l := range lines {
+			stamped = append(stamped, now.Format("15:04 ")+l)
+		}
+		lines = append(append([]string{}, st.Pending...), stamped...)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sent, err := sendTelegramChunks(ctx, cfg, lines)
+	if err == nil {
+		st.Pending = nil
+		return nil
+	}
+	rest := lines[sent:]
+	if len(st.Pending) == 0 {
+		// first failure: stamp the lines so the late copy says when it happened
+		var stamped []string
+		for _, l := range rest {
+			stamped = append(stamped, now.Format("15:04 ")+l)
+		}
+		rest = stamped
+	}
+	if len(rest) > alertPendingMax {
+		rest = rest[len(rest)-alertPendingMax:]
+	}
+	st.Pending = append([]string(nil), rest...)
+	return err
+}
+
+// logAlertLines writes every message to the journal and the log file and
+// returns the lines Telegram may get now (quiet hours hold all but critical).
+func logAlertLines(cfg alertCfg, unit string, msgs []alertMsg, now time.Time) []string {
 	var lines []string
-	now := time.Now()
 	for _, m := range msgs {
 		l := formatAlert(cfg.Host, unit, m)
 		if telegramAllowed(cfg, m, now) {
@@ -316,12 +400,49 @@ func deliver(cfg alertCfg, unit string, msgs []alertMsg) error {
 		writeAlertLog(cfg, unit, l)
 		_ = exec.Command("logger", "-t", "hs2-alert", "-p", "daemon."+syslogPrio(m.Sev), "--", l).Run()
 	}
-	if cfg.BotToken == "" || cfg.ChatID == "" || len(lines) == 0 {
-		return nil
+	return lines
+}
+
+// telegramMaxText: Telegram refuses a text over 4096 characters (HTTP 400
+// "message is too long"); chunks stay under it with room to spare.
+const telegramMaxText = 3800
+
+// chunkLines joins lines into texts of at most max characters (a longer
+// single line is cut); ends[i] is how many lines texts[0..i] carry.
+func chunkLines(lines []string, max int) (texts []string, ends []int) {
+	cur, curN := "", 0
+	for i, l := range lines {
+		if r := []rune(l); len(r) > max {
+			l = string(r[:max-1]) + "…"
+		}
+		if cur != "" && curN+1+len([]rune(l)) > max {
+			texts, ends = append(texts, cur), append(ends, i)
+			cur, curN = "", 0
+		}
+		if cur != "" {
+			cur += "\n"
+			curN++
+		}
+		cur += l
+		curN += len([]rune(l))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return sendTelegram(ctx, cfg, strings.Join(lines, "\n"))
+	if cur != "" {
+		texts, ends = append(texts, cur), append(ends, len(lines))
+	}
+	return texts, ends
+}
+
+// sendTelegramChunks sends lines in as many messages as the length limit
+// needs, in order, and stops at the first failure. sent: lines delivered.
+func sendTelegramChunks(ctx context.Context, cfg alertCfg, lines []string) (sent int, err error) {
+	texts, ends := chunkLines(lines, telegramMaxText)
+	for i, t := range texts {
+		if err := sendTelegram(ctx, cfg, t); err != nil {
+			return sent, err
+		}
+		sent = ends[i]
+	}
+	return sent, nil
 }
 
 func syslogPrio(sev string) string {
@@ -334,9 +455,17 @@ func syslogPrio(sev string) string {
 	return "info"
 }
 
+// alertLogMax: the alert log (shared by every tunnel's timer) is rotated once,
+// to NAME.1, past this size — no logrotate rule ships, and a flapping path on
+// a server nobody reads must not fill the disk over months.
+var alertLogMax int64 = 2 << 20
+
 func writeAlertLog(cfg alertCfg, unit, line string) {
 	if cfg.LogFile == "" || cfg.LogFile == "off" {
 		return
+	}
+	if fi, err := os.Stat(cfg.LogFile); err == nil && fi.Size() > alertLogMax {
+		_ = os.Rename(cfg.LogFile, cfg.LogFile+".1")
 	}
 	f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {

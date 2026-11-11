@@ -47,6 +47,33 @@ and churn. Fixed (each with a test that fails before the fix):
 - **LB path view kept counters for every path ever seen** (`engine/lbview.go`).
   `TestLBViewForgetsGonePaths`: 201 entries before, 2 after.
 
+## rev53c — operations review: upgrade, alerts, doctor (installer + binary)
+
+Found on a lab copy of the production layout (two reverse `l3mtcp` tunnels on
+one kharej host, LB 3 IPv4 + 1 IPv6 × 6 IPv4 + 1 IPv6, classic units with
+drop-ins), reproduced on real systemd, fixed, tested:
+
+- **critical, installer:** `install.sh upgrade` took the helper units
+  `hs2-alert-<unit>.service` (and `hs2-stats.service`) for tunnels and
+  rewrote the alert check as `hs2 run -c <the tunnel's config>` — with alerts
+  on, every upgrade started a **second daemon on the live tunnel's config**.
+  `tm_units` now skips oneshot units; the next upgrade heals a server an older
+  one damaged (`heal_alert_units`); deleting a tunnel removes its alert timer,
+  uninstall the stats / LB-park timers.
+- **installer:** a drop-in whose `ExecStart=` runs another binary
+  (`/usr/local/bin/hs2-r31 run …`) kept running the old build while the
+  upgrade said "upgraded". It is pointed at `/usr/local/bin/hs2` (old file
+  kept as `*.pre-upgrade`) and the upgrade checks `/proc/PID/exe`.
+- **installer:** backups now include each tunnel's drop-ins (the HS2_ keys).
+- **alerts:** a failed Telegram send (no route, proxy down, 429) no longer
+  loses the message: it waits in the state (max 40 lines) and goes first,
+  time-stamped, at the next check; texts over Telegram's 4096 limit are
+  split; `/var/log/hs2-alert.log` rotates once at 2 MiB; one bad line in
+  `alert.conf` no longer discards the lines after it (bot_token) and is
+  reported once.
+- **doctor --deep:** pinged only the first 8 LB paths; now up to 24 with every
+  local and remote address first (IPv6 path, third kharej IP, second tunnel).
+
 ## rel52 — final release candidate: everything since rel40, with EE parity (binary)
 
 One binary (build c4562e3dbbed, sha256 bea01c7c…; rel52b) = rel51 + ee51 + the rel52
