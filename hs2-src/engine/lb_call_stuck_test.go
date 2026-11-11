@@ -238,3 +238,32 @@ func TestCallStuckLocked(t *testing.T) {
 		t.Fatal("gone link kept its path")
 	}
 }
+
+// rel51: with HS2_LB_CALL_RESCUE off and HS2_LB_CALL_LATE on (the production
+// defaults), a call whose subs all sit on one busy path still gets the
+// stuck trigger; with both keys off it does not.
+func TestCallStuckUnderCallLateAlone(t *testing.T) {
+	withRescue(t, true)
+	withCallRescue(t, false)
+	withCallStuck(t, map[any]string{20: "B", 21: "B"}, func(*msub) bool { return true })
+	oldLate := lbCallLate
+	t.Cleanup(func() { lbCallLate = oldLate })
+	run := func(late bool) bool {
+		lbCallLate = late
+		m := &mConn{iran: true, lite: true}
+		m.callOn = true
+		m.open = func(mPlane, []any) (mSub, any, error) { return nil, nil, errMConnClosed }
+		live := []*msub{{key: 20}, {key: 21}}
+		now := time.Now().Add(time.Hour * 24) // a second of its own for callStuckAllow
+		o0 := callStuckOpened.Load()
+		m.callStuckLocked(live, now)
+		m.callStuckLocked(live, now.Add(callStuckFor+callStuckPoll))
+		return callStuckOpened.Load() != o0
+	}
+	if run(false) {
+		t.Fatal("stuck trigger with both call keys off")
+	}
+	if !run(true) {
+		t.Fatal("no stuck trigger under HS2_LB_CALL_LATE alone")
+	}
+}

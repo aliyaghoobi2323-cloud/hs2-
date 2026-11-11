@@ -127,11 +127,20 @@ func takeCallStuckMark(avoid []any) ([]any, string, bool) {
 	return avoid, "", false
 }
 
+// callStuckOnLocked: the stuck trigger runs for a call under
+// HS2_LB_CALL_RESCUE (8.11) or under HS2_LB_CALL_LATE alone (rel51): call
+// late needs the call's subs on two paths, so with every sub on one path
+// (docs/reality-architecture.md §11.6.5, mixed fronts) nothing else moves
+// the call while the rescue key is off.
+func (m *mConn) callStuckOnLocked(now time.Time) bool {
+	return m.callRescueOnLocked(now) || m.callLateOnLocked(now)
+}
+
 // callStuckLocked (Iran's manager, lite, two live subs or more, under m.mu).
 // gave: subs were given up (the caller refreshes the primary); poll: look
 // again within it (0: no need).
 func (m *mConn) callStuckLocked(live []*msub, now time.Time) (gave bool, poll time.Duration) {
-	if !lbCallStuck || !m.callRescueOnLocked(now) || m.peerFin || m.wclosed || m.handshaking {
+	if !lbCallStuck || !m.callStuckOnLocked(now) || m.peerFin || m.wclosed || m.handshaking {
 		m.stuckSince = time.Time{}
 		m.stuckKeys = nil
 		return false, 0
