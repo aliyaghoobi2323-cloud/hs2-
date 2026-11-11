@@ -13,9 +13,9 @@ import (
 // and then dies. Returns the download's outcome.
 func stripeLinkDeath(t *testing.T, resend bool) error {
 	t.Helper()
-	old := stripeResend
-	stripeResend = resend
-	t.Cleanup(func() { stripeResend = old })
+	old := stripeResend.Load()
+	stripeResend.Store(resend)
+	t.Cleanup(func() { stripeResend.Store(old) })
 	setStripeRate(t, 200<<10)
 	setLite(t, true)
 	resetLiteBudget()
@@ -83,9 +83,10 @@ func TestStripeLinkDeathResend(t *testing.T) {
 // after swallowing what it was given). Returns the download's outcome.
 func stripeAllDie(t *testing.T, grace time.Duration) error {
 	t.Helper()
-	old, oldG := stripeResend, stripeGraceDur
-	stripeResend, stripeGraceDur = true, grace
-	t.Cleanup(func() { stripeResend, stripeGraceDur = old, oldG })
+	old, oldG := stripeResend.Load(), stripeGraceDur.Load()
+	stripeResend.Store(true)
+	stripeGraceDur.Store(int64(grace))
+	t.Cleanup(func() { stripeResend.Store(old); stripeGraceDur.Store(oldG) })
 	setStripeRate(t, 200<<10)
 	setLite(t, true)
 	resetLiteBudget()
@@ -162,9 +163,9 @@ func TestStripeAllDieGraceRejoins(t *testing.T) {
 // download whose stripe sub's write fails (and whose link then dies)
 // completes byte-exact, several times over.
 func TestStripeFailedWriteResent(t *testing.T) {
-	old := stripeResend
-	stripeResend = true
-	t.Cleanup(func() { stripeResend = old })
+	old := stripeResend.Load()
+	stripeResend.Store(true)
+	t.Cleanup(func() { stripeResend.Store(old) })
 	for i := range 3 {
 		setStripeRate(t, 200<<10)
 		setLite(t, true)

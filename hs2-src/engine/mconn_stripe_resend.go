@@ -44,7 +44,7 @@ import (
 // stripeResend: read by loadEnvKeys (defaults22.go); production default ON
 // on both sides since rel49 (envdef.Table), HS2_MCONN_STRIPE_RESEND=0 turns
 // it off.
-var stripeResend bool
+var stripeResend atomic.Bool // (atomic: tests flip it while older connections still run)
 
 const (
 	// stripeKeepAge: how long a written chunk is kept for a resend. A link
@@ -72,7 +72,7 @@ type sentRec struct {
 
 // stripeKeepOnLocked: chunks written on s are kept (under m.mu).
 func (m *mConn) stripeKeepOnLocked(s *msub) bool {
-	return stripeResend && m.stN > 0 && !m.ended && !s.dead
+	return stripeResend.Load() && m.stN > 0 && !m.ended && !s.dead
 }
 
 // keepSentLocked takes over the writer's references to the chunks it just
@@ -142,7 +142,7 @@ func (m *mConn) resendTargetLocked() *msub {
 // held, wrote recently or is writing at the front of a live sub and
 // releases s's own references. false: nothing done (the old rule applies).
 func (m *mConn) stripeResendLocked(s *msub) bool {
-	if !stripeResend || m.stN == 0 || m.ended {
+	if !stripeResend.Load() || m.stN == 0 || m.ended {
 		return false
 	}
 	b := m.resendTargetLocked()
@@ -183,7 +183,7 @@ func (m *mConn) stripeResendLocked(s *msub) bool {
 		m.releaseDeadLocked(s)
 		stripeResendStat.graces.Add(1)
 		if stripeLog {
-			stripeLogf("stripe %x: sub- %d last sub: grace %v, %d chunks kept (iran=%v)", m.id&0xffffff, s.idx, stripeGraceDur, len(m.orphan), m.iran)
+			stripeLogf("stripe %x: sub- %d last sub: grace %v, %d chunks kept (iran=%v)", m.id&0xffffff, s.idx, graceDur(), len(m.orphan), m.iran)
 		}
 		return true
 	}
@@ -258,7 +258,11 @@ func (m *mConn) releaseSentLocked() {
 // Write waits meanwhile (no sub has room). No wire change.
 
 // stripeGraceDur: 0 (HS2_MCONN_STRIPE_GRACE_MS=0) turns the grace off.
-var stripeGraceDur = graceDurFromEnv()
+var stripeGraceDur atomic.Int64 // a time.Duration; atomic like stripeResend
+
+func init() { stripeGraceDur.Store(int64(graceDurFromEnv())) }
+
+func graceDur() time.Duration { return time.Duration(stripeGraceDur.Load()) }
 
 func graceDurFromEnv() time.Duration {
 	v := strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_GRACE_MS"))
@@ -277,7 +281,7 @@ const graceGap = 250 * time.Millisecond
 
 // graceOKLocked: the connection may wait for a new sub instead of ending.
 func (m *mConn) graceOKLocked() bool {
-	return stripeGraceDur > 0 && !m.closing && !m.handshaking && m.mode == planeLight &&
+	return graceDur() > 0 && !m.closing && !m.handshaking && m.mode == planeLight &&
 		!(m.peerFin && m.wclosed)
 }
 
@@ -306,7 +310,7 @@ func (m *mConn) graceKeepLocked(cs []*mchunk) {
 		return 0
 	})
 	if m.graceUntil.IsZero() {
-		m.graceUntil = time.Now().Add(stripeGraceDur)
+		m.graceUntil = time.Now().Add(graceDur())
 	}
 }
 

@@ -19,6 +19,29 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel49 — the u8 upload freeze fixed: resend on by default (binary)
+
+- **Root cause of the gap rel46 left** (survivors stalled ~4 s after the kill,
+  for an app a 30 s hang): `writeLoop` released the record whose write
+  FAILED on a dying stripe sub before `subDied` collected the sub's chunks,
+  so no resend carried it; the receiver waited behind that one record (a
+  22-byte or one-chunk hole, seen with a new per-second
+  `HS2_MCONN_STRIPE_LOG` line of rx `next`/first ooo offset and per-sub tx
+  offsets). Now kept and resent (`TestStripeFailedWriteResent`: hangs
+  without the fix, passes with it).
+- **Every sub died**: `HS2_MCONN_STRIPE_GRACE_MS` (default 3000, 0 = off,
+  with the resend): both sides keep a connection whose last sub died; Iran
+  opens a join sub on another link at once, the dead subs' chunks go first
+  on it. Lab: joins 0.2-0.5 s after the kill. No wire change.
+- **Lab u8** (8 uploads, 75 % of links killed; tls; labs 1+2): rel45
+  5/8 runs frozen and 61/64 streams dead at the end; rel49 0 frozen, 0
+  streams dead, every flow back within 0-6 s, no 30 s hang, no reset.
+  c1/s: no regression beyond noise. See docs/reality-architecture.md
+  §11.6.6 (incl. the single-upload numbers).
+- **`HS2_MCONN_STRIPE_RESEND=1` is now a production default on both sides**
+  (`envdef`; `=0` turns it off). Binary build e67f92630c71, sha256
+  946414fa….
+
 ## rel46 — the u8 upload freeze: production has it, root cause found, fix kept off (binary)
 
 - **Production (r31) has the bug**: lab u8 (8 uploads, 75 % of the links

@@ -1224,7 +1224,7 @@ func (s *msub) writeLoop() {
 		// (the sub is about to die; subDied resends it). Released here, it
 		// was the one chunk the resend missed: the receiver's unfilled gap
 		// in the lab u8 (rel49, docs §11.6.6).
-		kept := (err == nil || stripeResend) && m.stripeKeepOnLocked(s)
+		kept := (err == nil || stripeResend.Load()) && m.stripeKeepOnLocked(s)
 		if kept {
 			m.keepSentLocked(s, time.Now(), append(more, c)...) // HS2_MCONN_STRIPE_RESEND
 		}

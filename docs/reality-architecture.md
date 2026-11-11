@@ -2167,7 +2167,7 @@ connections from our IP slows the pool build that way; the 3 s
   were on, whether the dead ones are replaced), and test with
   `HS2_MCONN_STRIPE_JUMP_MS` on the Iran side too (it is kharej-only today).
 
-### 11.6 rel46 (2026-11-11): the u8 upload freeze — production has it; root cause; not fixed yet
+### 11.6 rel46/rel49 (2026-11-11): the u8 upload freeze — production has it; root cause; fixed in rel49 (§11.6.6)
 
 Branch rel46 = rel45 (64aee0b6) + the commits below. Harness
 `hs2-src/lab/s46` (labs 1 and 2, 3 slots each, all tls, arms interleaved).
@@ -2258,6 +2258,67 @@ the upload alive after the kill than with it dead (the light users share the
    c and s n>=4 — then the key on by default and in the production table.
 4. Until then production behaves as before: a striped upload is reset when
    one of its links dies.
+
+#### 11.6.6 rel49: the unfilled gap found, the last-sub grace, the resend on by default
+
+Branch rel49 = rel46 (1dfa4442) + the commits below; harness `lab/s49`
+(arms r45 = rel45 binary, r49f = rel49 with `HS2_MCONN_STRIPE_RESEND=1` on
+both sides; `ttr.py` gives per stream the seconds from the kill to the first
+second above 5 Mbit/s, streams at 0 in the last 5 s, stalls of 3 s or more).
+
+**The gap (rel46 open item 2).** A per-second line under
+`HS2_MCONN_STRIPE_LOG` (both sides: receive `next`, first out-of-order offset,
+ooo bytes; send `sendOff`, per sub queued bytes, the offset being written, the
+end of what it was given, the oldest kept offset) showed every stalled
+connection waiting behind ONE missing record: `next=171053071 ooo1=171053093`
+(a 22-byte hole: a write's tail record) or `next=180502554 ooo1=180518927`
+(one 16373-byte record), the ooo room filling to its bound behind it, the
+receiver then no longer reading — so the sender's queues fill and the user's
+upload stops (7 of 8 iperf3 streams at 0, the 8th carrying 800 Mbit/s).
+The missing offset lay inside what the dead sub had been given but in none of
+its sent list, queue, `cur` or `curMore`: `writeLoop` cleared `cur` and
+released the record whose `Write` FAILED (the link was reset under it) before
+`subDied` collected the dead sub's chunks. Neither the keep age (kills here
+are resets, seen at once) nor the 16/48 MiB bound mattered. Fix: with the
+resend on, a record whose write failed is kept like a written one, so the
+resend carries it. `TestStripeFailedWriteResent` (a striped download whose
+stripe sub's next write fails and whose link dies) hangs on the gap without
+the fix (3/3 rounds hang at round 0) and passes with it.
+
+**Every sub died (rel46 open item 1).** Chosen: a grace, not "at least 3
+subs" (a third sub on a third path still dies with 75 % of the links killed
+in ~40 % of the cases, and widening costs light users links). With the resend
+on, when the LAST sub dies (`HS2_MCONN_STRIPE_GRACE_MS`, default 3000, 0 = off)
+both sides keep the connection: the dead sub's chunks (the resend set) wait
+as orphans; Iran at once opens a light sub (role join, avoiding the dead links,
+retried every 250 ms); the exit keeps its table entry (the connection lives),
+so the join attaches; the first sub that joins takes the orphans at the front
+of its queue. No sub within the grace: the connection ends as before. No wire
+change. `TestStripeAllDieNoGraceEnds` / `TestStripeAllDieGraceRejoins`.
+In the lab every grace was ended by a join 0.2-0.5 s after the kill.
+
+Lab (tls, labs 1 and 2 under other agents' load, interleaved):
+
+| u8 | n | frozen (sum 0 for the last 5 s) | streams at 0 at the end | longest pause per flow after the kill | after the kill, mean Mbit/s |
+|---|---|---|---|---|---|
+| r45 | 8 | 5/8 | 61/64 | dead | 0-381, mean 124 |
+| resend + grace, before the failed-write fix (r49, r49l, r49dl) | 14 | 2/14 | 89/112 | dead after 0-4 s of carrying | 103-1336, mean 731 |
+| **r49f** (rel49) | 10 | **0/10** | **0/80** | **0-6 s, median 1 s** | 504-1381, mean 994 |
+
+(Before the fix the aggregate often looked alive because ONE stream took the
+whole rate while the others hung behind their holes.)
+
+No 30 s hang (`mGapTimeout`) and no reset in any r49f run.
+
+RESULTS_PLACEHOLDER
+
+Defaults: `HS2_MCONN_STRIPE_RESEND=1` is in the production table
+(`envdef`, side both; read in `loadEnvKeys`; `=0` turns it off; the grace
+follows it). A mixed pair (new Iran, old exit) loses nothing over today: the
+old exit ends a connection whose subs all died, the join is refused and Iran
+ends it after the 3 s grace instead of at once.
+
+Release binary: build e67f92630c71, sha256 946414fa….
 
 #### 11.6.5 Reality Mbps vs AES-128: not the cipher
 
