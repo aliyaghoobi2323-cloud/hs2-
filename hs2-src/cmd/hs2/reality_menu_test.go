@@ -161,6 +161,52 @@ func TestProbeTarget(t *testing.T) {
 	_ = tls.VersionTLS13
 }
 
+// rel48: the suite a target picks is reported, and HS2_REALITY_PREFER_AES128
+// ranks AES-128 targets first among otherwise equal ones.
+func TestTargetSuiteRank(t *testing.T) {
+	good := tlsTarget(t, nil)
+	old := targetDialer
+	oldRes := targetResolve
+	t.Cleanup(func() { targetDialer, targetResolve = old, oldRes })
+	targetResolve = func(string) []net.IP { return nil }
+	targetDialer = func(ctx context.Context, a string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", good)
+	}
+	r := probeTarget("good.example.com", "example.com", nil)
+	if !strings.HasPrefix(r.Suite, "TLS_AES_") && !strings.HasPrefix(r.Suite, "TLS_CHACHA20") {
+		t.Fatalf("suite not reported: %+v", r)
+	}
+	a128 := targetCheck{OK: true, Suite: "TLS_AES_128_GCM_SHA256", HandshakeMs: 90}
+	a256 := targetCheck{OK: true, Suite: "TLS_AES_256_GCM_SHA384", HandshakeMs: 30}
+	t.Setenv("HS2_REALITY_PREFER_AES128", "")
+	if targetLess(a128, a256) {
+		t.Fatal("default ranking must stay by handshake time")
+	}
+	t.Setenv("HS2_REALITY_PREFER_AES128", "1")
+	if !targetLess(a128, a256) || targetLess(a256, a128) {
+		t.Fatal("HS2_REALITY_PREFER_AES128=1: AES-128 target must rank first")
+	}
+	bad := targetCheck{OK: false, Suite: "TLS_AES_128_GCM_SHA256"}
+	if targetLess(bad, a256) {
+		t.Fatal("a rejected target never ranks first")
+	}
+}
+
+// rel48: rotate-sid puts a new id first and keeps only the previous first id.
+func TestRotateShortIDs(t *testing.T) {
+	l := rotateShortIDs([]any{"0a0a0a0a", "0b0b0b0b"})
+	if len(l) != 2 || l[1] != "0a0a0a0a" || l[0] == "0a0a0a0a" || len(l[0].(string)) != 16 {
+		t.Fatalf("rotate: %v", l)
+	}
+	l2 := rotateShortIDs(l)
+	if len(l2) != 2 || l2[1] != l[0] {
+		t.Fatalf("second rotate must retire the oldest id: %v", l2)
+	}
+	if l3 := rotateShortIDs(nil); len(l3) != 1 {
+		t.Fatalf("no ids: %v", l3)
+	}
+}
+
 func TestDoctorFronts(t *testing.T) {
 	var fc fileConfig
 	json.Unmarshal([]byte(m5Cfg), &fc)

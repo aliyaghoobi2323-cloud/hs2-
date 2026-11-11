@@ -4,6 +4,7 @@ package main
 //
 //	hs2 reality front -u U --ip IP tls|reality|both [--target host:443] [--sni name] [--new-key]
 //	hs2 reality rotate-key -u U (--ip IP | --all)
+//	hs2 reality rotate-sid -u U (--ip IP | --all)   (new short id first, the previous one still accepted)
 //	hs2 reality targets [-u U | --side iran|kharej] [--add host,host] [--offline] [--json]
 //	hs2 reality check-target host[:443] [server_name] [-u U | --side iran|kharej] [--offline] [--json]
 //	hs2 reality status -u U [--json]
@@ -57,8 +58,9 @@ type targetCheck struct {
 	SideMatch   string   `json:"side_match,omitempty"` // match | mismatch | unknown
 	CDN         string   `json:"cdn,omitempty"`
 	Issuer      string   `json:"issuer,omitempty"`
-	Bad         []string `json:"bad,omitempty"`  // reasons to reject
-	Warn        []string `json:"warn,omitempty"` // worth knowing
+	Suite       string   `json:"suite,omitempty"` // TLS 1.3 suite the target picks (reality copies it: suite parity)
+	Bad         []string `json:"bad,omitempty"`   // reasons to reject
+	Warn        []string `json:"warn,omitempty"`  // worth knowing
 	Info        []string `json:"info,omitempty"`
 }
 
@@ -172,6 +174,12 @@ func probeTarget(target, sni string, roots *x509.CertPool) targetCheck {
 	r.X25519 = true // offered alone and the handshake completed
 	r.TLS13 = cs.Version == tls.VersionTLS13
 	r.H2 = cs.NegotiatedProtocol == "h2"
+	if r.TLS13 {
+		r.Suite = tls.CipherSuiteName(cs.CipherSuite)
+		if cs.CipherSuite == tls.TLS_AES_256_GCM_SHA384 {
+			r.Info = append(r.Info, tr("picks AES-256: reality copies the target's suite, measured slower than an AES-128 target (docs §11.7)", "AES-256 را انتخاب می‌کند: reality مجموعهٔ رمز هدف را کپی می‌کند و از هدف AES-128 کندتر اندازه‌گیری شد (مستند §11.7)"))
+		}
+	}
 	if !r.TLS13 {
 		r.Bad = append(r.Bad, fmt.Sprintf(tr("TLS version 0x%x, reality needs TLS 1.3", "نسخهٔ TLS 0x%x است، Reality به TLS 1.3 نیاز دارد"), cs.Version))
 	}
@@ -333,16 +341,24 @@ func checkTargets(list []string, s realitySide, online bool) []targetCheck {
 		}(i, t)
 	}
 	wg.Wait()
-	sort.SliceStable(out, func(a, b int) bool {
-		if out[a].OK != out[b].OK {
-			return out[a].OK
-		}
-		if (out[a].SideMatch == sideMatch) != (out[b].SideMatch == sideMatch) {
-			return out[a].SideMatch == sideMatch
-		}
-		return out[a].HandshakeMs < out[b].HandshakeMs
-	})
+	sort.SliceStable(out, func(a, b int) bool { return targetLess(out[a], out[b]) })
 	return out
+}
+
+// targetLess is the targets ranking: accepted first, then the listener's own
+// side, then (HS2_REALITY_PREFER_AES128=1) AES-128 before AES-256, then the
+// faster handshake.
+func targetLess(a, b targetCheck) bool {
+	if a.OK != b.OK {
+		return a.OK
+	}
+	if (a.SideMatch == sideMatch) != (b.SideMatch == sideMatch) {
+		return a.SideMatch == sideMatch
+	}
+	if preferAES128() && a.aes256() != b.aes256() {
+		return !a.aes256()
+	}
+	return a.HandshakeMs < b.HandshakeMs
 }
 
 func renderTargets(w io.Writer, rs []targetCheck) {
@@ -389,6 +405,30 @@ func newShortID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// aes256: the target picks TLS_AES_256_GCM_SHA384 (reality's suite parity
+// then runs every link on AES-256).
+func (r targetCheck) aes256() bool { return r.Suite == "TLS_AES_256_GCM_SHA384" }
+
+// preferAES128 (HS2_REALITY_PREFER_AES128=1, default off): `hs2 reality
+// targets` ranks, among accepted targets on the right side, the ones that
+// pick AES-128 before the AES-256 ones (then by handshake time).
+func preferAES128() bool { return os.Getenv("HS2_REALITY_PREFER_AES128") == "1" }
+
+// rotateShortIDs is rotate-sid's change of one front's short_ids: a new id
+// first (a dialer dials with ShortIDs[0], the listener accepts any of the
+// list), then the previous first id, still accepted so a dial in flight or a
+// dialer that pinned it is never refused. Older ids are dropped: two
+// rotations retire an id.
+func rotateShortIDs(cur any) []any {
+	out := []any{newShortID()}
+	if l, ok := cur.([]any); ok && len(l) > 0 {
+		if s, ok := l[0].(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // frontSpec is the requested change of one IP's front.
@@ -626,6 +666,31 @@ func realityFrontCmd(sub string, args []string) int {
 		fmt.Printf(tr("%d key(s) rotated: the other server receives the new public key with the next announcement (right after the reload); a 'both' IP bridges any gap over tls, a pure 'reality' IP may refuse new links for a few seconds.\n",
 			"%d کلید چرخید: سرور مقابل کلید عمومی تازه را با اعلام بعدی (بلافاصله پس از reload) می‌گیرد؛ IP با 'both' فاصله را با tls پر می‌کند، IP فقط 'reality' ممکن است چند ثانیه لینک تازه نپذیرد.\n"), n)
 		reason = "front-rotate-key"
+	case "rotate-sid":
+		lb, _ := m["lb"].(map[string]any)
+		l, _ := lb[own].([]any)
+		n := 0
+		for _, x := range l {
+			e, _ := x.(map[string]any)
+			f, _ := e["front"].(map[string]any)
+			eip, _ := e["ip"].(string)
+			k, _ := f["kind"].(string)
+			if f == nil || (k != "reality" && k != "both") {
+				continue
+			}
+			if !*all && !net.ParseIP(eip).Equal(net.ParseIP(*ip)) {
+				continue
+			}
+			f["short_ids"] = rotateShortIDs(f["short_ids"])
+			n++
+		}
+		if n == 0 {
+			fmt.Println(tr("ERROR: no reality/both front to rotate (give --ip IP of a reality/both IP, or --all)", "خطا: front از نوع reality/both برای چرخش نیست (--ip یک IP با reality/both یا --all بدهید)"))
+			return 1
+		}
+		fmt.Printf(tr("%d short id(s) rotated: the new id is first (the other server dials with it after the next announcement), the previous one is still accepted until the next rotate-sid, so no dial is refused (a pinned dialer keeps working; re-pin it before rotating again).\n",
+			"%d شناسهٔ کوتاه چرخید: شناسهٔ تازه اول است (سرور مقابل پس از اعلام بعدی با آن شماره می‌گیرد)، شناسهٔ قبلی تا rotate-sid بعدی پذیرفته می‌شود و هیچ شماره‌گیری رد نمی‌شود (شماره‌گیر pin‌شده کار می‌کند؛ پیش از چرخش بعدی دوباره pin کنید).\n"), n)
+		reason = "front-rotate-sid"
 	}
 	nb, err := marshalConfig(m)
 	if err != nil {
@@ -649,7 +714,7 @@ func realityFrontCmd(sub string, args []string) int {
 		}
 	}
 	rc := safeApplyMode(*unit, path, cur, nb, reason, *within, *yes, *dry, lbOn(fc))
-	if rc == 0 && !*dry && (sub == "rotate-key" || pos[0] != tlscarrier.FrontTLS) {
+	if rc == 0 && !*dry && (sub == "rotate-key" || sub == "rotate-sid" || pos[0] != tlscarrier.FrontTLS) {
 		var nfc fileConfig
 		if json.Unmarshal(nb, &nfc) == nil {
 			printPinHint(*unit, nfc)

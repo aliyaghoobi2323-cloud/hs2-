@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"net"
 	"os"
 	"reflect"
@@ -109,6 +111,13 @@ func newFrontMux(fc fileConfig, def tlscarrier.Acceptor, srv *tlscarrier.Server,
 
 // tlsNames: the SNIs our own tls front answers to (top-level sni and every
 // per-IP sni of this side): a "both" hello with one of them goes to tls.
+//
+// A direct-mode listener (kharej) has no "sni" in its config (the installer
+// writes it on the dialing side only), so without a fallback a "both" IP
+// there spliced every tls hello to the target: a dialer without the key never
+// got in and the tls half of "both" never worked (rel48 matrix, §11.7). With
+// no sni at all, the names of this side's certificates (cert_file and the
+// per-IP cert_file: the names our tls front proves anyway) are used.
 func tlsNames(fc fileConfig) map[string]bool {
 	n := map[string]bool{}
 	if fc.SNI != "" {
@@ -119,7 +128,45 @@ func tlsNames(fc fileConfig) map[string]bool {
 			n[strings.ToLower(e.SNI)] = true
 		}
 	}
+	if len(n) == 0 {
+		files := []string{fc.CertFile}
+		for _, e := range lbLocalList(fc) {
+			files = append(files, e.CertFile)
+		}
+		for _, f := range files {
+			for _, name := range certFileNames(f) {
+				n[strings.ToLower(name)] = true
+			}
+		}
+	}
 	return n
+}
+
+// certFileNames: the DNS names of a PEM certificate file's leaf (its CN when
+// it has none); nil when unreadable.
+func certFileNames(path string) []string {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	blk, _ := pem.Decode(b)
+	if blk == nil {
+		return nil
+	}
+	c, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		return nil
+	}
+	if len(c.DNSNames) > 0 {
+		return c.DNSNames
+	}
+	if c.Subject.CommonName != "" && net.ParseIP(c.Subject.CommonName) == nil {
+		return []string{c.Subject.CommonName}
+	}
+	return nil
 }
 
 // rebuild installs fc's per-IP fronts, reusing the listener of an unchanged
