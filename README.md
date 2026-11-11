@@ -1140,20 +1140,28 @@ hs2 config lock | unlock | lock-status         # one admin at a time
 - **Audit log:** `/var/log/hs2-changes.log` (who, tty, unit, action, reason,
   changed keys, result).
 
-### New menu (preview) and live dashboard
+### New menu (the default since M7) and live dashboard
 
-The redesigned menu is opt-in until the redesign is finished; the classic
-menu stays the default:
+A bare `hs2-menu` (or `bash install.sh`) opens the redesigned menu; it became
+the default after the M7 lab test (fresh install, both tunnel directions,
+join, every section in fa/en, simple/advanced, 80 columns, no colour,
+non-root, two admins, rollback, upgrade from the old release, uninstall —
+checklist in `docs/menu-m7-checklist.md`). The classic menu stays reachable:
 
 ```
-hs2-menu --new        # the new menu        (or HS2_MENU=new hs2-menu)
 hs2-menu --classic    # the classic menu    (or HS2_MENU=classic hs2-menu)
+hs2-menu --new        # force the new menu  (or HS2_MENU=new hs2-menu)
 ```
 
-`n` in the classic menu opens the new one and `c` in the new one goes back;
-**9) Menu settings → hs2-menu opens** makes the new menu the default
-(`default_menu=new`). Order of precedence: the flag, then `HS2_MENU`, then
-`menu.conf`, then classic.
+`c` in the new menu opens the classic one and `n` there comes back;
+**9) Menu settings → hs2-menu opens** switches the default
+(`default_menu=classic|new`). Order of precedence: the flag, then `HS2_MENU`,
+then `menu.conf`, then the new menu. On a fresh server **2) Tunnels** first
+offers to install the binary, then runs the wizard. Every change made from a
+screen ends with **"Keep the change? y = confirm"** right there (it waits for
+the health check if needed); Enter leaves the automatic rollback running
+(`hs2 apply --confirm -u U` from a shell still works). Colour off (setting or
+`NO_COLOR`) is plain text everywhere, including separators and notes.
 
 Header: `server · N tunnels · users · Mbit · health · active warnings`. Items:
 1) Live dashboard 2) Tunnels 3) Load balancing & IPs 4) Security &
@@ -1162,8 +1170,7 @@ camouflage 5) Speed & performance 6) Monitoring & alerts 7) Server doctor
 history** = `hs2 config history`, **roll back the last change** =
 `hs2 rollback`, status, uninstall) 9) Menu settings. Item 2 is the Tunnels
 screen, 3 Load balancing & IPs and 5 Speed & performance have their own
-screens (sections below); item 4 still opens the classic screens (marked
-"[preview]"). Screens that change a config hold the
+screens (sections below), and 4 Security & camouflage too (M5). Screens that change a config hold the
 admin lock (`hs2 config lock`) while they are open; another admin's lock is
 shown with its owner and can be broken only after a question.
 

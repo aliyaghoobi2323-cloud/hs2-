@@ -21,6 +21,49 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M7 — lab test, fixes, the new menu becomes the default (binary + installer)
+
+Full pty-driven lab test on two real servers (labs 2/3) with real tunnels;
+checklist with PASS/FAIL per item: `docs/menu-m7-checklist.md`, driver
+`install/tests/m7/m7drive.py`. Bugs found and fixed:
+
+- **Fresh install from the new menu** went to the classic setup screens (no
+  binary → no wizard). 2) Tunnels now offers to install the binary first, then
+  runs the wizard.
+- **Join with a code** failed at the last step when the code's tunnel name
+  (both sides default to `hs2`) was already used here; the joined tunnel now
+  gets a free name with a note (`--name` / `--update` still choose).
+- **Non-interactive join on the listening side without a domain** got cert
+  `auto` = `/etc/letsencrypt/live//fullchain.pem` and failed `hs2 check`; it is
+  self-signed now, as the wizard's default.
+- **Menu changes rolled back by themselves**: after an apply the menu only
+  printed `hs2 apply --confirm`; it now asks "Keep the change?" in place and
+  waits for the health check when y comes early.
+- **Colour off** still coloured separators and notes (`hr`, `info`, `warn`);
+  now plain, and `NO_COLOR` is honoured.
+- **Uninstall / remove tunnel** left the wizard's self-signed key in
+  `/etc/hs2/certs`; removed with its tunnel.
+- **M4 `hs2 lb add-ip`** of the only IP on a dialer without `bind_local_ip`
+  failed the weight check (the default path joined with 50 %): the listed IP
+  the default route leaves from becomes the primary (`bind_local_ip`); a bound
+  primary left unlisted scales the listed weights to fit; removing the bound
+  primary moves it to a listed IP. Verified live: lab dialer, add-ip via the
+  menu, health gate, confirm, 8/8 links.
+- Stale wizard / pre-flight text "Reality — coming (M5)" now points to
+  Security & camouflage → Front of an IP; the double default "[y/N] [n]" is
+  gone.
+
+**Readiness:** every checklist item passes after the fixes, so a bare
+`hs2-menu` opens the new menu; the classic one stays one key (`c`) or one flag
+(`--classic`, `HS2_MENU=classic`, `default_menu=classic`) away. Upgrade from
+the rel34 release (old binary + old menu, tunnels running) with the new
+installer: both tunnels restarted and verified, bare `hs2-menu` then opens the
+new menu, `c` / `--classic` the classic one.
+
+Merged with reality38 (LB rescue call-free, start window v3; docs §8.8/§8.9).
+
+---
+
 ## Menu redesign M5 — Security & camouflage (= Reality phase 5; binary + installer)
 
 - `hs2 reality front -u U --ip IP tls|reality|both [--target host:443]
