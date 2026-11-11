@@ -153,8 +153,9 @@ type stripeState struct {
 	stUp      bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
 	stGrowUp  bool // Iran: the last growth was for an upload (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
 
-	stFastMore int     // Iran: subs still to open in the doubling chain (HS2_MCONN_STRIPE_FAST, mconn_stripe_fast.go)
-	stFastRate float64 // Iran: the rate that started the chain
+	stFastMore int           // Iran: subs still to open in the doubling chain (HS2_MCONN_STRIPE_FAST, mconn_stripe_fast.go)
+	stFastRate float64       // Iran: the rate that started the chain
+	stEarlyW   time.Duration // Iran: this tick's sample window is an early one (HS2_MCONN_STRIPE_FAST_EARLY_MS, mconn_stripe_early.go)
 
 	stWarmUntil time.Time // Iran: its stripe subs are kept until then (HS2_MCONN_STRIPE_SHARE, mconn_stripe_share.go)
 
@@ -210,11 +211,19 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		return false
 	}
 	w := now.Sub(m.stSample)
-	if w < mLitePoll*9/10 {
+	minW := mLitePoll * 9 / 10
+	if m.stEarlyW > 0 {
+		minW = m.stEarlyW * 9 / 10 // HS2_MCONN_STRIPE_FAST_EARLY_MS (mconn_stripe_early.go)
+	}
+	if w < minW {
 		return false
 	}
 	moved := max(sent-m.stSent, recvd-m.stRecvd)
 	up := sent-m.stSent > recvd-m.stRecvd // the upload is the faster direction
+	if m.stEarlyW > 0 && !stripeEarlyHotLocked(up, float64(moved)/w.Seconds()) {
+		m.stSample, m.stSent, m.stRecvd = now, sent, recvd
+		return false // an early sample grows only a fast upload
+	}
 	m.stSample, m.stSent, m.stRecvd = now, sent, recvd
 	if m.stOpening || m.handshaking || m.lightOpening || now.Before(m.stRetryAt) || m.callOn || m.callUp {
 		if stripeLog && m.stN > 0 {

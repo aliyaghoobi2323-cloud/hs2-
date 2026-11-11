@@ -56,6 +56,7 @@ type rawState struct {
 	handshaking bool // Iran: steps 1-3; Kharej: steps 2-4
 	upgraded    bool // Kharej: UPGRADE seen
 	rawTimer    *time.Timer
+	rawBorn     time.Time // Iran: when the raw connection started (HS2_MCONN_STRIPE_FAST_EARLY_MS)
 }
 
 // mconnRawSub is a sub the opener marks as a raw first sub.
@@ -89,7 +90,8 @@ func newMConnIranRaw(id uint64, open mOpener, sub mSub, key any) *mConn {
 	m.mu.Lock()
 	s := m.addSubLocked(sub, key, false)
 	m.initRawLocked(s)
-	m.rawTimer = time.AfterFunc(mLitePoll, m.rawTick)
+	m.rawBorn = time.Now()
+	m.rawTimer = time.AfterFunc(stripeEarlyFirst(), m.rawTick) // mconn_stripe_early.go
 	m.mu.Unlock()
 	return m
 }
@@ -329,7 +331,11 @@ func (m *mConn) rawTick() {
 		return
 	}
 	m.sendOff = uint64(m.rawSent.Load())
-	if m.stK > 0 && m.stripeTickLocked(now, m.sendOff, uint64(m.rawRecvd.Load())) {
+	early := m.stripeEarlyLocked(now) // HS2_MCONN_STRIPE_FAST_EARLY_MS (mconn_stripe_early.go)
+	m.stEarlyW = early
+	grow := m.stK > 0 && m.stripeTickLocked(now, m.sendOff, uint64(m.rawRecvd.Load()))
+	m.stEarlyW = 0
+	if grow {
 		// HS2_MCONN_STRIPE: the upgrade's new sub is the first stripe sub
 		m.lightOpening = true
 		avoid := append([]any{m.raw1.key}, m.deadKeys...)
@@ -340,7 +346,7 @@ func (m *mConn) rawTick() {
 		m.openStripe(avoid, true) // in the timer's own goroutine
 		return
 	}
-	if m.liteWantDualLocked(now, uint64(m.rawRecvd.Load())) {
+	if early == 0 && m.liteWantDualLocked(now, uint64(m.rawRecvd.Load())) {
 		switch {
 		// HS2_LB_RESCUE_RAW (lb_rescue.go): a light raw connection on a
 		// lowered path gets its copy past the budget, as in mConn.tick (most
@@ -362,7 +368,7 @@ func (m *mConn) rawTick() {
 			return
 		}
 	}
-	m.rawTimer.Reset(mLitePoll)
+	m.rawTimer.Reset(m.stripeEarlyNextLocked(now, early))
 	m.mu.Unlock()
 }
 
