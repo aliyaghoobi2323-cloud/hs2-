@@ -920,6 +920,27 @@ write_cfg_checked(){
   mv -f "$new" "$CFG" || { rm -f "$new"; die "could not install the config to $CFG."; }
 }
 
+# cfg_put SRC DST: replace the config DST with SRC's contents ATOMICALLY. The
+# old `cat SRC > DST` truncated DST first, so a full disk (or a crash, or a
+# set -e abort mid-write) left the tunnel's config empty or half-written — and
+# the rollback `cat DST.prev > DST` then failed the same way, so the next
+# restart had no config at all. Here the copy goes to a private temp file
+# beside DST (same filesystem), keeps DST's mode/owner, and only a COMPLETE
+# copy is renamed over DST; on any failure DST is untouched and the status is
+# non-zero. A symlinked DST is resolved so the link itself is not replaced.
+cfg_put(){ # src dst
+  local dst tmp
+  dst=$(readlink -f -- "$2" 2>/dev/null) || dst=$2; [ -n "$dst" ] || dst=$2
+  tmp=$(umask 077; mktemp "$dst.put.XXXXXX" 2>/dev/null) || return 1
+  if cat -- "$1" > "$tmp" 2>/dev/null; then
+    chmod --reference="$dst" "$tmp" 2>/dev/null || true
+    chown --reference="$dst" "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$dst" 2>/dev/null && return 0
+  fi
+  rm -f -- "$tmp"
+  return 1
+}
+
 start_service(){
   local role="$1"
   PEER_UNVERIFIED=0   # set to 1 below if the post-setup peer check fails
@@ -2700,7 +2721,58 @@ tm_units(){
   done
   return 0
 }
-tm_cfg(){ { sed -n 's/^ExecStart=.* -c \([^ ]*\).*/\1/p' "$UNIT_DIR/$1.service" 2>/dev/null || true; } | head -1; }
+# tm_cfg UNIT -> the config the tunnel really runs. A systemd drop-in
+# (UNIT.service.d/*.conf, read after the unit, in name order) that overrides
+# ExecStart wins over the unit file — reading only the unit file, an override
+# like 40-tunnel1.conf pointing at another -c made the menu edit, back up and
+# upgrade a config the tunnel does not use.
+tm_cfg(){
+  { sed -n 's/^[[:space:]]*ExecStart=.* -c \([^ ]*\).*/\1/p' "$UNIT_DIR/$1.service" 2>/dev/null || true
+    local f; for f in "$UNIT_DIR/$1.service.d"/*.conf; do
+      # `if`, not `[ -f ] &&`: with no drop-in the glob stays literal, and a
+      # failing last command would fail the pipe (pipefail) and abort callers
+      if [ -f "$f" ]; then sed -n 's/^[[:space:]]*ExecStart=.* -c \([^ ]*\).*/\1/p' "$f" 2>/dev/null || true; fi
+    done; } | tail -1
+}
+# tm_dropin_execs UNIT -> each drop-in of UNIT that sets a non-empty ExecStart.
+tm_dropin_execs(){
+  local f
+  for f in "$UNIT_DIR/$1.service.d"/*.conf; do
+    [ -f "$f" ] && grep -qE '^[[:space:]]*ExecStart=[[:space:]]*[^[:space:]]' "$f" && printf '%s\n' "$f"
+  done
+  return 0
+}
+# dropin_use_bin UNIT: an ExecStart override in a drop-in (a classic install's
+# 40-tunnel1.conf, a test build under /opt) names its OWN binary path, so
+# replacing $BIN — what upgrade does — left that tunnel restarting on the OLD
+# binary while upgrade reported it "upgraded". Point every hs2 tunnel command
+# (`<path> run -c …`) in the unit's drop-ins at $BIN; the original is kept
+# beside it as NAME.conf.pre-upgrade (not *.conf, so systemd ignores it).
+dropin_use_bin(){ # unit
+  local f tmp n=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    tmp=$(umask 022; mktemp "$f.XXXXXX") || continue
+    sed -E "s#^([[:space:]]*ExecStart=[-@:+!]*)[^[:space:]]+([[:space:]]+run[[:space:]]+-c[[:space:]])#\1$BIN\2#" "$f" > "$tmp" || { rm -f "$tmp"; continue; }
+    if cmp -s "$f" "$tmp"; then rm -f "$tmp"; continue; fi
+    cp -p "$f" "$f.pre-upgrade" 2>/dev/null || true
+    chmod --reference="$f" "$tmp" 2>/dev/null || true
+    if mv -f "$tmp" "$f"; then
+      n=$((n + 1))
+      warn "$1: the drop-in $f ran another binary — now $BIN (the original is kept as $f.pre-upgrade)."
+    else
+      rm -f "$tmp"
+    fi
+  done < <(tm_dropin_execs "$1")
+  [ "$n" = 0 ] || systemctl daemon-reload
+  return 0
+}
+# unit_exe UNIT -> the binary the unit's main process really runs ("" = none).
+unit_exe(){
+  local pid; pid=$(tm_prop "$1" MainPID)
+  [ "${pid:-0}" != 0 ] || return 0
+  readlink "/proc/$pid/exe" 2>/dev/null || true
+}
 tm_prop(){ systemctl show -p "$2" --value "$1" 2>/dev/null || true; }
 
 # tm_state UNIT -> running | starting | failing | failed | stopped
@@ -3313,7 +3385,10 @@ tm_edit(){
   # Capture which bilateral (must-match-the-peer) fields the edit changed, while
   # $cfg is still the OLD file and $tmp holds the NEW one (before the swap).
   changed=$(tm_bilateral_changed "$cfg" "$tmp")
-  cat "$tmp" > "$cfg"; tm_edit_cleanup
+  if ! cfg_put "$tmp" "$cfg"; then
+    tm_edit_cleanup; err "Could not save $cfg (disk full?) — it is unchanged and $u was not restarted."; return 0
+  fi
+  tm_edit_cleanup
   ok "Saved. The previous version is kept as $cfg.prev"
   since=$(date '+%Y-%m-%d %H:%M:%S')
   info "Restarting $u to apply the change…"
@@ -3331,7 +3406,7 @@ tm_edit(){
     n|N|no) warn "Left the new config in place. Fix it with Edit, or restore $cfg.prev."
             tm_bilateral_warn "$changed" ;;
     *)
-      cat "$cfg.prev" > "$cfg"
+      cfg_put "$cfg.prev" "$cfg" || err "Could not restore $cfg from $cfg.prev (disk full?)."
       since=$(date '+%Y-%m-%d %H:%M:%S')
       systemctl restart "$u" 2>/dev/null || true
       if tm_healthy "$u"; then ok "Previous config restored — $u is running again."
@@ -3347,7 +3422,7 @@ tm_apply_restart(){ # unit cfg
   info "Restarting $u to apply the change…"
   if restart_unit "$u"; then ok "Applied — $u is running with the change."; tm_log_since "$u" "$since"; return 0; fi
   err "$u did not come up with the change. Rolling back."
-  if [ -f "$cfg.prev" ]; then cat "$cfg.prev" > "$cfg"; fi
+  if [ -f "$cfg.prev" ]; then cfg_put "$cfg.prev" "$cfg" || err "Could not restore $cfg from $cfg.prev (disk full?)."; fi
   if restart_unit "$u"; then ok "Rolled back — $u is running again."; else err "$u is still down. Check the log."; tm_log_since "$u" "$since"; fi
   # Always 0: the outcome is reported above, and callers use this as the last
   # command of an && list — a non-zero status there would end the whole menu
@@ -3539,7 +3614,7 @@ tm_tune_links(){ # unit cfg
   fi
   if [ "$ok" != 1 ]; then
     warn "Could not apply all values — restoring the previous config."
-    [ -f "$cfg.prev" ] && cat "$cfg.prev" > "$cfg"
+    [ -f "$cfg.prev" ] && { cfg_put "$cfg.prev" "$cfg" || err "Could not restore $cfg from $cfg.prev (disk full?)."; }
     return 0
   fi
   tm_apply_restart "$u" "$cfg"
@@ -3580,7 +3655,7 @@ tm_ports_backup(){ # cfg
 # config back as it was, and say so (DONE are the entries already applied).
 tm_ports_undo(){ # cfg done
   if [ -n "$2" ]; then
-    if [ -f "$1.prev" ] && cat "$1.prev" > "$1"; then
+    if [ -f "$1.prev" ] && cfg_put "$1.prev" "$1"; then
       warn "Nothing was changed: $2 was undone too (restored the previous config) — fix the refused entry and try again."
     else
       err "Could not restore $1 from $1.prev: $2 stays saved (not applied until the tunnel restarts)."
@@ -3765,7 +3840,7 @@ tm_tune_manual(){ # unit cfg
       && tm_cfgset "$cfg" tuning.netdev_backlog "$b" \
       && tm_cfgset "$cfg" tuning.somaxconn "$s"; }; then
     warn "Could not apply all tuning values — restoring the previous config."
-    [ -f "$cfg.prev" ] && cat "$cfg.prev" > "$cfg"
+    [ -f "$cfg.prev" ] && { cfg_put "$cfg.prev" "$cfg" || err "Could not restore $cfg from $cfg.prev (disk full?)."; }
     return 0
   fi
   tm_apply_restart "$u" "$cfg"
@@ -4235,7 +4310,8 @@ lb_apply(){
     rm -f "$new"; warn "Not applied — fix the problems above. $u is untouched."; return 1
   fi
   tm_ports_backup "$cfg" || { rm -f "$new"; return 1; }
-  cat "$new" > "$cfg"; rm -f "$new"
+  if ! cfg_put "$new" "$cfg"; then rm -f "$new"; err "Could not save $cfg (disk full?) — it is unchanged."; return 1; fi
+  rm -f "$new"
   ok "Saved. The previous version is kept as $cfg.prev"
   since=$(date '+%Y-%m-%d %H:%M:%S')
   if [ "$reload" = 1 ]; then
@@ -4246,7 +4322,7 @@ lb_apply(){
     else
       err "$u did not take the change. Restoring the previous config."
       tm_log_since "$u" "$since"
-      cat "$cfg.prev" > "$cfg"
+      cfg_put "$cfg.prev" "$cfg" || err "Could not restore $cfg from $cfg.prev (disk full?)."
       reload_unit "$u" || true
       lb_load "$cfg" >/dev/null 2>&1 || true
       return 1
@@ -4256,7 +4332,7 @@ lb_apply(){
   if ! restart_unit "$u"; then
     err "$u did not come up with the change. Restoring the previous config."
     tm_log_since "$u" "$since"
-    cat "$cfg.prev" > "$cfg"
+    cfg_put "$cfg.prev" "$cfg" || err "Could not restore $cfg from $cfg.prev (disk full?)."
     if restart_unit "$u"; then ok "Previous config restored — $u is running again."
     else err "$u is still not running with the previous config. Check the log."; fi
     lb_load "$cfg" >/dev/null 2>&1 || true
@@ -4312,13 +4388,13 @@ lb_get_cert(){
       n|N|no) warn "No certificate requested."; return 0 ;;
     esac
     tm_ports_backup "$cfg" || return 0
-    if ! python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m["acme_webroot"]="on"; open(sys.argv[1],"w").write(json.dumps(m, indent=2)+"\n")' "$cfg"; then
+    if ! python3 -c 'import json,os,sys; m=json.load(open(sys.argv[1])); m["acme_webroot"]="on"; t=sys.argv[1]+".put"; f=open(t,"w"); os.chmod(t,0o600); f.write(json.dumps(m, indent=2)+"\n"); f.close(); os.replace(t,sys.argv[1])' "$cfg"; then
       err "Could not write acme_webroot."; return 0
     fi
-    if ! tm_validate "$cfg"; then cat "$cfg.prev" > "$cfg"; warn "Not changed."; return 0; fi
+    if ! tm_validate "$cfg"; then cfg_put "$cfg.prev" "$cfg" || true; warn "Not changed."; return 0; fi
     if ! restart_unit "$u"; then
       err "$u did not come up with acme_webroot on. Restoring the previous config."
-      cat "$cfg.prev" > "$cfg"; restart_unit "$u" || true; return 0
+      cfg_put "$cfg.prev" "$cfg" || err "Could not restore $cfg from $cfg.prev (disk full?)."; restart_unit "$u" || true; return 0
     fi
     ok "acme_webroot is on — $u answers certificate checks on port 80."
     cert_offer_webroot_switch "$cfg" </dev/tty || true
@@ -5038,6 +5114,8 @@ backup(){
   # cert, so renewal keeps working after a restore.
   for u in $units; do
     [ -f "$UNIT_DIR/$u.service" ] && items+=("${UNIT_DIR#/}/$u.service")
+    # its drop-ins too: an ExecStart/-c override there is part of how it runs
+    [ -d "$UNIT_DIR/$u.service.d" ] && items+=("${UNIT_DIR#/}/$u.service.d")
     c=$(tm_cfg "$u")
     for p in "$c" "$c.prev"; do [ -n "$c" ] && [ -f "$p" ] && items+=("${p#/}"); done
     for p in "$(jget "$c" cert_file)" "$(jget "$c" key_file)"; do
@@ -5308,7 +5386,7 @@ auto_backup(){
 # them. Either way the user sees the exact restart list and confirms first — a
 # restart briefly drops that tunnel's traffic, which matters on a busy tunnel.
 upgrade(){ # [tunnel]
-  local all units u role fails=0 a
+  local all units u role fails=0 a exe
   all=$(tm_units)
   [ -n "$all" ] || die "hs2 is not installed on this server (no tunnel). Run without 'upgrade' to install."
   if [ -n "${1:-}" ]; then
@@ -5353,8 +5431,14 @@ upgrade(){ # [tunnel]
     # sure it starts on boot.
     role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
     write_service "$role"
+    dropin_use_bin "$u"
     systemctl enable "$u" >/dev/null 2>&1 || true
     if restart_unit "$u"; then
+      exe=$(unit_exe "$u")
+      if [ -n "$exe" ] && [ "$exe" != "$BIN" ]; then
+        err "$u restarted but runs $exe, not the upgraded $BIN — an override outside hs2's control (systemctl cat $u)."
+        fails=$((fails + 1)); continue
+      fi
       ok "$u upgraded and running (autostart: $(systemctl is-enabled "$u" 2>/dev/null || true))."
       if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-60}"; then
         warn "$u has not reconnected yet. If the OTHER server still runs the old version, upgrade it"
