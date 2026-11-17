@@ -1,0 +1,46 @@
+--- run145.sh	2026-11-14 09:12:40.345183900 +0330
++++ run.sh	2026-11-14 09:14:08.606633300 +0330
+@@ -190,6 +190,7 @@
+ # veth, and put back at cleanup.
+ emu_backlog(){
+   local f=/run/lab3g-backlog.old
++  [ "${KEEP_BACKLOG:-0}" = 1 ] && [ "$1" != up ] && return 0 # rs146: two runs at once; seq146.sh restores
+   if [ "$1" = up ]; then
+     [ -f $f ] || sysctl -n net.core.netdev_max_backlog > $f
+     sysctl -qw net.core.netdev_max_backlog=30000
+@@ -341,6 +342,24 @@
+     LL=$(python3 -c 'import json,sys; l=[e for e in json.loads(sys.argv[1]) if ":" not in e["ip"]]; n=len(l); [e.update(weight=100//n + (1 if i < 100%n else 0)) for i,e in enumerate(l)]; print(json.dumps(l))' "$LL")
+     KHL='[{"ip":"192.168.50.2","weight":100}]'
+   fi
++  if [ "${TOPO146:-0}" = 1 ]; then
++    # rs146: production topology. 6 Iran IPv4 x 2 kharej IPv4 = 12 v4 paths + the IPv6 pair (path 1).
++    # v4 path n (lab path k = 0,2..12) carries Iran 10.60.(n/2+1).1 <-> kharej 10.70.(n%2+1).2, so
++    # Iran IP i is on lab paths k(2i-2),k(2i-1): darkening both = a whole-Iran-IP outage.
++    KV4=(0 2 3 4 5 6 7 8 9 10 11 12)
++    for n in $IR $KH; do ip netns exec $n sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0; done
++    for j in 1 2; do ip -n $KH addr add 10.70.$j.2/32 dev lo; done
++    for i in 1 2 3 4 5 6; do ip -n $IR addr add 10.60.$i.1/32 dev lo; done
++    for n in $(seq 0 11); do k=${KV4[$n]}; i=$((n / 2 + 1)); j=$((n % 2 + 1))
++      if [ $k = 0 ]; then dk=$VK; di=$VI; else sx=$(printf "\x$(printf %x $((97 + k)))"); dk=${VK}$sx; di=${VI}$sx; fi
++      ip -n $KH rule add from 10.70.$j.2 to 10.60.$i.1 table $((200 + n))
++      ip -n $KH route add 10.60.$i.1/32 dev $dk src 10.70.$j.2 table $((200 + n))
++      ip -n $IR rule add from 10.60.$i.1 to 10.70.$j.2 table $((200 + n))
++      ip -n $IR route add 10.70.$j.2/32 dev $di src 10.60.$i.1 table $((200 + n))
++    done
++    LL='[{"ip":"10.60.1.1","weight":14},{"ip":"10.60.2.1","weight":14},{"ip":"10.60.3.1","weight":14},{"ip":"10.60.4.1","weight":14},{"ip":"10.60.5.1","weight":14},{"ip":"10.60.6.1","weight":14},{"ip":"fd00:51::1","weight":16}]'
++    KHL='[{"ip":"10.70.1.2","weight":34},{"ip":"10.70.2.2","weight":33},{"ip":"fd00:51::2","weight":33}]'
++  fi
+   if [ "$LB_DIRECT" = 1 ]; then
+     LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","kharej":'$LL',"iran":[{"ip":"192.168.50.1","weight":100}]},'
+     KHAREJ_EXTRA="$LBJ$KHAREJ_EXTRA"
+@@ -350,6 +369,10 @@
+   KHAREJ_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","bind_local_ip":"192.168.50.2","sni":"lab.example.com",'"$LBJ$KHAREJ_EXTRA"
+   IRAN_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","backend_addr":"builtin","cert_file":"'$W'/cert.pem","key_file":"'$W'/key.pem",'"$LBJ$IRAN_EXTRA"
+   fi
++  if [ "${TOPO146:-0}" = 1 ]; then
++    KHAREJ_EXTRA=${KHAREJ_EXTRA//192.168.50.1:2096/10.60.1.1:2096}; KHAREJ_EXTRA=${KHAREJ_EXTRA//'"bind_local_ip":"192.168.50.2"'/'"bind_local_ip":"10.70.1.2"'}
++    IRAN_EXTRA=${IRAN_EXTRA//192.168.50.1:2096/10.60.1.1:2096}
++  fi
+ fi
+ 
+ if [ "${REVERSE:-0}" = 1 ] && [ "$PATHS" -lt 2 ]; then

@@ -1,6 +1,6 @@
 #!/bin/bash
 # sec41 probe battery: direct target vs reality listener (unauthenticated)
-T=www.microsoft.com; L=5.160.110.234:18743; D=$(getent ahostsv4 $T | head -1 | awk '{print $1}'):443
+T=www.microsoft.com; L=198.51.100.234:18743; D=$(getent ahostsv4 $T | head -1 | awk '{print $1}'):443
 run() { # name cmd(addr)
   for a in $D $L; do
     out=$(eval "$2" 2>&1 | sed -E 's/[0-9a-f]{40,}//g; s/(Session-ID|Master-Key|TLS session ticket|Start Time|Timeout|Session-ID-ctx|[0-9]{4} - ).*//' | grep -E "$3" | sort | uniq | md5sum | cut -c1-8)

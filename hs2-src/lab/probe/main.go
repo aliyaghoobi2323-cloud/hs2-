@@ -176,6 +176,8 @@ func main() {
 	jRotate := flag.Bool("jrotate", true, "journey: user i starts its first round at phase i%4 so a short run samples every phase")
 	flag.StringVar(&crowdWin, "crowdwin", "", "crowd: also report p95/p99 per window, boundaries in seconds from the start, e.g. \"15,25\" (windows warm-15, 15-25, 25-end)")
 	jSeed := flag.Uint64("jseed", 0, "journey: nonzero = the same phase plan (sizes, gaps, durations) every run with this seed, for A/B pairs")
+	flag.StringVar(&sampleFile, "samplelog", "", "lbv81: write every crowd/call/game latency and crowd failure as lines \"CLASS SEC MS\" to this file")
+	flag.DurationVar(&crowdLife, "crowdlife", 0, "lbv81: crowd connections close after ~this (0.5x-1.5x) and redial (reconnect churn)")
 	flag.Parse()
 	if *late > 0 && *echoDelay == 0 {
 		*echoDelay = *late
@@ -191,6 +193,8 @@ func main() {
 	var wg sync.WaitGroup
 	start := time.Now()
 	probeStart = start
+	sampleOpen()
+	defer sampleClose()
 	measuring := func() bool { return time.Since(start) > *warm }
 	for i := 0; i < *bulk+*up; i++ {
 		isUp := i >= *bulk
@@ -405,11 +409,18 @@ func main() {
 		}
 	}
 	stream := func(dst **streamResult, gap func() time.Duration, size func() int, mbps float64) {
+		nm := ""
+		switch dst {
+		case &r.Call:
+			nm = "k"
+		case &r.Game:
+			nm = "g"
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			res := runStream(streamSpec{addr: *addr, delay: *late, gap: gap, size: size,
-				start: start, warm: max(*warm, *late), lateMs: *lateMs, mbps: mbps}, stop)
+				start: start, warm: max(*warm, *late), lateMs: *lateMs, mbps: mbps, name: nm}, stop)
 			mu.Lock()
 			*dst = res
 			mu.Unlock()

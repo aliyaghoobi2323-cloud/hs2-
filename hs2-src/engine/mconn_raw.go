@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"io"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,13 +52,26 @@ type rawState struct {
 	rawSent    atomic.Int64
 	rawRecvd   atomic.Int64
 	rLimit     atomic.Int64 // the peer's boundary on the first sub (-1: unknown)
-	rawBud     atomic.Int64 // raw bytes already added to liteBud
+	// raw137: held by the raw reader across a Read it issued while rLimit
+	// was still unknown; setReadLimit waits for it before the side tells
+	// the peer it knows the boundary (UPACK / our UPGRADE), so no Read that
+	// cannot be capped is still running when the peer's records may come.
+	unkMu  sync.Mutex
+	rawBud atomic.Int64 // raw bytes already added to liteBud
+	// ul257 (mconn_ul257.go): the raw writer's blocked time (ns) and the
+	// start (mono ns) of a Write still blocked (0: none)
+	rawWBlk, rawWIn atomic.Int64
+	// hc183 (halfclose.go): the peer announced half-close (SetHalfOpen); a
+	// raw first sub then half-closes as its smux stream
+	rawHC atomic.Bool
 
 	// under mConn.mu
 	handshaking bool // Iran: steps 1-3; Kharej: steps 2-4
 	upgraded    bool // Kharej: UPGRADE seen
 	rawTimer    *time.Timer
 	rawBorn     time.Time // Iran: when the raw connection started (HS2_MCONN_STRIPE_FAST_EARLY_MS)
+	rawWBlkSnap int64     // ul257: rawWBlk + in-progress at the last sample (mconn_ul257.go)
+	hsStart     time.Time // Iran: when the upgrade's handshake started (HS2_MCONN_STRIPE_LOG)
 }
 
 // mconnRawSub is a sub the opener marks as a raw first sub.
@@ -129,9 +144,18 @@ func (m *mConn) writeRaw(p []byte) (int, error, bool) {
 		m.wmu.Unlock()
 		return 0, nil, false
 	}
+	t0 := m.ul257WriteStart()
 	n, err := m.raw1.rw.Write(p)
+	m.ul257WriteEnd(t0)
 	m.rawSent.Add(int64(n))
+	if m.ring.on && n > 0 {
+		m.ring.add(p[:n]) // HS2_MCONN_RESCUE (mconn_rescue.go)
+	}
 	m.wmu.Unlock()
+	if err != nil && m.rscCut.Load() {
+		<-m.rscDone // a rescue took the writer off raw: the rest goes as records
+		return n, nil, false
+	}
 	if err != nil {
 		m.end(err, false)
 		return n, err, true
@@ -149,9 +173,11 @@ func (m *mConn) readRaw(p []byte) (int, error, bool) {
 		if !m.rawR.Load() {
 			return 0, nil, false
 		}
+		m.unkMu.Lock()
 		got, lim := m.rawRecvd.Load(), m.rLimit.Load()
 		want := p
 		if lim >= 0 {
+			m.unkMu.Unlock()
 			if got >= lim {
 				m.switchRead(uint64(lim))
 				return 0, nil, false
@@ -159,12 +185,17 @@ func (m *mConn) readRaw(p []byte) (int, error, bool) {
 			if int64(len(want)) > lim-got {
 				want = want[:lim-got]
 			}
+		} else if h := rawReadTestHook.Load(); h != nil {
+			(*h)(m)
 		}
 		n, err := s.rw.Read(want)
+		if n > 0 && m.rawRecvd.Add(int64(n)) == int64(n) && stripeLog {
+			m.firstRx.CompareAndSwap(0, monoNano(time.Now()))
+		}
+		if lim < 0 {
+			m.unkMu.Unlock()
+		}
 		if n > 0 {
-			if m.rawRecvd.Add(int64(n)) == int64(n) && stripeLog {
-				m.firstRx.CompareAndSwap(0, monoNano(time.Now()))
-			}
 			return n, nil, true
 		}
 		if err == nil {
@@ -178,6 +209,9 @@ func (m *mConn) readRaw(p []byte) (int, error, bool) {
 				d.SetReadDeadline(time.Time{})
 			}
 			continue
+		}
+		if err == io.EOF && m.rawHalfFin() {
+			return 0, io.EOF, true // hc183: the peer half-closed; this side writes on
 		}
 		if !m.rawStop() {
 			return 0, nil, false // Close took the reader off raw
@@ -214,13 +248,14 @@ func (m *mConn) switchRead(lim uint64) {
 		// true, so none can come after this.
 		m.clearReadDeadline()
 	}
-	start := !m.ended && !m.raw1.dead
+	start := !m.ended && !m.raw1.dead && m.rscOld != m.raw1 // er94: after a RESCUE-NAK the first sub carries nothing more
 	m.mu.Unlock()
 	m.tr.ev("raw: reader switched at %d", lim)
 	if start {
 		go m.raw1.readLoop()
 	} else {
 		m.raw1.close()
+		go m.releaseRaw1() // mem68: no loop will exit to do it (we hold rmu)
 	}
 }
 
@@ -253,20 +288,32 @@ func (m *mConn) interruptRead() {
 	}
 }
 
-// setReadLimit: the peer's raw bytes on the first sub end at off.
+// setReadLimit: the peer's raw bytes on the first sub end at off. It returns
+// once the raw reader cannot read past off: a Read the reader issued before
+// the limit was known (so not capped to it) has returned. Only then may the
+// caller let the peer write records on the first sub (raw137: such a Read,
+// woken by the deadline, still returned what was buffered, and could take
+// the peer's first records as raw bytes: 16 KB past the boundary).
 func (m *mConn) setReadLimit(off uint64) {
 	if !mconnDeadlineFix.Load() {
 		m.rLimit.Store(int64(off))
 		m.interruptRead()
-		return
+	} else {
+		m.mu.Lock()
+		m.rLimit.Store(int64(off))
+		if m.rawR.Load() { // after the switch no reader needs waking
+			m.interruptRead()
+		}
+		m.mu.Unlock()
 	}
-	m.mu.Lock()
-	m.rLimit.Store(int64(off))
-	if m.rawR.Load() { // after the switch no reader needs waking
-		m.interruptRead()
-	}
-	m.mu.Unlock()
+	// the woken Read returns at once (deadline in the past, or data)
+	m.unkMu.Lock()
+	m.unkMu.Unlock()
 }
+
+// rawReadTestHook (tests only): called by the raw reader between reading an
+// unknown limit and its Read.
+var rawReadTestHook atomic.Pointer[func(*mConn)]
 
 func (m *mConn) clearReadDeadline() {
 	if d, ok := m.raw1.rw.(readDeadliner); ok {
@@ -310,6 +357,7 @@ func (m *mConn) rawEnded() {
 	}
 	m.mu.Unlock()
 	m.rawBudget(time.Now())
+	m.rescueEndedHook() // HS2_MCONN_RESCUE (mconn_rescue.go)
 }
 
 // rawBudget adds the raw bytes moved since the last call (both ways) to the
@@ -326,7 +374,10 @@ func (m *mConn) rawTick() {
 	now := time.Now()
 	m.rawBudget(now)
 	m.mu.Lock()
-	if m.ended || m.closing || !m.rawW.Load() || m.lightOpening {
+	if m.ended || m.closing || !m.rawW.Load() || m.lightOpening || m.wclosed || m.peerFin { // hc183: no upgrade once half-closed
+		if m.lightOpening {
+			m.trLocked(trLightOp)
+		}
 		m.mu.Unlock()
 		return
 	}
@@ -338,14 +389,23 @@ func (m *mConn) rawTick() {
 	if grow {
 		// HS2_MCONN_STRIPE: the upgrade's new sub is the first stripe sub
 		m.lightOpening = true
-		avoid := append([]any{m.raw1.key}, m.deadKeys...)
-		if m.stFastMore > 0 && m.stripeFastOnLocked(m.stGrowUp) {
+		avoid := append([]any{avoidKey(m.raw1.key)}, m.deadAvoidLocked()...)
+		if m.stFastMore > 0 && m.stripeChainHintLocked() {
 			avoid = append(avoid, stripeWantHint{n: 1 + m.stFastMore}) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 		}
 		avoid = m.stripeNoShareHintLocked(avoid) // HS2_MCONN_STRIPE_UP_NOSHARE (mconn_stripe_noshare.go)
+		avoid = m.stripeUpgHintLocked(avoid)     // HS2_MCONN_STRIPE_UPG_IDLE (mconn_stripe_upgidle.go)
+		avoid = m.stripeDlShareHintLocked(avoid) // HS2_MCONN_STRIPE_DL_SHARE (mconn_stripe_dlshare.go)
+		avoid = m.stripeRawCopyHintLocked(avoid) // HS2_MCONN_STRIPE_DL_COPIES (dl188, mconn_stripe_sharecopy.go)
+		if stripeLog {
+			avoid = append(avoid, stripeRawHint{}) // dl188 diagnostics: a raw upgrade's open
+		}
 		m.mu.Unlock()
 		m.openStripe(avoid, true) // in the timer's own goroutine
 		return
+	}
+	if lbRescue.Load() && rescueLowKey(m.raw1.key) {
+		censusRaw.Add(1) // diagnostics (lb_rescue_cut.go)
 	}
 	if early == 0 && m.liteWantDualLocked(now, uint64(m.rawRecvd.Load())) {
 		switch {
@@ -355,21 +415,26 @@ func (m *mConn) rawTick() {
 		// reaches them — lab k runs, 0-4 copies a run). Off by default: the
 		// raw handshake then runs over the lowered path, and a sub dying in
 		// it ends the connection (lab: 14-30 crowd failures a run).
-		case m.upgradeCappedLocked(now) && !(lbRescueRaw && m.rescueWantLocked(m.raw1) && rescueAllow(now)):
+		case m.upgradeCappedLocked(now) && !m.rescueRawLocked(now): // HS2_LB_RESCUE_CUT (lb_rescue_cut.go)
 			obs.mconnLiteCapped.Add(1)
 			m.tr.ev("lite: upgrade refused (duplication cap)")
 		case now.Before(m.lightRetryAt):
+		case !m.callUp && !st246Interactive(m.upLo) && !st244UpgradeToken(now): // HS2_ST244_UPG_RATE (mconn_st244.go): stay raw, ask at the next poll; st246: interactive flows not paced
 		default:
+			if m.rescueWantLocked(m.raw1) {
+				rescueDiagRawUp.Add(1)
+			}
 			m.lightOpening = true
-			avoid := m.callAvoidLocked(append([]any{m.raw1.key}, m.deadKeys...)) // HS2_MCONN_CALL_AVOID
-			avoid = m.rescueAvoidLocked(avoid, m.raw1.key)                       // HS2_LB_RESCUE_CALLFREE
+			m.trLocked(trLiteUp)
+			avoid := m.callAvoidLocked(append([]any{avoidKey(m.raw1.key)}, m.deadAvoidLocked()...)) // HS2_MCONN_CALL_AVOID
+			avoid = m.rescueAvoidLocked(avoid, m.raw1.key)                                          // HS2_LB_RESCUE_CALLFREE
 			m.mu.Unlock()
 			obs.mconnLiteUpgrade.Add(1)
 			m.upgradeRaw(avoid) // in the timer's own goroutine
 			return
 		}
 	}
-	m.rawTimer.Reset(m.stripeEarlyNextLocked(now, early))
+	m.rawTimer.Reset(m.stripeDlNextLocked(now, m.stripeEarlyNextLocked(now, early))) // HS2_MCONN_STRIPE_DL_FAST
 	m.mu.Unlock()
 }
 
@@ -377,8 +442,9 @@ func (m *mConn) rawTick() {
 func (m *mConn) upgradeRaw(avoid []any) { m.upgradeRawPlane(planeLight, avoid) }
 
 // upgradeRawPlane: step 1 with a sub of plane p (planeStripe: the first
-// stripe sub, mconn_stripe.go).
-func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) {
+// stripe sub, mconn_stripe.go). The error: the open's (nil once a sub came,
+// used or not) — sd151: openStripe reads errStripeSteerHeld from it.
+func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) error {
 	sub, key, err := m.open(p, avoid)
 	if err != nil {
 		m.mu.Lock()
@@ -389,7 +455,7 @@ func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) {
 			m.rawTimer.Reset(mLitePoll) // still raw: keep sampling
 		}
 		m.mu.Unlock()
-		return
+		return err
 	}
 	m.wmu.Lock() // a raw write in flight ends before the boundary is taken
 	m.mu.Lock()
@@ -398,7 +464,7 @@ func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) {
 		m.mu.Unlock()
 		m.wmu.Unlock()
 		sub.Close()
-		return
+		return nil
 	}
 	bi := uint64(m.rawSent.Load())
 	m.sendOff = bi
@@ -411,6 +477,7 @@ func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) {
 	}
 	m.raw1.gated = true
 	m.handshaking = true
+	m.hsStart = time.Now()
 	m.rawW.Store(false)
 	m.setStateLocked(mStateDual)
 	m.tr.ev("raw: upgrade, UPGRADE(%d) on sub %d (recvd=%d)", bi, s2.idx, m.rawRecvd.Load())
@@ -419,13 +486,14 @@ func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) {
 	m.wmu.Unlock()
 	go m.raw1.writeLoop()
 	m.startSub(s2)
-	go m.manage()
+	m.goManage()
 	if stUp {
 		// HS2_MCONN_STRIPE_UP: the manager's first tick, which arms its
 		// growth sampling; a download kicks it with its first gap, an upload
 		// receives nothing that would (mconn_stripe_up.go)
 		m.kickMgr()
 	}
+	return nil
 }
 
 // onUpgrade: an UPGRADE record on s (false: a protocol error).
@@ -457,6 +525,11 @@ func (m *mConn) onUpgrade(s *msub, off uint64) bool {
 			}
 		}
 		m.tr.ev("raw: UPGRADE(%d) from the peer, first sub open", off)
+		if stripeLog && m.stN > 0 {
+			// upov57: how long the chain waited (or, with
+			// HS2_MCONN_STRIPE_OVERLAP, did not) for the handshake
+			log.Printf("stripe %x: raw handshake %v (subs %d, sent raw %d)", m.id&0xffffff, time.Since(m.hsStart).Round(time.Millisecond), m.liveStripeLocked(), m.rawSent.Load())
+		}
 		chain := m.stFastMore > 0
 		m.mu.Unlock()
 		if chain {
@@ -467,6 +540,21 @@ func (m *mConn) onUpgrade(s *msub, off uint64) bool {
 		}
 		return true
 	}
+	if m.wclosed && m.rawW.Load() {
+		// hc183: this side half-closed its raw stream (a FIN on it) before
+		// the UPGRADE crossed it; it cannot write records there now.
+		// hc213 (audit211 M1): close only the joining sub, not the
+		// connection: an RST record on it could overtake the raw tail still
+		// on the first sub. Iran's handshake fails on it (its sub death),
+		// while the raw stream delivers through its FIN. Retired: its death
+		// says nothing about the connection here.
+		s.retired = true
+		m.mu.Unlock()
+		rawHCUpgradeLate.Add(1)
+		m.tr.ev("raw: UPGRADE(%d) after this side's raw half-close: joining sub closed", off)
+		m.subDied(s, errMConnUpLate)
+		return true
+	}
 	if m.upgraded { // step 2
 		m.mu.Unlock()
 		return true
@@ -474,14 +562,25 @@ func (m *mConn) onUpgrade(s *msub, off uint64) bool {
 	m.upgraded, m.handshaking = true, true
 	m.mu.Unlock()
 	m.setReadLimit(off) // before our UPGRADE tells Iran we know it
-	go m.upgradeSendExit(s)
+	go m.upgradeSendExit(s, off, time.Now())
 	return true
 }
 
+// errMConnUpLate / rawHCUpgradeLate (hc213): an UPGRADE that came after the
+// exit's raw half-close; its sub was closed.
+var (
+	errMConnUpLate   = errors.New("mconn: upgrade after raw half-close")
+	rawHCUpgradeLate atomic.Uint64
+)
+
 // upgradeSendExit (Kharej): the second half of step 2.
-func (m *mConn) upgradeSendExit(s2 *msub) {
+func (m *mConn) upgradeSendExit(s2 *msub, off uint64, got time.Time) {
 	m.wmu.Lock()
 	m.mu.Lock()
+	if stripeLog {
+		// hl235: the exit's half of a slow raw handshake (Iran logs the whole)
+		log.Printf("stripe %x: exit UPGRADE(%d) reply after %v (raw read %d)", m.id&0xffffff, off, time.Since(got).Round(time.Millisecond), m.rawRecvd.Load())
+	}
 	if m.ended || m.closing || !m.rawW.Load() || s2.dead {
 		m.mu.Unlock()
 		m.wmu.Unlock()
@@ -499,7 +598,7 @@ func (m *mConn) upgradeSendExit(s2 *msub) {
 	m.mu.Unlock()
 	m.wmu.Unlock()
 	go m.raw1.writeLoop()
-	go m.manage()
+	m.goManage()
 }
 
 // onUpAck (Kharej): step 4.

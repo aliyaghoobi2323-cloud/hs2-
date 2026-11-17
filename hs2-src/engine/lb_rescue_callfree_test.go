@@ -10,6 +10,7 @@ func withRescueCallFree(t *testing.T) {
 	withRescue(t, true)
 	lbRescueCallFree = true
 	t.Cleanup(func() {
+		waitConnLoops(t.Logf, mCloseLinger+mRSTWait+2*time.Second)
 		lbRescueCallFree = false
 		rescueCallLinks.mu.Lock()
 		rescueCallLinks.at = nil

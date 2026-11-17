@@ -64,6 +64,9 @@ func (b *LB) fillMin() int {
 		return 0
 	}
 	n := b.minDeficitLocked(b.now())
+	if n == 0 && b.silentProbeDueLocked(b.now()) {
+		n = 1 // HS2_LB_SILENT: a cooled path's probe rides on a spare dial (lb_silent.go)
+	}
 	f := b.spare
 	var names []string
 	if n > 0 {
@@ -77,6 +80,9 @@ func (b *LB) fillMin() int {
 	b.mu.Unlock()
 	if n > 0 {
 		f(n)
+		if len(names) == 0 {
+			return n // HS2_LB_SILENT: the spare is a cooled path's probe (silentProbeDueLocked), not a short path
+		}
 		if b.spareLog.Load() == 0 || time.Since(monoTime(b.spareLog.Load())) >= time.Minute {
 			b.spareLog.Store(monoNano(time.Now()))
 			b.log("lb auto2: %d link(s) short of two per path on %v — spare dial(s) asked of the pool (nothing closed for them)", n, names)
@@ -90,6 +96,13 @@ func (b *LB) fillMin() int {
 // one spare dial is asked for (its dial goes to the path furthest under),
 // counted in lb2DrainPerMin like a retire.
 func (b *LB) spareForGap(now time.Time) bool {
+	T := 0
+	b.mu.Lock()
+	wf := b.spareWant
+	b.mu.Unlock()
+	if lbSpareEdge && wf != nil {
+		T = wf() // the pool's lock, not under b.mu
+	}
 	b.mu.Lock()
 	if b.spare == nil || len(b.drained) >= lb2DrainPerMin {
 		b.mu.Unlock()
@@ -123,10 +136,32 @@ func (b *LB) spareForGap(now time.Time) bool {
 		}
 	}
 	if under < 0 || over < 0 || underBy < 1 || overBy < 1 {
+		if lbSpareEdge {
+			b.gapClearLocked(-1)
+		}
 		b.mu.Unlock()
 		return false
 	}
-	k := min(lbSparePerRound, int(underBy), lb2DrainPerMin-len(b.drained)) // lb_fill17.go; 1 unless HS2_LB_SPARE_PER_ROUND
+	room := 8
+	if lbSpareEdge { // lb_spare176.go: only spares the edge would serve
+		b.gapClearLocked(under)
+		n := total
+		if T > 0 && T < n {
+			n = T
+		}
+		room = b.edgeRoomLocked(under, eff, n, now)
+		if room == 0 || b.gapWaitLocked(under, now) {
+			uname := b.paths[under].Name()
+			b.mu.Unlock()
+			if t := b.gapSkipLog.Load(); t == 0 || time.Since(monoTime(t)) >= 10*time.Minute {
+				b.gapSkipLog.Store(monoNano(time.Now()))
+				b.log("lb auto2: rebalance — %s is %.1f links under its share of all %d links, but not of the %d the edge serves (or its last spare did not stay): no spare dial", uname, underBy, total, n)
+			}
+			return false
+		}
+		b.gapAskedLocked(under, now)
+	}
+	k := min(lbSparePerRound, int(underBy), lb2DrainPerMin-len(b.drained), room) // lb_fill17.go; 1 unless HS2_LB_SPARE_PER_ROUND
 	k = max(k, 1)
 	for i := 0; i < k; i++ {
 		b.drained = append(b.drained, now)
@@ -236,14 +271,16 @@ var lb2Carry = time.Minute
 type lb2Acc struct {
 	segs, retr uint64
 	since      time.Time
+	sil        silentAcc // HS2_LB_SILENT: the links' acked bytes over the carried window
 }
 
 // carryLocked adds a tick's counts of path j and returns a reading's counts
-// when there are enough. Caller holds b.mu.
-func (b *LB) carryLocked(j int, segs, retr uint64) (uint64, uint64, bool) {
+// when there are enough; noAck: the reading's links were measured and got
+// none of their bytes acked (HS2_LB_SILENT, lb_silent.go). Caller holds b.mu.
+func (b *LB) carryLocked(j int, segs, retr uint64, sil silentAcc) (uint64, uint64, bool, bool) {
 	if segs >= lb2MinSegs {
 		delete(b.acc2, b.paths[j].Name())
-		return segs, retr, true
+		return segs, retr, sil.noAck(), true
 	}
 	if b.acc2 == nil {
 		b.acc2 = map[string]*lb2Acc{}
@@ -256,10 +293,12 @@ func (b *LB) carryLocked(j int, segs, retr uint64) (uint64, uint64, bool) {
 	}
 	a.segs += segs
 	a.retr += retr
+	a.sil.links += sil.links
+	a.sil.acked += sil.acked
 	if a.segs >= lb2MinSegs || a.segs >= lb2MinSegs/4 && now.Sub(a.since) >= lb2Carry {
-		s, r := a.segs, a.retr
+		s, r, na := a.segs, a.retr, a.sil.noAck()
 		delete(b.acc2, b.paths[j].Name())
-		return s, r, true
+		return s, r, na, true
 	}
-	return 0, 0, false
+	return 0, 0, false, false
 }

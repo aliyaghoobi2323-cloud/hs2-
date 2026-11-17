@@ -140,6 +140,7 @@ func (b *LB) Run(ctx context.Context) {
 			b.fillMin() // HS2_LB_AUTO2: every live path two links (lb_spare.go)
 			if b.isAuto() {
 				if rs := b.measure(qe); b.isAuto2() {
+					b.pmtuHint(rs) // HS2_LB_PMTU_HINT (lb_pmtu135.go); nothing when off
 					b.adapt2(rs)
 				} else {
 					b.adapt()
@@ -198,7 +199,14 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 	defer b.mu.Unlock()
 	n := len(b.paths)
 	segs, retr := make([]uint64, n), make([]uint64, n)
+	acked := make([]uint64, n) // HS2_LB_SELFQ (lb_selfq81.go)
 	delays := make([][]float64, n)
+	sil := make([]silentAcc, n) // HS2_LB_SILENT (lb_silent.go)
+	var dbgBo []uint8
+	var dbgNew []int
+	if lbRecDebug && lbSilent {
+		dbgBo, dbgNew = make([]uint8, n), make([]int, n)
+	}
 	for _, r := range rs {
 		if _, ok := b.held[r.key]; !ok {
 			continue // ended meanwhile
@@ -206,29 +214,70 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 		cur := qPrev{acked: r.st.bytesAcked, segsOut: uint64(r.st.segsOut), retrans: r.st.retrans}
 		prev, seen := b.qprev[r.key]
 		b.qprev[r.key] = cur
+		if dbgBo != nil && r.st.backoff > dbgBo[r.path] {
+			dbgBo[r.path] = r.st.backoff
+		}
 		if !seen || cur.acked < prev.acked || cur.segsOut < prev.segsOut || cur.retrans < prev.retrans {
+			if dbgNew != nil {
+				dbgNew[r.path]++
+			}
 			continue
 		}
 		segs[r.path] += cur.segsOut - prev.segsOut
 		retr[r.path] += cur.retrans - prev.retrans
+		acked[r.path] += cur.acked - prev.acked
+		sil[r.path].add(cur.acked-prev.acked, cur.retrans-prev.retrans, r.st.backoff)
 		if cur.acked-prev.acked >= qBusyBytes && r.st.minRttUs > 0 && r.st.rttUs >= r.st.minRttUs {
 			delays[r.path] = append(delays[r.path], float64(r.st.rttUs-r.st.minRttUs)/1000)
 		}
 	}
 	auto2 := b.auto2On()
+	self := selfLoaded(acked) // HS2_LB_SELFQ: nil when off
+	if dbgBo != nil && auto2 {
+		held := make([]int, n)
+		for _, p := range b.held {
+			if p >= 0 && p < n {
+				held[p]++
+			}
+		}
+		for j := range b.paths {
+			if sil[j].acked == 0 || held[j] <= 8 {
+				var cs uint64
+				if a := b.acc2[b.paths[j].Name()]; a != nil {
+					cs = a.segs
+				}
+				b.log("lb silentdbg: path %s held %d read %d new %d acked %d stalled %v maxBackoff %d segs %d retr %d carry %d", b.paths[j].Name(), held[j], sil[j].links, dbgNew[j], sil[j].acked, sil[j].stalled, dbgBo[j], segs[j], retr[j], cs)
+			}
+		}
+	}
 	raw := map[int]q2Reading{}
 	for j := range b.paths {
-		if auto2 {
+		if auto2 && lbSilent && sil[j].silent() {
+			// Nothing acked over the window while data waited: a blackhole
+			// gives no countable reading otherwise (lb_silent.go).
+			delete(b.acc2, b.paths[j].Name())
+			raw[j] = q2Reading{loss: silentLoss, segs: segs[j], silent: true}
+		} else if auto2 {
 			// A path with little traffic (a cut path's probe links) adds its
 			// counts up over the ticks until they make a reading (lb_spare.go).
-			sj, rj, ok := b.carryLocked(j, segs[j], retr[j])
+			sj, rj, noAck, ok := b.carryLocked(j, segs[j], retr[j], sil[j])
 			if ok {
-				r := q2Reading{loss: float64(rj) / float64(sj), segs: sj}
+				r := q2Reading{loss: float64(rj) / float64(sj), segs: sj, noAck: noAck}
 				if d := delays[j]; len(d) > 0 {
 					sort.Float64s(d)
 					r.queueMs = d[len(d)/2]
 				}
+				r.selfQ = self != nil && self[j]
 				r.fail = judgeFail(b.dials[j], b.dfails[j], b.cfails[j])
+				raw[j] = r
+			} else if lbSilent && sil[j].acked > 0 {
+				// Too few segments for a reading, but bytes acked: two-way
+				// delivery, which ends a silent cut (lb_silent.go); the judge
+				// drops it for any other path.
+				r := q2Reading{segs: segs[j], ackOnly: true}
+				if segs[j] > 0 {
+					r.loss = float64(retr[j]) / float64(segs[j])
+				}
 				raw[j] = r
 			}
 		} else {

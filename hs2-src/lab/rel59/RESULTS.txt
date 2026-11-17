@@ -1,0 +1,35 @@
+rel59 = dl79 c41593e6 + rt80 + lbv81 + lb84 + hv83 (all new keys off). binary e5de2cb9 (built from cc54a632, CGO_ENABLED=0 -trimpath -s -w)
+envdef/ and both defaults22.go are byte-identical to dl79 (no key added to the table).
+
+A/B lab2 --all, dl79 prod-like lab (reverse l3mtcp, 10 paths 90 ms, loss 0.2-2 %, crowd 3000 + call + game, one iperf3), d59.sh.
+Arms: A = dl79 edge (hs2D79 dec281e0) + rel58 exit (5d87000d) = production; E = rel59 edge + rel58 exit;
+B = rel59 both; F = rel58 edge + rel59 exit; G = dl79 both (only d8, interleaved with B runs 8-12).
+Rounds 0-2: all arms d1/d8/u1; rounds 3-7: d8 A/E/B; rounds 8-12: d8 G/B. Full table: ab59-sum.txt.
+
+mode arm  n  mbps    crowd  call  game  echo  ping   (p99 ms)
+d1   A    3   475    171.0  226.8 134.0 132.5 140.3
+d1   E    3   605    170.6  222.4 150.1 146.7 112.1
+d1   B    3   606    171.5  200.6 155.8 122.0 113.8
+d1   F    3   284    168.7  213.8 150.8 115.1 128.5
+d8   A    7  1511    180.3  215.2 134.4 111.6 114.9
+d8   E    7  1500    178.8  224.2 138.5 131.1 125.6
+d8   B   13  1393    180.3  221.6 152.8 122.6 125.2
+d8   G    5  1469    181.4  215.2 152.4 139.6 111.8
+d8   F    3  1091    176.2  292.0 152.9 139.2 124.0
+u1   A    3   383    169.1  226.8 138.8 131.3 117.8
+u1   E    3   444    171.3  240.2 171.8 128.3 104.6
+u1   B    3   435    168.1  262.6 152.1 116.5 111.7
+u1   F    3   477    168.4  214.9 159.9 122.8 106.3
+
+- E vs A (the change that would ship on the Iran edge): d8 -0.7 % (p 0.90), d1/u1 up (n=3, p>0.2); crowd p99 equal (+-1 ms).
+- B vs A d8 -7.8 % (p 0.13); B rounds 0-2 were low, in the interleaved rounds 8-12 B 1442 vs G (dl79 both) 1469 (-1.8 %):
+  the exit binary from the dl79 lineage, not the rel59 merges; no significant difference.
+- F (rel58 edge) is the old edge without dl79's default heavy floor: d1/d8 low as in results79 (gate74 A d8 1093). Works, no failures.
+- crowd p99 within +-2 ms in every arm; call/game/echo/ping p99 move both ways within n=3 noise.
+
+Tests (lab2, niced on 3 cores while the A/B ran): gofmt clean, go vet clean; go test ./... all ok except
+engine TestStripeAllDieGraceRejoins (timing, fails 1/5 on dl79 c41593e6 too under the same load);
+go test -race ./engine ./cmd/hs2: no data race, same single timing test fails; cmd/hs2 ok.
+Soak: unit rel59soak (lab2), soak59.sh, 6 h, output /opt/hs2lab/rel59soak, view: soakview.sh.
+install/tests: 24/24 *.sh pass. multi_tunnel_test.py: all pass except scenario 10 "uninstall (ir)" (2 checks: the Enter answer
+to "Also remove the hs2 program…" is not seen, rc=-99); dl79 c41593e6 with hs2D79 fails the same 2 checks — the test was already failing, not rel59.

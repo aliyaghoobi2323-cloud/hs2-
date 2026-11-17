@@ -107,6 +107,10 @@ type q2Reading struct {
 	queueMs float64
 	fail    float64
 	segs    uint64 // segments the reading counted (0: unknown; HS2_LB_REC_DEBUG)
+	selfQ   bool   // HS2_LB_SELFQ: our own bytes crowd this path; its queue may not rise (lb_selfq81.go)
+	silent  bool   // HS2_LB_SILENT: nothing acked over the window while data waited (lb_silent.go)
+	noAck   bool   // HS2_LB_SILENT: its links were measured and none of their bytes was acked (lb_silent.go)
+	ackOnly bool   // HS2_LB_SILENT: too few segments for a reading, but bytes acked (counts only after a silence)
 }
 
 // q2Path is one path's judged state.
@@ -125,14 +129,21 @@ type q2Path struct {
 	lastRead   time.Time
 	hold       time.Duration
 	uncutAt    time.Time
-	okRuns     int     // HS2_LB_FAST_RECOVER: raw readings in a row under the bar
-	fastResets int     // HS2_LB_FAST_RECOVER: smoothed-loss resets
-	flap       q2Flap  // HS2_LB_FLAP_PEN
-	overRuns   int     // HS2_LB_REC_CONFIRM: raw readings in a row at/over the bar while cut
-	fast       bool    // HS2_LB_FAST_VERDICT: the last reading was a clear degradation (lb_fastverdict.go)
-	factor     float64 // the edge's applied weight (the dialing side keeps its own)
+	okRuns     int         // HS2_LB_FAST_RECOVER: raw readings in a row under the bar
+	fastResets int         // HS2_LB_FAST_RECOVER: smoothed-loss resets
+	flap       q2Flap      // HS2_LB_FLAP_PEN
+	overRuns   int         // HS2_LB_REC_CONFIRM: raw readings in a row at/over the bar while cut
+	ramp       float64     // HS2_LB_REC_RAMP: cap on the target while climbing back (0: none; lb_ramp178.go)
+	rampCuts   []time.Time // HS2_LB_REC_RAMP: cuts within lbFlapWin
+	lowRuns    int         // HS2_LB_LOWER_EVID: readings in a row under the bar (lb_deadband178.go)
+	lowAt      time.Time   // HS2_LB_LOWER_EVID: the reading lowRuns last counted
+	fast       bool        // HS2_LB_FAST_VERDICT: the last reading was a clear degradation (lb_fastverdict.go)
+	remCut     bool        // edge: the dialing side's latest report (≤ 20 s old) cuts this path (HS2_LB_EDGE_SYNC)
+	factor     float64     // the edge's applied weight (the dialing side keeps its own)
 	target     float64
 	reason     string
+	silentRuns int  // HS2_LB_SILENT: silent readings in a row (lb_silent.go)
+	silentHeld bool // HS2_LB_SILENT: a noAck reading was held silent in this silence (logged once)
 }
 
 // q2Judge judges a set of paths named "local>remote".
@@ -147,6 +158,11 @@ type q2Judge struct {
 	// while their paths stay cut.
 	verdicts map[string]string // IP -> sentence
 	log      func(string, ...any)
+	// cutOut (nil: no TUN) is the tunnel's cut path set the judge publishes
+	// into (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go); set by its owner.
+	cutOut *l3CutSet
+	// commonRuns: readings in a row HS2_LB_COMMON_GUARD held as a common cause (lb_common.go)
+	commonRuns int
 }
 
 func newQ2Judge(floor float64, localN, remN string, logf func(string, ...any)) *q2Judge {
@@ -181,6 +197,12 @@ func q2Alpha(perSec float64, dt time.Duration) float64 {
 // update folds one tick's readings (paths absent: no reading) and sets every
 // known path's target factor and reason.
 func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Reading) {
+	rs = j.silentAckOnly(rs) // HS2_LB_SILENT (lb_silent.go): an acked-only reading counts only after a silence
+	rs = j.silentHold(rs)    // HS2_LB_SILENT (lb_silent.go): a silent path recovers only on bytes acked
+	rs = silentFilter(rs)    // HS2_LB_SILENT (lb_silent.go): silence counts only beside a normal reading
+	if j.commonHold(rs) {
+		return // HS2_LB_COMMON_GUARD (lb_common.go): most paths jumped at once — not their fault
+	}
 	// A reading is "bad" over lb2CutLoss AND well above the best path read
 	// this tick (2× + 1 point): loss every path shares (a full queue, the
 	// whole border) is not one path's fault, and moving users would not help.
@@ -196,6 +218,9 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		q := j.path(k)
 		q.raw = r.loss
 		dt := dt
+		if j.silentFold(k, q, r, len(rs)-1) {
+			q.have = false // the first normal reading after a silence: smoothing restarts from it
+		}
 		if q.have { // readings may come less often than the ticks (a quiet path, the report)
 			dt = min(max(now.Sub(q.lastRead), dt), 10*time.Second)
 		}
@@ -211,7 +236,9 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			if r.queueMs > q.queueMs {
 				a = q2Alpha(lb2AlphaUp, dt)
 			}
-			q.queueMs += a * (r.queueMs - q.queueMs)
+			if !r.selfQ || r.queueMs < q.queueMs {
+				q.queueMs += a * (r.queueMs - q.queueMs)
+			}
 		}
 		if fastRecoverFold(q, r.loss, okBar0, now) && q.fastResets == 1 {
 			j.log("lb auto2: path %s fast recovery: raw loss %.1f%% under %.1f%% %d readings in a row — smoothed loss reset", k, 100*r.loss, 100*okBar0, q.okRuns)
@@ -257,10 +284,13 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		relCut := why == "" && !j.allBad // the relative path rule alone (HS2_LB_FLAP_PEN)
 		if !q.cut && (q.bad >= lb2CutRuns || why != "") {
 			q.cut, q.cutAt, q.okSince, q.overRuns = true, now, time.Time{}, 0
-			if why == "" {
+			if why == "" && q.silentRuns > 0 {
+				why = fmt.Sprintf("silent: nothing acked for %d readings", q.silentRuns)
+			} else if why == "" {
 				why = fmt.Sprintf("loss %.1f%%", 100*q.raw)
 			}
 			q.cutWhy = why
+			rampNoteCut(q, now) // HS2_LB_REC_RAMP (lb_ramp178.go)
 			if !q.uncutAt.IsZero() && now.Sub(q.uncutAt) < lb2FlapWin && q.hold > 0 {
 				q.hold = min(2*q.hold, lb2HoldMax)
 			} else {
@@ -273,6 +303,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			continue
 		}
 		if !q.cut {
+			rampAdvance(q, now, okBar) // HS2_LB_REC_RAMP (lb_ramp178.go)
 			continue
 		}
 		hold := recoverHold(q)
@@ -307,8 +338,12 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		if lbRecConfirm && confirmOK && q.ewma > q.raw {
 			q.ewma = q.raw // a lone spike does not hold the recovered path's weight down
 		}
+		if edgeSyncHolds(q) {
+			continue // HS2_LB_EDGE_SYNC: the dialing side still cuts it (lb_edgesync.go)
+		}
 		if (!lbRecConfirm && !q.okSince.IsZero() && now.Sub(q.okSince) >= hold) || confirmOK || quiet {
 			q.cut, q.uncutAt, q.bad, q.overRuns = false, now, 0, 0
+			rampStart(q, j.floor) // HS2_LB_REC_RAMP (lb_ramp178.go)
 			j.flapRecovered(k, q, now)
 			what := "loss back under " + ftoa1(100*okBar) + "%"
 			if quiet {
@@ -336,11 +371,15 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 func ftoa1(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) }
 
 func q2Goodness(q *q2Path) float64 {
+	if lbLowerEvid {
+		return q2GoodnessEvid(q) // HS2_LB_LOWER_EVID (lb_deadband178.go)
+	}
 	return 1 / (1 + 100*q.ewma/2 + q.queueMs/50 + 4*q.fail)
 }
 
 // targets sets every path's target factor and reason from the judged state.
 func (j *q2Judge) targets() {
+	defer j.publishCutPaths() // HS2_LB_RESCUE_CUT_L3 (l3_cutavoid.go)
 	// "All paths lossy" is relative like the cut: every path over lb2CutLoss
 	// AND over the bar the best path sets (2× its loss + 1 point), or cut
 	// while no path is better. One path clearly better than the rest (IPv6 at
@@ -380,8 +419,11 @@ func (j *q2Judge) targets() {
 			if gmax > 0 {
 				r = q2Goodness(q) / gmax
 			}
-			if r >= lb2Dead && !q.fast {
+			if r >= deadBar(q) && !q.fast {
 				q.target, q.reason = 1, "ok"
+				lowerReset(q) // HS2_LB_LOWER_EVID (lb_deadband178.go)
+			} else if lowerHold(q) {
+				// HS2_LB_LOWER_EVID: one low reading on a path at "ok" — wait for a second
 			} else {
 				q.target = math.Max(j.floor, r*r)
 				q.reason = fmt.Sprintf("lower: loss %.1f%%", 100*q.ewma)
@@ -396,6 +438,7 @@ func (j *q2Judge) targets() {
 					q.reason += fmt.Sprintf(", dial fail %.0f%%", 100*q.fail)
 				}
 			}
+			rampCap(q) // HS2_LB_REC_RAMP (lb_ramp178.go)
 		}
 	}
 }
@@ -461,13 +504,17 @@ func (b *LB) adapt2(rs map[int]q2Reading) {
 		}
 	}
 	b.judge.forget(keep)
+	b.judge.cutOut = b.l3Cut // HS2_LB_RESCUE_CUT_L3: this tunnel's set (l3_cutavoid.go)
 	b.judge.update(now, lb2QualEvery, in)
 	b.judgeAt = now
+	b.stripeSteerMarkLocked() // HS2_LB_STRIPE_STEER on the exit (mconn_stripe_steer.go)
 	target := append([]float64(nil), b.mult...)
 	for j, p := range b.paths {
 		if q := b.judge.p[p.Name()]; q != nil {
 			target[j] = q.target
 			b.qual[j].loss, b.qual[j].queueMs, b.qual[j].have = q.ewma, q.queueMs, q.have
+		} else if silentBackTarget(keep[p.Name()]) {
+			target[j] = 1 // HS2_LB_SILENT: back from a cooldown, judged afresh (lb_silent.go)
 		}
 	}
 	target = lb2Cap(b.paths, target, keep)
@@ -486,7 +533,7 @@ func (b *LB) adapt2(rs map[int]q2Reading) {
 		// cap would hand it its share at once, not step by step)
 		settled := map[string]bool{}
 		for _, jj := range idx {
-			settled[b.paths[jj].Name()] = b.mult[jj] >= 0.9*target[jj]
+			settled[b.paths[jj].Name()] = b.mult[jj] >= 0.9*target[jj] && !b.judge.ramping(b.paths[jj].Name())
 		}
 		alt := b.judge.mediocreAlt(names, func(n string) bool { return settled[n] })
 		ws, caps := make([]float64, len(idx)), make([]float64, len(idx))
@@ -601,7 +648,8 @@ func (b *LB) rebalance2() int {
 		}
 	}
 	b.drained = kept
-	if total < 2 || (total < b.drainFloor && now.Sub(b.drainAt) < 30*time.Second) || len(b.drained) >= lb2DrainPerMin {
+	batch, perMin := b.drainLimitsLocked(now, total) // HS2_LB_SILENT_REGROW (lb_silent.go)
+	if total < 2 || (total < b.drainFloor && now.Sub(b.drainAt) < 30*time.Second) || len(b.drained) >= perMin {
 		b.mu.Unlock()
 		return 0
 	}
@@ -634,7 +682,7 @@ func (b *LB) rebalance2() int {
 			}
 		}
 	}
-	room := min(lb2DrainBatch, lb2DrainPerMin-len(b.drained))
+	room := min(batch, perMin-len(b.drained))
 	if lbTestNoIdle { // lab only (lb_fill17.go): a busy tunnel has no idle link to retire
 		room = 0
 	}
@@ -735,16 +783,20 @@ type lbSteerState struct {
 	repUsed                    time.Time
 	// the fresh report by edge path key (steerTickLocked): effective share %,
 	// factor, cut, sender loss (fraction). Empty: no fresh report.
-	repShare     map[string]float64
-	repFactor    map[string]float64
-	repCut       map[string]bool
-	repLoss      map[string]float64
-	logs         []string
-	rescued      map[any]bool // HS2_LB_RESCUE: links marked lowered (lb_rescue.go)
-	rescueLogged int64
-	callPaths    map[any]bool // HS2_LB_CALL_STUCK: links whose path is recorded (lb_call_stuck.go)
-	stuckLogged  int64
-	lateLogged   int64 // HS2_LB_CALL_LATE: callLateOpened at the last log line
+	repShare        map[string]float64
+	repFactor       map[string]float64
+	repCut          map[string]bool
+	repLoss         map[string]float64
+	logs            []string
+	rescued         map[any]bool // HS2_LB_RESCUE: links marked lowered (lb_rescue.go)
+	rescueLogged    int64
+	rescuedCut      map[any]bool // HS2_LB_RESCUE_CUT (lb_rescue_cut.go)
+	rescueCutLogged int64
+	callPaths       map[any]bool // HS2_LB_CALL_STUCK: links whose path is recorded (lb_call_stuck.go)
+	stuckLogged     int64
+	lateLogged      int64                 // HS2_LB_CALL_LATE: callLateOpened at the last log line
+	sil             map[string]*silentAcc // HS2_LB_SILENT: this tick's counts per path (lb_silent.go)
+	up              *lbUpState            // HS2_LB_UPLOSS: the upload judge (lb_uploss.go)
 }
 
 func newSteerState() *lbSteerState {
@@ -771,6 +823,7 @@ type steerLink struct {
 	segsOut  uint32
 	off      bool // a cut path's link beyond the lb2Keep that take new connections
 	picksAll uint64
+	acked    uint64 // HS2_LB_SILENT: bytes acked at the last tick
 }
 
 // steerNote adds one link's counters since its last tick. Caller holds m.mu.
@@ -788,7 +841,7 @@ func (st *lbSteerState) note(ml *managedLink, o *linkObs) {
 		if o.peerLoss != nil {
 			s.peer = *o.peerLoss
 		}
-		s.retrans, s.segsOut = o.ts.retrans, o.ts.segsOut
+		s.retrans, s.segsOut, s.acked = o.ts.retrans, o.ts.segsOut, o.ts.bytesAcked
 		return
 	}
 	if r := o.peerLoss; r != nil && r.n != s.peer.n {
@@ -807,6 +860,18 @@ func (st *lbSteerState) note(ml *managedLink, o *linkObs) {
 		s.peer = *r
 	}
 	if o.tsOK {
+		if lbSilent && o.ts.retrans >= s.retrans && o.ts.bytesAcked >= s.acked {
+			if st.sil == nil {
+				st.sil = map[string]*silentAcc{}
+			}
+			a := st.sil[path]
+			if a == nil {
+				a = &silentAcc{}
+				st.sil[path] = a
+			}
+			a.add(o.ts.bytesAcked-s.acked, o.ts.retrans-s.retrans, o.ts.backoff)
+		}
+		s.acked = o.ts.bytesAcked
 		if o.ts.retrans >= s.retrans && o.ts.segsOut != 0 && s.segsOut != 0 {
 			st.upRt[path] += o.ts.retrans - s.retrans
 			st.upSegs[path] += uint64(o.ts.segsOut - s.segsOut)
@@ -818,6 +883,7 @@ func (st *lbSteerState) note(ml *managedLink, o *linkObs) {
 // tick judges the paths from this tick's counts and marks the links of cut
 // paths beyond the lb2Keep that keep taking new connections. Caller holds m.mu.
 func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
+	m.steerGen.Add(1) // lk165: the draw cache (lm_steercache.go) is rebuilt after a tick
 	st := m.steer
 	rs := map[string]q2Reading{}
 	frac := func(rt, segs uint64) (float64, bool) {
@@ -845,11 +911,30 @@ func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
 			}
 		}
 	}
-	st.dnRt, st.dnSegs, st.upRt, st.upSegs = nil, nil, nil, nil
+	// HS2_LB_SILENT: a path whose links waited for ACKs and got none (the
+	// paths a fresh report covers take the dialing side's word below).
+	for p, a := range st.sil {
+		if r, ok := rs[p]; !ok && a.silent() {
+			rs[p] = q2Reading{loss: silentLoss, silent: true}
+		} else if ok && a.noAck() {
+			r.noAck = true // no evidence of two-way delivery (silentHold)
+			rs[p] = r
+		}
+	}
+	if lbUpLoss { // HS2_LB_UPLOSS (lb_uploss.go): the upload counts, summed to the exit's cadence
+		if st.up == nil {
+			st.up = newUpState(func(f string, a ...any) { st.logs = append(st.logs, fmt.Sprintf(f, a...)) })
+		}
+		st.up.add(st.upRt, st.upSegs)
+	}
+	st.dnRt, st.dnSegs, st.upRt, st.upSegs, st.sil = nil, nil, nil, nil, nil
 	// The dialing side's report (lb_report.go), when fresh, replaces this
 	// side's own estimate for the paths it covers: its loss is the sender's
 	// own count, and its cuts are taken at once (both sides then agree).
 	forced := map[string]string{}
+	for _, q := range st.judge.p {
+		q.remCut = false
+	}
 	if r := st.rep; r != nil && now.Sub(r.At) <= 20*time.Second {
 		fresh := r.At.After(st.repUsed)
 		st.repUsed = r.At
@@ -859,6 +944,9 @@ func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
 			}
 			k := p.Remote + ">" + p.Local
 			delete(rs, k)
+			if p.Cut {
+				st.judge.path(k).remCut = true
+			}
 			if !fresh {
 				continue
 			}
@@ -882,6 +970,7 @@ func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
 	for p := range alive {
 		st.judge.path(p)
 	}
+	st.judge.cutOut = m.l3Cut // HS2_LB_RESCUE_CUT_L3: this tunnel's set (l3_cutavoid.go)
 	st.judge.update(now, dt, rs)
 	for k, why := range forced {
 		if alive[k] {
@@ -902,6 +991,12 @@ func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
 			st.repShare[k], st.repFactor[k], st.repCut[k], st.repLoss[k] = p.EffPct, p.Factor, p.Cut, p.LossPct/100
 		}
 		st.active = len(st.repShare) >= 2
+	}
+	if st.up != nil { // HS2_LB_UPLOSS (lb_uploss.go)
+		st.up.tick(now, alive)
+		if st.active {
+			st.up.fold(st.repShare, st.repFactor, st.repLoss, st.repCut)
+		}
 	}
 	m.steerRescueLocked(byPath) // HS2_LB_RESCUE (lb_rescue.go)
 	for p, ls := range byPath {
@@ -929,6 +1024,7 @@ func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
 			ml.steer.off = cut
 		}
 	}
+	m.stripeSteerMarkLocked() // HS2_LB_STRIPE_STEER (mconn_stripe_steer.go)
 }
 
 // steerWeightLocked is a link's path weight for new connections (1 = full).
@@ -955,6 +1051,11 @@ func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) 
 	if st == nil || !st.active {
 		return ""
 	}
+	if lmFastPick.Load() {
+		if p, ok := m.steerDrawCached(light, cand); ok {
+			return p // lk165 (lm_steercache.go): the same draw, weights cached per steer tick
+		}
+	}
 	cnt := map[string]int{}
 	for _, ml := range m.links {
 		if p := mlPath(ml); p != "" && !ml.steer.off && cand(ml) {
@@ -969,6 +1070,42 @@ func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) 
 		keys = append(keys, p)
 	}
 	sort.Strings(keys)
+	ws, tot := m.steerWeightsLocked(light, keys)
+	if tot <= 0 {
+		return ""
+	}
+	return steerPick(keys, ws, tot)
+}
+
+// steerPick draws one of keys in proportion to ws (tot: their sum, > 0).
+func steerPick(keys []string, ws []float64, tot float64) string {
+	if h := pickRandHook.Load(); h != nil { // rel69h tests: any key with weight
+		var pos []string
+		for i, p := range keys {
+			if ws[i] > 0 {
+				pos = append(pos, p)
+			}
+		}
+		if len(pos) == 0 {
+			return keys[len(keys)-1]
+		}
+		return pos[h.choose(len(pos))]
+	}
+	x := rand.Float64() * tot
+	for i, p := range keys {
+		if x < ws[i] {
+			return p
+		}
+		x -= ws[i]
+	}
+	return keys[len(keys)-1]
+}
+
+// steerWeightsLocked is steerDrawLocked's weight for each of keys (sorted,
+// at least two, steering active) and their sum: a function of the steer
+// state (changed only by steerTickLocked) and keys alone.
+func (m *LinkManager) steerWeightsLocked(light bool, keys []string) ([]float64, float64) {
+	st := m.steer
 	best := 0.0
 	for _, p := range keys {
 		best = math.Max(best, m.steerFactor(p))
@@ -989,6 +1126,9 @@ func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) 
 			w = mean // not in the report yet (a path just added): an average path
 		}
 		ws[i] = math.Max(w, 0.01)
+		if lbCutNoNew && st.repCut[p] {
+			ws[i] = 0 // HS2_LB_CUT_NONEW: no new connection drawn onto a cut path (lb_flap24.go)
+		}
 		mediocre[i] = ok && !st.repCut[p] && st.repLoss[p] <= lb2Mediocre
 	}
 	for i := range keys {
@@ -1029,17 +1169,7 @@ func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) 
 	for _, w := range ws {
 		tot += w
 	}
-	if tot <= 0 {
-		return ""
-	}
-	x := rand.Float64() * tot
-	for i, p := range keys {
-		if x < ws[i] {
-			return p
-		}
-		x -= ws[i]
-	}
-	return keys[len(keys)-1]
+	return ws, tot
 }
 
 // steerFactor is path p's quality factor as the dialing side reports it (1:
@@ -1114,6 +1244,7 @@ func (j *q2Judge) forceCut(k, why string, now time.Time) {
 		why = "the dialing side cut it"
 	}
 	q.cutWhy = why
+	rampNoteCut(q, now) // HS2_LB_REC_RAMP (lb_ramp178.go)
 	if lbFastRecover && q.okRuns >= lbFastOKRuns && q.hold > 0 {
 		// HS2_LB_FAST_RECOVER: our own raw readings are still good — the
 		// dialing side's verdict lags ours; not a new cut, the hold stays.

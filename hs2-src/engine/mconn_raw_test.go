@@ -50,7 +50,11 @@ func forceUpgrade(m *mConn) {
 	m.lightOpening = true
 	avoid := []any{m.raw1.key}
 	m.mu.Unlock()
-	go m.upgradeRaw(avoid)
+	upgradesInFlight.Add(1)
+	go func() {
+		defer upgradesInFlight.Add(-1)
+		m.upgradeRaw(avoid)
+	}()
 }
 
 // xfer writes data in random pieces with a pause between them.

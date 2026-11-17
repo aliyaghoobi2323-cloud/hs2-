@@ -58,63 +58,63 @@ func TestCheckAcceptsInstallerConfigs(t *testing.T) {
 			"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1380,
 			"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `, "expose": "127.0.0.1:8443"}`,
 		"iran direct tcp": `{"mode": "dial", "carrier": "mtcp", "reverse": false, "udp": false,
-			"addr": "91.107.166.13:2096", "sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.1/30",
+			"addr": "203.0.113.64:2096", "sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.1/30",
 			"peer_ip": "10.77.0.2", "mtu": 1380, "shared_key": "` + testKey + `", "forward_ports": "8443,443",
 			"peer_panel": "127.0.0.1:8443", "min_links": 8, "max_links": 16, "per_link": 8,
 			"bind_local_ip": "", "user_listen_ip": ""}`,
 		"iran reverse tcp": `{"mode": "dial", "carrier": "mtcp", "reverse": true, "udp": false,
-			"addr": "5.57.38.168:2082", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
+			"addr": "198.51.100.168:2082", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
 			"mtu": 1380, "backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `,
 			"forward_ports": "8443", "user_listen_ip": ""}`,
-		"kharej reverse tcp": `{"mode": "listen", "carrier": "mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+		"kharej reverse tcp": `{"mode": "listen", "carrier": "mtcp", "reverse": true, "addr": "198.51.100.168:2082",
 			"sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1380,
 			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "min_links": 8, "max_links": 16,
-			"per_link": 8, "bind_local_ip": "91.107.166.13"}`,
+			"per_link": 8, "bind_local_ip": "203.0.113.64"}`,
 		// tun over TLS (l3mtcp): the TUN is a routed side channel and the panel
 		// inbound is forwarded like tcp — the edge opens forward_ports, the exit
 		// delivers them to expose. All four direction/role shapes.
-		"kharej direct tun": `{"mode": "listen", "carrier": "l3mtcp", "reverse": false, "addr": "91.107.166.13:2096",
+		"kharej direct tun": `{"mode": "listen", "carrier": "l3mtcp", "reverse": false, "addr": "203.0.113.64:2096",
 			"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1320,
 			"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `, "expose": "127.0.0.1:8443"}`,
-		"iran direct tun": `{"mode": "dial", "carrier": "l3mtcp", "reverse": false, "udp": false, "addr": "91.107.166.13:2096",
+		"iran direct tun": `{"mode": "dial", "carrier": "l3mtcp", "reverse": false, "udp": false, "addr": "203.0.113.64:2096",
 			"sni": "t.example", "iface": "tun9", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1320,
 			"shared_key": "` + testKey + `", "forward_ports": "8443,443", "peer_panel": "127.0.0.1:8443", "user_listen_ip": "",
 			"min_links": 8, "max_links": 16, "per_link": 8, "bind_local_ip": ""}`,
-		"iran reverse tun": `{"mode": "dial", "carrier": "l3mtcp", "reverse": true, "udp": true, "addr": "5.57.38.168:2082",
+		"iran reverse tun": `{"mode": "dial", "carrier": "l3mtcp", "reverse": true, "udp": true, "addr": "198.51.100.168:2082",
 			"iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1320,
 			"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `,
 			"forward_ports": "8443,443", "user_listen_ip": "", "min_links": 2, "max_links": 32, "per_link": 8}`,
-		"kharej reverse tun": `{"mode": "listen", "carrier": "l3mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+		"kharej reverse tun": `{"mode": "listen", "carrier": "l3mtcp", "reverse": true, "addr": "198.51.100.168:2082",
 			"sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1320,
 			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "min_links": 2, "max_links": 32,
-			"per_link": 8, "bind_local_ip": "91.107.166.13"}`,
+			"per_link": 8, "bind_local_ip": "203.0.113.64"}`,
 		// tun -> tcp with the single-link TLS mode (carrier tls).
-		"iran reverse tun tls": `{"mode": "dial", "carrier": "tls", "reverse": true, "udp": false, "addr": "5.57.38.168:2082",
+		"iran reverse tun tls": `{"mode": "dial", "carrier": "tls", "reverse": true, "udp": false, "addr": "198.51.100.168:2082",
 			"iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1320,
 			"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `,
 			"forward_ports": "8443", "user_listen_ip": "", "min_links": 2, "max_links": 32, "per_link": 8}`,
-		"kharej reverse tun tls": `{"mode": "listen", "carrier": "tls", "reverse": true, "addr": "5.57.38.168:2082",
+		"kharej reverse tun tls": `{"mode": "listen", "carrier": "tls", "reverse": true, "addr": "198.51.100.168:2082",
 			"sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1320,
 			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "min_links": 2, "max_links": 32,
-			"per_link": 8, "bind_local_ip": "91.107.166.13"}`,
+			"per_link": 8, "bind_local_ip": "203.0.113.64"}`,
 		"kharej udp": `{"mode": "listen", "carrier": "udp", "reverse": false, "addr": "0.0.0.0:2096",
 			"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280, "shared_key": "` + testKey + `"}`,
-		"iran auto": `{"mode": "dial", "carrier": "auto", "reverse": false, "addr": "91.107.166.13:2096",
+		"iran auto": `{"mode": "dial", "carrier": "auto", "reverse": false, "addr": "203.0.113.64:2096",
 			"iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1280,
-			"shared_key": "` + testKey + `", "bind_local_ip": "5.57.38.168"}`,
+			"shared_key": "` + testKey + `", "bind_local_ip": "198.51.100.168"}`,
 		"kharej dgtun udp": `{"mode": "listen", "carrier": "dgtun", "encap": "udp", "reverse": false,
 			"addr": "0.0.0.0:2096", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
 			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443",
 			"min_links": 2, "max_links": 32, "per_link": 8}`,
 		"iran dgtun gre": `{"mode": "dial", "carrier": "dgtun", "encap": "gre", "reverse": false,
-			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
+			"addr": "203.0.113.64:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
 			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443,443",
-			"min_links": 2, "max_links": 32, "per_link": 8, "bind_local_ip": "5.57.38.168"}`,
+			"min_links": 2, "max_links": 32, "per_link": 8, "bind_local_ip": "198.51.100.168"}`,
 		"iran dgtun ipx proto": `{"mode": "dial", "carrier": "dgtun", "encap": "ipx", "proto": 200, "reverse": false,
-			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
+			"addr": "203.0.113.64:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
 			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443", "min_links": 2, "max_links": 8, "per_link": 8}`,
 	}
-	local := localIs("5.57.38.168", "91.107.166.13")
+	local := localIs("198.51.100.168", "203.0.113.64")
 	for name, cfg := range cases {
 		errs, warns := checkConfig([]byte(cfg), local, time.Now())
 		if len(errs) > 0 || len(warns) > 0 {
@@ -125,17 +125,17 @@ func TestCheckAcceptsInstallerConfigs(t *testing.T) {
 
 // Typical hand-edit mistakes must be caught with a message that names the field.
 func TestCheckCatchesMistakes(t *testing.T) {
-	base := `{"mode": "listen", "carrier": "mtcp", "reverse": true, "addr": "5.57.38.168:2082",
-		"sni": "t.example", "shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "bind_local_ip": "91.107.166.13"}`
-	local := localIs("91.107.166.13")
+	base := `{"mode": "listen", "carrier": "mtcp", "reverse": true, "addr": "198.51.100.168:2082",
+		"sni": "t.example", "shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "bind_local_ip": "203.0.113.64"}`
+	local := localIs("203.0.113.64")
 	if errs, _ := checkConfig([]byte(base), local, time.Now()); len(errs) != 0 {
 		t.Fatalf("base config should pass: %v", errs)
 	}
 	cases := []struct{ name, from, to, want string }{
 		{"missing comma", `"sni": "t.example",`, `"sni": "t.example"`, "line 2"},
 		{"quoted bool", `"reverse": true`, `"reverse": "true"`, `"reverse"`},
-		{"bad bind ip", `"91.107.166.13"`, `"91.107.166.133"`, "bind_local_ip"},
-		{"bind ip typo", `"91.107.166.13"`, `"91.107.166.1333"`, "not a valid IP"},
+		{"bad bind ip", `"203.0.113.64"`, `"203.0.113.65"`, "bind_local_ip"},
+		{"bind ip typo", `"203.0.113.64"`, `"203.0.113.6555"`, "not a valid IP"},
 		{"bad port", `:2082"`, `:99999"`, "port"},
 		{"no expose", `"expose": "127.0.0.1:8443"`, `"expose": ""`, "expose"},
 		{"key not hex", testKey, "zz" + testKey[2:], "shared_key"},
@@ -181,7 +181,7 @@ func TestCheckCertificate(t *testing.T) {
 // error; below xray's 300 s connIdle is a warning.
 func TestCheckDrainIdle(t *testing.T) {
 	cfg := func(extra string) []byte {
-		return []byte(`{"mode": "dial", "carrier": "mtcp", "reverse": false, "addr": "91.107.166.13:2096",
+		return []byte(`{"mode": "dial", "carrier": "mtcp", "reverse": false, "addr": "203.0.113.64:2096",
 			"sni": "t.example", "shared_key": "` + testKey + `", "forward_ports": "8443"` + extra + `}`)
 	}
 	for _, ok := range []string{``, `, "drain_idle_sec": 0`, `, "drain_idle_sec": 310`, `, "drain_idle_sec": 3600`} {
@@ -213,12 +213,12 @@ func TestCheckDrainIdle(t *testing.T) {
 func TestCheckL3TunPortsAndPanel(t *testing.T) {
 	c, k := writeCert(t, time.Now().Add(60*24*time.Hour))
 	cert := fmt.Sprintf(`"cert_file": %q, "key_file": %q`, c, k)
-	local := localIs("5.57.38.168", "91.107.166.13")
-	edge := `{"mode": "dial", "carrier": "l3mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+	local := localIs("198.51.100.168", "203.0.113.64")
+	edge := `{"mode": "dial", "carrier": "l3mtcp", "reverse": true, "addr": "198.51.100.168:2082",
 		"iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1320,
 		"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `}`
 	exit := func(extra string) []byte {
-		return []byte(`{"mode": "listen", "carrier": "l3mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+		return []byte(`{"mode": "listen", "carrier": "l3mtcp", "reverse": true, "addr": "198.51.100.168:2082",
 			"sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1320,
 			"shared_key": "` + testKey + `"` + extra + `}`)
 	}
@@ -254,10 +254,10 @@ func TestCheckL3TunPortsAndPanel(t *testing.T) {
 
 // dgtun (datagram tun) config checks.
 func TestCheckDgTun(t *testing.T) {
-	local := localIs("5.57.38.168", "91.107.166.13")
+	local := localIs("198.51.100.168", "203.0.113.64")
 	base := func(extra string) []byte {
 		return []byte(`{"mode": "dial", "carrier": "dgtun", "encap": "udp", "reverse": false,
-			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
+			"addr": "203.0.113.64:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
 			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443"` + extra + `}`)
 	}
 	if errs, warns := checkConfig(base(""), local, time.Now()); len(errs) != 0 || len(warns) != 0 {
@@ -279,16 +279,16 @@ func TestCheckDgTun(t *testing.T) {
 	// now) or an older IP:PORT whose port is ignored. udp still needs its port.
 	withAddr := func(encap, addr string) []byte {
 		s := strings.Replace(string(base("")), `"encap": "udp"`, `"encap": "`+encap+`"`, 1)
-		return []byte(strings.Replace(s, `"91.107.166.13:2096"`, `"`+addr+`"`, 1))
+		return []byte(strings.Replace(s, `"203.0.113.64:2096"`, `"`+addr+`"`, 1))
 	}
 	for _, e := range []string{"icmp", "gre", "ipip", "ipx"} {
-		for _, a := range []string{"91.107.166.13", "91.107.166.13:2096"} {
+		for _, a := range []string{"203.0.113.64", "203.0.113.64:2096"} {
 			if errs, warns := checkConfig(withAddr(e, a), local, time.Now()); len(errs)+len(warns) != 0 {
 				t.Errorf("encap %s addr %s: errs=%v warns=%v", e, a, errs, warns)
 			}
 		}
 	}
-	if errs, _ := checkConfig(withAddr("udp", "91.107.166.13"), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "IP:PORT") {
+	if errs, _ := checkConfig(withAddr("udp", "203.0.113.64"), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "IP:PORT") {
 		t.Errorf("udp encap without a port not rejected: %v", errs)
 	}
 	if errs, _ := checkConfig(withAddr("gre", "0.0.0.0"), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "OTHER server") {
@@ -344,9 +344,9 @@ func TestCheckDgTun(t *testing.T) {
 // with them): negative or past the wire's u16 is an error; a very large count
 // is a warning, never a block (an existing explicit number keeps working).
 func TestCheckPoolBounds(t *testing.T) {
-	base := `{"mode": "listen", "carrier": "mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+	base := `{"mode": "listen", "carrier": "mtcp", "reverse": true, "addr": "198.51.100.168:2082",
 		"sni": "t.example", "shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "max_links": MAX}`
-	local := localIs("5.57.38.168")
+	local := localIs("198.51.100.168")
 	for _, c := range []struct {
 		max         string
 		errs, warns bool

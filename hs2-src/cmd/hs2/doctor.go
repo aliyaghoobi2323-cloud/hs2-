@@ -105,6 +105,7 @@ func doctorCmd(args []string) {
 			checkACME(d, fc)
 			checkTun(d, fc)
 			checkTuning(d, fc)
+			checkMTUProbing(d, "/proc")
 			checkLinkPool(d, fc, *cfgPath)
 			checkManyLinks(d, fc, *cfgPath)
 			checkPorts(d, fc, *cfgPath)
@@ -359,6 +360,40 @@ func checkTuning(d *doctorReport, fc fileConfig) {
 		d.warn("kernel tuning", fmt.Sprintf("%d of %d setting(s) differ — applied at each 'hs2 run' as root: %s%s",
 			len(mism), checked, strings.Join(shown, " · "), extra))
 	}
+}
+
+// checkMTUProbing warns when net.ipv4.tcp_mtu_probing is not 1. With 0 a
+// path whose routers drop large packets without sending ICMP "fragmentation
+// needed" (an ICMP blackhole) is dead for downloads: the link's full-size
+// segments are lost forever and the kernel never lowers its MSS (proved in the
+// lab). With 1 the kernel probes a smaller MSS only after such a blackhole is
+// detected; 2 probes on every connection from tcp_base_mss, which costs
+// throughput on good paths. hs2's own tuning sets 1 at each 'hs2 run' as root
+// (tune.Build) unless tuning is off or HS2_NO_TUNE is set, so this check runs
+// whatever the tuning mode is.
+func checkMTUProbing(d *doctorReport, proc string) {
+	const name = "tcp_mtu_probing"
+	v, ok := readMTUProbing(proc)
+	switch {
+	case !ok:
+		d.info(name, "skipped — /proc/sys/net/ipv4/tcp_mtu_probing is not readable here")
+	case v == "1":
+		d.ok(name, "1 — the kernel lowers the MSS on a path that blackholes large packets")
+	case v == "0":
+		d.warn(name, "0 — a path that drops large packets without ICMP (an MTU blackhole) stalls every download on it; set net.ipv4.tcp_mtu_probing=1 (hs2 sets it at 'hs2 run' as root unless tuning is off or HS2_NO_TUNE is set)")
+	default:
+		d.warn(name, v+" — probing on every connection starts each one at a small MSS and costs throughput; set net.ipv4.tcp_mtu_probing=1 (probe only after a blackhole is seen)")
+	}
+}
+
+// readMTUProbing reads net.ipv4.tcp_mtu_probing under proc (normally "/proc").
+func readMTUProbing(proc string) (string, bool) {
+	b, err := os.ReadFile(proc + "/sys/net/ipv4/tcp_mtu_probing")
+	if err != nil {
+		return "", false
+	}
+	v := strings.TrimSpace(string(b))
+	return v, v != ""
 }
 
 // checkLinkPool checks this server's link-pool ceiling against its hardware

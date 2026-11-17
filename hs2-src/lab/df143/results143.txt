@@ -1,0 +1,44 @@
+df143 — rel62k3 (DL_FAIR default on) vs rel62k2 edge: game p99 question (lab1) and a K soak baseline (lab2)
+
+1) lab1 paired A/B, n=30 pairs (cs141 background sets q00-q09 x 3 rounds g/h/i, order alternating, each pair back to
+   back; harness = df142 d142.sh/run141.sh copied to lab1 /opt/hs2lab/df143, lab tree /opt/hs2lab/lbv81/labsrc).
+   K = rel62k2 edge 5d95d5c7, N = rel62k3 edge 96fbccba, exit rel61h2 4a3abdf9 both. pair143.py: exact sign test
+   and exact Wilcoxon signed-rank, two-sided. Tables: sum_gh.txt (n=20), sum_ghi.txt (n=30).
+                 K med    N med    N-K med   N higher   sign p   Wilcoxon p
+   test dl Mbit   401      769      +324      26/30     <0.001    <0.001
+   bg sum         704      716        0       13/30      0.59      0.79
+   crowd p99     171.0    169.9     -0.5      12/30      0.36      0.64
+   call p99      203.9    201.9     +7.3      17/30      0.59      0.72   (first n=20: +11.5, 13/20, p=0.31; i-round -10.7)
+   game p99      139.2    124.2     -9.1      12/30      0.36      0.16   (N lower if anything)
+   echo p99      141.3    132.2     -4.7      13/30      0.59      0.81
+   ping p99       99.4    106.0      0.0      15/30      1.00      0.61
+   crowd fails 0 / 0 in all 60 runs; 0 panics (60 runs both sides); "past the cap" slot used in 18 of 30 N runs.
+   Verdict: the df142 "game 110 vs 165 in 4/4" was small-n noise (game p99 = ~7th highest of 669 samples, one lost
+   link packet = +1 RTT; K alone ranges 96-189). No game (or call) regression -> no mechanism to fix, NO code change.
+
+2) lab2 K soak = df142 soak scenario exactly (soak142.sh, TT=2100, O=soakK, SB=hs2K2b rel62k2 edge). soakK_ana.txt.
+                         N (df142, rel62k3)        K (df143, rel62k2)
+   test dl striped        4/17                      3/17
+   test dl mean / median  164 / 61                  144 / 69
+   outside windows        2 tests (434, 49)         2 tests (39, 69)
+   crowd fails outside    3 (892 inside)            4 (787 inside)
+   crowd/call/game p99/min med 124/175/106          128/186/133
+   edge RSS max, 2nd half 579, 432-567 MB           618, 437-513 MB
+   exit RSS max, 2nd half 892, 779-889 MB           900, 761-896 MB
+   stripe_active mean/max 3.4/9                     2.4/8
+   stripe_refused         4920 (~2.4/s)             5442 (~2.5/s)
+   bg delivered/target    0.93 d / 0.96 u           0.96 d / 0.93 u
+   Why only 3-4/17 stripe (both binaries): the soak pool sits at its cap (links=200 = max_links 200, 3000 crowd
+   users -> ~15 users on every link, no empty link). Live status during the K soak: stripe_pick_none +2.4/s,
+   stripe_refused +2.2/s (refused also counts a failed open after "pick: none"), stripe_subs flat for minutes while
+   stripe_active was only 2-3 (the 8-slot cap is NOT what refuses). stripeAlone wants an empty link, the shared pick
+   skips links with copies/calls/TUN-lane users, the pool cannot add links past max -> the test conn stays on its
+   one link, whose per-second curve is a slow linear ramp 2 -> ~130 Mbit/s (12 of 17 tests in both soaks).
+   Not event windows (the ramp is the same at t=60/1860 outside every window), not the queue gate, not silent cuts.
+   Same in K and N -> not caused by rel62k3. Why the single link itself ramps so slowly here (jitter netem +
+   200 busy links) is NOT DONE.
+
+3) Verdict: deploy rel62k3 to the Iran edge (exit stays rel61h2). Gain +324 Mbit/s median single download (26/30),
+   no change in background throughput, crowd/call/game/echo/ping p99 or fails; soak equal to rel62k2 on memory,
+   fails and striping. Watch in production: game/call p99 per minute vs the previous night, "dlfair:" lines.
+No code changed -> no gofmt/vet/test run, no bin62k4 build.

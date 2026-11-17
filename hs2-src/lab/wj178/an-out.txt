@@ -1,0 +1,40 @@
+== old IRE=HS2_PPROF=127.0.0.1:6060 HS2_LB_REC_RAMP=0 HS2_LB_CALL_STUCK_GAP_STRICT=0 KHE=HS2_PPROF=127.0.0.1:6060 HS2_LB_REC_RA
+  crowd p50/p99/fail 94.724 169.402 0 | game p99 157.035 | ping p50/p99 93.7 128.0
+  heavy down x4 Mbit/s [655, 490, 907, 858, 600, 588]
+  calls: died 16 stalls>5s 0 [(2, 360.3), (11, 488.3), (5, 488.3), (1, 618.3), (4, 621.7), (3, 621.7), (7, 621.7), (1, 621.7), (6, 621.7), (10, 621.7), (9, 621.7), (11, 621.7)]
+  exit cuts 14 recoveries 12
+  weight changes 97 (/h 563) | on event-free paths b,d,f 31 | drops from 1.00 at loss<1% 1
+  biggest rises [(0.26, '.168.50.2>192.168.54.1', 0.49, 0.75, 'ok'), (0.23, '.168.50.2>192.168.55.1', 0.55, 0.78, 'ok'), (0.23, '.168.50.2>192.168.54.1', 0.1, 0.33, 'ok'), (0.22, '.168.50.2>192.168.54.1', 0.78, 1.0, 'ok'), (0.22, '.168.50.2>192.168.54.1', 0.55, 0.77, 'ok'), (0.22, '.168.50.2>192.168.52.1', 0.78, 1.0, 'ok')]
+  rescue: past budget 0, copy subs moved off 1479, rate-refused 536
+  iran 'lb rescue' lines 178 lb rescue census: conn-seconds on marked links: raw 9449, single 2898, dual all-marked 11264, dual with a good copy 214242
+  stuck: lb call stuck: fresh subs 14 (busy 0, gap 14, rate-refused 0), subs given up 26; weak gaps 11 (strict false), old path first 0
+== new IRE=HS2_PPROF=127.0.0.1:6060  KHE=HS2_PPROF=127.0.0.1:6060  bin=ef2c51e7 lab=31
+  crowd p50/p99/fail 94.497 169.092 0 | game p99 173.425 | ping p50/p99 93.6 172.0
+  heavy down x4 Mbit/s [738, 745, 607, 531, 776, 641]
+  calls: died 15 stalls>5s 0 [(0, 358.3), (1, 466.3), (3, 572.3), (7, 621.6), (1, 621.6), (8, 621.6), (9, 621.6), (10, 621.6), (4, 621.6), (0, 621.6), (11, 621.6), (6, 621.6)]
+  exit cuts 12 recoveries 10
+  weight changes 124 (/h 720) | on event-free paths b,d,f 52 | drops from 1.00 at loss<1% 4
+  biggest rises [(0.3, '.168.50.2>192.168.54.1', 0.7, 1.0, 'ok'), (0.3, '.168.50.2>192.168.54.1', 0.4, 0.7, 'ok'), (0.28, '.168.50.2>192.168.50.1', 0.45, 0.73, 'ok'), (0.27, '.168.50.2>192.168.52.1', 0.47, 0.74, 'ok'), (0.27, '.168.50.2>192.168.50.1', 0.73, 1.0, 'ok'), (0.26, '.168.50.2>192.168.52.1', 0.74, 1.0, 'ok')]
+  rescue: past budget 0, copy subs moved off 1792, rate-refused 291
+  iran 'lb rescue' lines 233 lb rescue census: conn-seconds on marked links: raw 17622, single 3518, dual all-marked 17288, dual with a good copy 370290
+  stuck: lb call stuck: fresh subs 4 (busy 1, gap 3, rate-refused 0), subs given up 7; weak gaps 49 (strict true), old path first 0
+== ev0 IRE=HS2_PPROF=127.0.0.1:6060 HS2_LB_LOWER_EVID=0 KHE=HS2_PPROF=127.0.0.1:6060 HS2_LB_LOWER_EVID=0 bin=0f0e404d lab=30
+  crowd p50/p99/fail 94.452 165.789 0 | game p99 166.413 | ping p50/p99 93.4 168.0
+  heavy down x4 Mbit/s [769, 627, 551, 603, 692, 340]
+  calls: died 13 stalls>5s 0 [(5, 318.8), (4, 622.1), (5, 622.1), (6, 622.2), (10, 622.2), (9, 622.2), (8, 622.2), (7, 622.2), (11, 622.2), (3, 622.2), (2, 622.2), (1, 622.2)]
+  exit cuts 12 recoveries 11
+  weight changes 146 (/h 847) | on event-free paths b,d,f 49 | drops from 1.00 at loss<1% 5
+  biggest rises [(0.27, '.168.50.2>192.168.52.1', 0.47, 0.74, 'ok'), (0.26, '.168.50.2>192.168.52.1', 0.74, 1.0, 'ok'), (0.25, '.168.50.2>192.168.51.1', 0.51, 0.76, 'ok'), (0.24, '.168.50.2>192.168.55.1', 0.52, 0.76, 'ok'), (0.24, '.168.50.2>192.168.51.1', 0.76, 1.0, 'ok'), (0.24, '.168.50.2>192.168.50.1', 0.52, 0.76, 'ok')]
+  rescue: past budget 0, copy subs moved off 1860, rate-refused 1123
+  iran 'lb rescue' lines 192 lb rescue census: conn-seconds on marked links: raw 11993, single 3612, dual all-marked 15604, dual with a good copy 200626
+  stuck: lb call stuck: fresh subs 13 (busy 0, gap 13, rate-refused 0), subs given up 22; weak gaps 91 (strict true), old path first 0
+== ev1 IRE=HS2_PPROF=127.0.0.1:6060  KHE=HS2_PPROF=127.0.0.1:6060  bin=0f0e404d lab=31
+  crowd p50/p99/fail 94.661 170.015 0 | game p99 159.278 | ping p50/p99 93.1 156.0
+  heavy down x4 Mbit/s [762, 736, 753, 865, 749, 329]
+  calls: died 14 stalls>5s 0 [(10, 376.1), (0, 510.1), (5, 621.5), (4, 621.5), (2, 621.5), (0, 621.5), (1, 621.5), (11, 621.5), (9, 621.5), (10, 621.5), (8, 621.5), (7, 621.5)]
+  exit cuts 10 recoveries 9
+  weight changes 121 (/h 702) | on event-free paths b,d,f 62 | drops from 1.00 at loss<1% 1
+  biggest rises [(0.27, '.168.50.2>192.168.55.1', 0.47, 0.74, 'ok'), (0.27, '.168.50.2>192.168.52.1', 0.47, 0.74, 'ok'), (0.26, '.168.50.2>192.168.55.1', 0.74, 1.0, 'ok'), (0.26, '.168.50.2>192.168.52.1', 0.74, 1.0, 'ok'), (0.24, '.168.50.2>192.168.55.1', 0.76, 1.0, 'ok'), (0.24, '.168.50.2>192.168.54.1', 0.76, 1.0, 'ok')]
+  rescue: past budget 0, copy subs moved off 1406, rate-refused 569
+  iran 'lb rescue' lines 180 lb rescue cut: 5 of 34 marked link(s) on cut paths; light raw conn checks on marked links: budget-capped 0 (on cut paths 0), upgraded with the budget 2008; cut copies raw 0, other 0, bad subs given up
+  stuck: lb call stuck: fresh subs 10 (busy 3, gap 7, rate-refused 0), subs given up 18; weak gaps 93 (strict true), old path first 0

@@ -1,0 +1,18 @@
+0 start
+150 a_loss3 c
+240 a_loss10 c
+330 a_clear c
+390 b_queue d +35ms
+540 b_clear d
+600 c_black e
+720 c_clear e
+810 d_flap_start f
+1050 d_flap_end f
+1110 e_rst_start g
+1230 e_rst_end g
+1290 f_mild_all
+1440 f_clear_all
+1500 g_restart_edge
+1620 g_restart_exit
+1680 h_clean
+1860 end

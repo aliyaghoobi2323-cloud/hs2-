@@ -48,7 +48,7 @@ type callRescueMark struct{}
 
 // callRescueOnLocked: the key is on and m is a call (Iran, lite).
 func (m *mConn) callRescueOnLocked(now time.Time) bool {
-	return lbCallRescue && lbRescue && m.iran && m.lite &&
+	return lbCallRescue && lbRescue.Load() && m.iran && m.lite &&
 		(m.callOn || m.callUp || (!m.callLikeAt.IsZero() && now.Sub(m.callLikeAt) < callRescueTTL))
 }
 
@@ -97,9 +97,9 @@ func (m *mConn) callRescueLocked(live []*msub, now time.Time) bool {
 		m.lightOpening = true
 		avoid := make([]any, 0, len(live)+len(m.deadKeys)+1)
 		for _, s := range live {
-			avoid = append(avoid, s.key)
+			avoid = append(avoid, avoidKey(s.key))
 		}
-		avoid = append(append(avoid, m.deadKeys...), callRescueMark{})
+		avoid = append(append(avoid, m.deadAvoidLocked()...), callRescueMark{})
 		callRescueOpened.Add(1)
 		m.tr.ev("call: every sub on a lowered path: open a fresh sub off it")
 		go m.openLight(avoid)

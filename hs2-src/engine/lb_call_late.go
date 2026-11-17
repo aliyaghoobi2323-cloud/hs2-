@@ -59,7 +59,7 @@ var callLateSRTT = func(s *msub) (time.Duration, bool) {
 
 // callLateOnLocked: the key, Iran, lite, and the connection is a call.
 func (m *mConn) callLateOnLocked(now time.Time) bool {
-	return lbCallLate && lbRescue && m.iran && m.lite &&
+	return lbCallLate && lbRescue.Load() && m.iran && m.lite &&
 		(m.callOn || m.callUp || (!m.callLikeAt.IsZero() && now.Sub(m.callLikeAt) < callRescueTTL))
 }
 
@@ -133,15 +133,16 @@ func (m *mConn) callLateLocked(live []*msub, now time.Time) (gave bool, poll tim
 	m.callStuckAt = now.Add(callStuckEvery)
 	m.lateOpenedAt = now
 	m.lateSince = time.Time{}
-	m.lateKey = worst.key
+	// mem70: an ID, not the link (mconn_avoidkey.go)
+	m.lateKey = avoidKey(worst.key)
 	worst.callLate = true // no call pair copy on it once two others are live (callPairLocked)
 	m.lateLive = m.lateLive[:0]
 	avoid := make([]any, 0, len(live)+len(m.deadKeys)+1)
 	for _, s := range live {
-		avoid = append(avoid, s.key)
-		m.lateLive = append(m.lateLive, s.key)
+		avoid = append(avoid, avoidKey(s.key))
+		m.lateLive = append(m.lateLive, avoidKey(s.key))
 	}
-	avoid = append(append(avoid, m.deadKeys...), callStuckMark{path: worstP})
+	avoid = append(append(avoid, m.deadAvoidLocked()...), callStuckMark{path: worstP})
 	m.lightOpening = true
 	callLateOpened.Add(1)
 	m.tr.ev("call: late copy on sub %d path %s (srtt %v vs %v): open a fresh sub off it", worst.idx, worstP, worstR, bestR)
@@ -158,11 +159,11 @@ func (m *mConn) callLateMoveLocked(live []*msub, now time.Time) bool {
 		if s.retired || s.dead || s.closeHS {
 			continue
 		}
-		if s.key == m.lateKey {
+		if avoidKey(s.key) == m.lateKey {
 			late = s
 			continue
 		}
-		if !containsAny(m.lateLive, s.key) && s.lastRecv.Load() >= monoNano(m.lateOpenedAt) {
+		if !containsAny(m.lateLive, avoidKey(s.key)) && s.lastRecv.Load() >= monoNano(m.lateOpenedAt) {
 			fresh = true
 		}
 	}

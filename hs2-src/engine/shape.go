@@ -79,6 +79,7 @@ func newShapedConn(c net.Conn, s *obfs.LengthSampler) *shapedConn {
 		s = obfs.NewHTTPSLengthSampler()
 	}
 	sc := &shapedConn{Conn: c, sampler: s}
+	memTrack(sc, &memObjShaped)
 	if tlscarrier.Batch {
 		// The tunnel's session starts here, on an authenticated link: from
 		// now on its reads come in batches.

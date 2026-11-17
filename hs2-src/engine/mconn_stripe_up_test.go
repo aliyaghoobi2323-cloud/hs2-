@@ -186,15 +186,18 @@ func TestStripeUpCap(t *testing.T) {
 	t.Cleanup(func() { stripeK.Store(old) })
 	stripeK.Store(4)
 	setStripeUp(t, false)
-	if infoExt() != capExtMConnStripe {
+	// upov57: ext bit4 (capExtMConnOverlap) goes with the stripe on
+	// hs133: ext bit10 (capExtMConnKeepStall) follows its own key
+	// xs261: ext bit14 (capExtMConnXS) follows HS2_XS261
+	if infoExt()&^(capExtMConnKeepStall|capExtHalfClose|capExtMConnXS) != capExtMConnStripe|capExtMConnOverlap {
 		t.Fatalf("ext %#x with the key off, want only the stripe bit", infoExt())
 	}
 	setStripeUp(t, true)
-	if infoExt() != capExtMConnStripe|capExtMConnStripeUp {
+	if infoExt()&^(capExtMConnKeepStall|capExtHalfClose|capExtMConnXS) != capExtMConnStripe|capExtMConnStripeUp|capExtMConnOverlap {
 		t.Fatalf("ext %#x with the key on", infoExt())
 	}
 	stripeK.Store(0)
-	if infoExt() != 0 {
+	if infoExt()&^(capExtHalfClose|capExtMConnXS) != 0 { // hc183, xs261: their own bits
 		t.Fatalf("ext %#x without HS2_MCONN_STRIPE", infoExt())
 	}
 	if mconnCap() != capMConn|capMConnRaw {
@@ -319,6 +322,7 @@ func TestMConnStripeUploadStalledSub(t *testing.T) {
 // kick it (a regression: the upload stayed on two subs in the lab).
 func TestMConnStripeUploadFromRaw(t *testing.T) {
 	before := runtime.NumGoroutine()
+	setDeadlineFix(t, true) // production stripes only with it (mconn_link.go)
 	setStripeUp(t, true)
 	fixUpPathQ(t, 0)
 	setStripeRate(t, 200<<10)

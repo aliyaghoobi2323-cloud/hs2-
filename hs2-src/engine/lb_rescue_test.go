@@ -10,12 +10,33 @@ import (
 
 func withRescue(t *testing.T, on bool) {
 	t.Helper()
-	old := lbRescue
-	lbRescue = on
+	old := lbRescue.Load()
+	lbRescue.Store(on)
 	t.Cleanup(func() {
-		lbRescue = old
+		waitConnLoops(t.Logf, mCloseLinger+mRSTWait+2*time.Second)
+		lbRescue.Store(old)
 		rescueLow.Range(func(k, _ any) bool { rescueLow.Delete(k); return true })
 	})
+}
+
+// closeQuiet (a cleanup): closes ms and waits, without failing, for them to
+// end and for their goroutines to exit (a test that failed early skipped its
+// closeAndWait; the conns must not outlive the restore of the globals).
+func closeQuiet(before int, ms ...*mConn) {
+	for _, m := range ms {
+		m.Close()
+	}
+	end := time.Now().Add(mCloseLinger + mRSTWait + 4*time.Second)
+	for _, m := range ms {
+		select {
+		case <-m.GetDieCh():
+		case <-time.After(time.Until(end)):
+		}
+	}
+	for runtime.NumGoroutine() > before && time.Now().Before(end) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitConnLoops(func(string, ...any) {}, time.Until(end)+time.Second)
 }
 
 func TestRescueMarkUnmark(t *testing.T) {
@@ -83,12 +104,24 @@ func TestMConnRescueCappedSingle(t *testing.T) {
 // a binding budget (lab k runs: 0-4 copies past the budget for a crowd of
 // 3000). Not on a lowered link, it stays raw and single. HS2_LB_RESCUE_RAW
 // (default off) gates it.
+//
+// dr120: HS2_MCONN_DEADLINE_FIX on, as in production (envdef, both sides).
+// Off (the test binary's default) the raw upgrade here hit the known stale
+// read deadline 2-4 times in 30-60 runs: "reader switched at 0", then the
+// first sub died "read pipe: i/o timeout" -> errMConnLost (with the fix
+// 60/60). The conns are also closed by a cleanup registered after
+// withRescue's, so a failing run ends them before lbRescue is restored (the
+// DATA RACE of dr116 race2.txt was that restore vs mConn.tick).
 func TestMConnRescueCappedRaw(t *testing.T) {
 	withRescue(t, true)
 	lbRescueRaw = true
 	t.Cleanup(func() { lbRescueRaw = false })
+	oldFix := mconnDeadlineFix.Load()
+	mconnDeadlineFix.Store(true)
+	t.Cleanup(func() { mconnDeadlineFix.Store(oldFix) })
 	before := runtime.NumGoroutine()
 	n, iran, exit := newRawPair(t)
+	t.Cleanup(func() { closeQuiet(before, iran, exit) })
 	liteBud.add(time.Now().Unix(), 1_000_000, 100_000) // budget exhausted
 	rescueMark(nil, []any{7})                          // some other link
 	time.Sleep(mLiteAfter + 1500*time.Millisecond)
@@ -270,7 +303,10 @@ func withCallRescue(t *testing.T, on bool) {
 	t.Helper()
 	old := lbCallRescue
 	lbCallRescue = on
-	t.Cleanup(func() { lbCallRescue = old })
+	t.Cleanup(func() {
+		waitConnLoops(t.Logf, mCloseLinger+mRSTWait+2*time.Second)
+		lbCallRescue = old
+	})
 }
 
 // subOnKeys: a live (not retired) sub of m rides one of keys.

@@ -137,6 +137,7 @@ type streamSpec struct {
 	warm   time.Duration // frames scheduled before start+warm are not counted
 	lateMs float64
 	mbps   float64
+	name   string // lbv81 -samplelog class
 }
 
 // runStream runs one framed echo stream until stop, then waits up to 3 s for
@@ -196,6 +197,9 @@ func runStream(sp streamSpec, stop <-chan struct{}) *streamResult {
 			rtt := ms(time.Since(sp.start) - ts)
 			rtts = append(rtts, rtt)
 			secs = append(secs, int(ts/time.Second))
+			if sp.name != "" {
+				sample(sp.name, ts.Seconds(), rtt)
+			}
 			if prev >= 0 {
 				jsum += math.Abs(rtt - prev)
 				jn++
@@ -341,6 +345,7 @@ func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring f
 				mu.Lock()
 				res.Fail++
 				mu.Unlock()
+				sample("F", time.Since(probeStart).Seconds(), 0)
 			}
 			for {
 				c, err := net.DialTimeout("tcp", addr, 10*time.Second)
@@ -366,7 +371,16 @@ func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring f
 				if _, err := c.Write([]byte{'R'}); err != nil {
 					ok = false
 				}
+				var dieAt time.Time
+				churned := false
+				if crowdLife > 0 {
+					dieAt = time.Now().Add(time.Duration(float64(crowdLife) * (0.5 + rand.Float64())))
+				}
 				for ok {
+					if !dieAt.IsZero() && time.Now().After(dieAt) {
+						churned = true
+						break
+					}
 					if !wait(time.Duration(float64(every) * (0.5 + rand.Float64()))) {
 						break
 					}
@@ -393,6 +407,7 @@ func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring f
 						lat = append(lat, ms(time.Since(s)))
 						lts = append(lts, s.Sub(probeStart).Seconds())
 						mu.Unlock()
+						sample("c", s.Sub(probeStart).Seconds(), ms(time.Since(s)))
 					}
 				}
 				close(done)
@@ -401,6 +416,9 @@ func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring f
 				case <-stop:
 					return
 				default:
+				}
+				if churned {
+					continue
 				}
 				fail()
 				if !wait(time.Second) {

@@ -424,13 +424,19 @@ func TestMConnExitJoinOrder(t *testing.T) {
 	}
 	missed := mconnStat.joinMissed.Load()
 	// a join alone: closed after the wait
+	rst0 := jm271Stat.sent.Load()
 	lone := open(99, mconnRoleJoin)
 	lone.SetReadDeadline(time.Now().Add(3 * time.Second))
-	if _, err := lone.Read(make([]byte, 1)); err == nil {
-		t.Fatal("a join without its connection was not closed")
+	got, err := io.ReadAll(lone)
+	if err != nil {
+		t.Fatalf("a join without its connection was not closed: %v", err)
 	}
 	if mconnStat.joinMissed.Load() != missed+1 {
 		t.Fatal("missed join not counted")
+	}
+	// jm271: the miss is answered with an RST record (key on by default)
+	if jm271On.Load() && (len(got) != 1 || got[0] != mRecRst || jm271Stat.sent.Load() != rst0+1) {
+		t.Fatalf("jm271: missed join got %x (rst sent +%d), want one RST record", got, jm271Stat.sent.Load()-rst0)
 	}
 	// join first, then the first sub
 	j := open(5, mconnRoleJoin)
@@ -482,5 +488,62 @@ func TestMConnEndToEnd(t *testing.T) {
 	// edge and exit run in this process: each connection counts twice
 	if got := mconnStat.total.Load() - before; got < 2*7 {
 		t.Fatalf("%d mconn(s) opened for 7 connections: the tunnel did not use them", got)
+	}
+}
+
+// ul173: a join must not attach to a connection whose first sub is still
+// being attached. It used to (create woke the joins first): an empty join —
+// Iran closes a light sub that opens after the user closed — then became the
+// connection's only sub, its EOF ended the connection ("every sub died") and
+// the first sub, carrying the whole upload, came to an ended connection.
+func TestMConnTableJoinWaitsFirstAttach(t *testing.T) {
+	tb := newMConnTable()
+	stop := make(chan struct{})
+	defer close(stop)
+	mc := newMConnExit(7)
+	defer mc.Close()
+	if !tb.reserve(7, mc) {
+		t.Fatal("reserve refused")
+	}
+	for _, wait := range []time.Duration{0, time.Millisecond, 5 * time.Second} {
+		got := make(chan *mConn, 1)
+		go func() { got <- tb.join(7, wait, stop) }()
+		select {
+		case <-got:
+			t.Fatalf("join (wait %v) returned before the first sub was attached", wait)
+		case <-time.After(100 * time.Millisecond):
+		}
+		if wait == 5*time.Second {
+			tb.publish(7, mc)
+		}
+		defer func(got chan *mConn, wait time.Duration) {
+			select {
+			case g := <-got:
+				if g != mc {
+					t.Errorf("join (wait %v) got %p, want the connection", wait, g)
+				}
+			case <-time.After(2 * time.Second):
+				t.Errorf("join (wait %v) did not wake on publish", wait)
+			}
+		}(got, wait)
+	}
+	if tb.reserve(7, newMConnExit(7)) {
+		t.Fatal("a reserved id was taken twice")
+	}
+	// a reserved connection removed before publish: its joins get nil
+	mc2 := newMConnExit(8)
+	defer mc2.Close()
+	tb.reserve(8, mc2)
+	got := make(chan *mConn, 1)
+	go func() { got <- tb.join(8, 0, stop) }()
+	time.Sleep(50 * time.Millisecond)
+	tb.remove(8, mc2)
+	select {
+	case g := <-got:
+		if g != nil {
+			t.Fatal("join got a connection removed before publish")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("join stuck on a removed connection")
 	}
 }

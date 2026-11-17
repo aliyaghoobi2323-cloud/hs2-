@@ -4578,6 +4578,13 @@ def loss(p):
 def rtt(p):
     if not p.get("rtt_p50_ms"): return "-"
     return "%.0f/%.0f" % (p["rtt_p50_ms"], p.get("rtt_p99_ms", 0))
+def mtu(p):
+    # mt135: path MTU median per direction (down = what kharej sends); "!" = under 1280 or dropped in the last 10 min
+    d, u = p.get("pmtu_down"), p.get("pmtu_up")
+    if not d and not u: return "-", False
+    f = lambda x: "-" if not x else str(x.get("pmtu_med", 0))
+    bad = any(x and (x.get("pmtu_min", 9999) < 1280 or (x.get("pmtu_drops") and x.get("last_drop_s", 10**9) < 600)) for x in (d, u))
+    return f(d) + "/" + f(u) + ("!" if bad else ""), bad
 def state(p):
     s, col = [], ""
     stt = p.get("state", "ok")
@@ -4609,7 +4616,7 @@ def newp(p):
     n = p.get("new_pct")
     return "-" if n is None else "%.0f%%" % n
 
-W = (15, 15, 5, 8, 4, 5, 4, 5, 7, 7, 11, 8, 11)
+W = (15, 15, 5, 8, 4, 5, 4, 5, 7, 7, 11, 8, 10, 11)
 def cells_of(p, total):
     links, target = p.get("links", 0), p.get("target", 0)
     lo, hi = ("total", "") if total else (p.get("local", ""), p.get("remote", ""))
@@ -4618,9 +4625,10 @@ def cells_of(p, total):
     share = p.get("eff_pct") or p.get("share_pct", 0)
     now = ("%.0f%%" % (100.0 * links / nlinks)) if (nlinks and not total) else ""
     l, lbad = loss(p)
+    m, _ = mtu(p)
     return [lo, hi, "%.0f%%" % share, "%d/%d" % (links, target), now, "" if total else autof(p),
             "" if total else newp(p), str(p.get("users", 0)),
-            mbit(p.get("down_mbit", 0)), mbit(p.get("up_mbit", 0)), l, rtt(p),
+            mbit(p.get("down_mbit", 0)), mbit(p.get("up_mbit", 0)), l, rtt(p), m,
             size(p.get("down_mb", 0)) + "/" + size(p.get("up_mb", 0))], lbad
 
 def pad(cells, w=W):
@@ -4630,9 +4638,9 @@ def pad(cells, w=W):
     return out
 
 nlinks = sum(p.get("links", 0) for p in paths)
-hdr = pad(["THIS SERVER", "OTHER SERVER", "SHARE", "LINKS", "NOW", "AUTO", "NEW", "USERS", "DOWN", "UP", "LOSS D/U", "RTT ms", "TOTAL D/U"])
+hdr = pad(["THIS SERVER", "OTHER SERVER", "SHARE", "LINKS", "NOW", "AUTO", "NEW", "USERS", "DOWN", "UP", "LOSS D/U", "RTT ms", "MTU D/U", "TOTAL D/U"])
 print("  " + B + " ".join(hdr) + "  STATE" + Z)
-print("  " + D + " ".join(pad(["", "", "eff" if st.get("lb_mode") == "auto" else "set", "live/tgt", "", "factor", "conns", "", "Mbit/s", "Mbit/s", "", "p50/p99", "bytes"])) + Z)
+print("  " + D + " ".join(pad(["", "", "eff" if st.get("lb_mode") == "auto" else "set", "live/tgt", "", "factor", "conns", "", "Mbit/s", "Mbit/s", "", "p50/p99", "median", "bytes"])) + Z)
 for p in paths:
     c, lbad = cells_of(p, False)
     c = pad(c)
@@ -4645,6 +4653,8 @@ for p in paths:
         c[5] = R + c[5] + Z
     if lbad:
         c[10] = R + c[10] + Z
+    if mtu(p)[1]:
+        c[12] = Y + c[12] + Z
     stt, scol = state(p)
     print("  " + " ".join(c) + "  " + scol + stt + Z)
 if tot:

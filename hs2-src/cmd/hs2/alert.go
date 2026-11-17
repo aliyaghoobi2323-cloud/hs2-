@@ -204,7 +204,7 @@ func alertCmd(args []string) {
 	}
 	fs := flag.NewFlagSet("alert", flag.ExitOnError)
 	cfgPath := fs.String("c", "/etc/hs2/config.json", "tunnel config")
-	unit := fs.String("u", "", "systemd unit (default: from the config name)")
+	unit := unitFlag(fs, "", "systemd unit (default: from the config name)")
 	conf := fs.String("conf", alertConfPath, "alert settings (key=value, mode 600)")
 	stateDir := fs.String("state", alertStateDir, "state directory")
 	loop := fs.Duration("loop", 0, "keep running, one check per interval (0 = one check)")

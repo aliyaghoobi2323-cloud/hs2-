@@ -1,0 +1,12 @@
+u19N N u1
+u19P P u1
+u110P P u1
+u110N N u1
+u111N N u1
+u111P P u1
+u112P P u1
+u112N N u1
+u113N N u1
+u113P P u1
+u114P P u1
+u114N N u1

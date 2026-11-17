@@ -1,0 +1,12 @@
+d1C20 C d1
+d1A20 A d1
+d1A21 A d1
+d1C21 C d1
+d1C22 C d1
+d1A22 A d1
+d1A23 A d1
+d1C23 C d1
+d1C24 C d1
+d1A24 A d1
+d1A25 A d1
+d1C25 C d1

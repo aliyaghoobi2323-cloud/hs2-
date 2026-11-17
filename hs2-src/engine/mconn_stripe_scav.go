@@ -74,10 +74,25 @@ type stripeGate struct {
 	stGateAt time.Time // the last width decision
 	stGrowAt time.Time // the last growth (or the last cut)
 	stQ      time.Duration
+	stQh     [stripeUpMedMax]time.Duration // prod73: the upload gate's last samples (stripeUpMed)
+	stQn     int
 	stLogAt  time.Time
-	stNoGate bool  // the last decision found nothing to measure: no gate until the next
-	stAskWin int64 // the growth window this connection last asked in (stripeGlobal)
-	stActWin int64 // the window this connection last gated in (stripeNoteActive)
+	stNoGate bool      // the last decision found nothing to measure: no gate until the next
+	stAskWin int64     // the growth window this connection last asked in (stripeGlobal)
+	stActWin int64     // the window this connection last gated in (stripeNoteActive)
+	stOverAt time.Time // ul197: the last upload cut sample over the threshold (stripeUpHyst)
+	// hl222 (mconn_stripe_upqctl.go): under an edge cap
+	stStartAt  time.Time // a stripe sub last started sending (warm-up)
+	stCapCut   bool      // the last over-threshold sample cut (no clear sample since)
+	stCapHeld  bool      // that cut's hold is on
+	stCapCutAt time.Time
+	// hl235: the stripe's first gate decision (set where the gate starts it,
+	// stWInit) and the samples taken since (stripeUpFirstLocked)
+	stGate0 time.Time
+	stGateN int
+	// dl259 (mconn_dl259.go): paths cut for this download, until when
+	dl259Cut map[string]time.Time
+	dl259Q   map[string]time.Duration // b264 L4: the gate's per-path queues, reused (under m.mu)
 }
 
 // subMeter: the link meter of an exit sub (nil: not known).
@@ -100,6 +115,7 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 		m.stWInit = true
 		m.stW = 0 // a stripe starts narrow and grows while the path has room
 		m.stGrowAt = now
+		m.stGate0 = now // hl235
 	}
 	if now.Sub(m.stGateAt) < stripeQEvery {
 		if m.stNoGate {
@@ -108,6 +124,7 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 		return m.stW
 	}
 	m.stGateAt = now
+	m.stGateN++
 	own := make([]*linkMeter, 0, len(m.subs))
 	for _, s := range m.subs {
 		if mtr := m.subMeterOf(s); mtr != nil {
@@ -125,6 +142,7 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	}
 	var base time.Duration
 	qRaw := q
+	cutQ, cutAt := time.Duration(-1), target // the cut's sample and threshold (gate74 splits them)
 	if stripeRel {
 		if stripeBaseMaxMulti >= 0 && !m.iran {
 			m.stripeNoteActive(now)
@@ -139,7 +157,31 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	if !m.iran && pq.jumpHold(now, q, target) {
 		q = target / 2 // مهلت پرش: نه رشد، نه برش (gwBand)
 	}
+	if m.iran && stripeUpSplit {
+		// gate74: grow on the median over the learned (higher) base; cut on
+		// the latest sample over the strict base (mconn_stripe_split.go)
+		var qCut time.Duration
+		q, qCut, base = m.stripeUpSplitLocked(pq, qRaw)
+		cutQ = qCut
+		cutAt = target * time.Duration(stripeUpCutPct) / 100
+		if stripeUpHyst.Load() && m.stripeUpHystHoldLocked(now, cutQ, cutAt) {
+			cutQ = cutAt         // ul197: the first noisy sample does not cut (mconn_stripe_uphyst.go)
+			q = max(q, target/2) // nor grow
+		}
+	} else if m.iran {
+		q = m.stripeUpMedLocked(q) // prod73: one noisy sample neither cuts nor grows
+	}
+	if !m.iran && dl259On.Load() {
+		// dl259: the width is judged on the stripe subs' own paths (mconn_dl259.go)
+		q = m.dl259GateLocked(pq, own, p, base, target, now)
+	}
+	if cutQ < 0 {
+		cutQ, cutAt = q, target
+	}
 	m.stQ = q
+	if cutQ > cutAt {
+		m.stQ = max(q, target) // a cut: no room (stripeUpRoomLocked)
+	}
 	live := 0
 	for _, s := range m.subs {
 		if s.stripe && s != p && !s.retired && !s.dead {
@@ -148,12 +190,20 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	}
 	why := gwFull
 	switch {
-	case q > target:
+	case cutQ > cutAt && m.stripeUpCapSkipLocked(now, cutQ, cutAt):
+		why = gwHold // hl222: the warm-up or the same spike (mconn_stripe_upqctl.go)
+	case cutQ > cutAt:
 		why = gwCut
+		m.stripeUpCapCutLocked(now)
+		if stripeLog && !m.iran {
+			// hs128: every exit cut, both key arms (what the queue read was)
+			log.Printf("stripe cut %x: cutQ=%v raw=%v base=%v w=%d live=%d busy=%d kept=%d ksTick=%v",
+				m.id&0xffffff, cutQ.Round(100*time.Microsecond), qRaw.Round(100*time.Microsecond), base.Round(100*time.Microsecond), m.stW, live, pq.busyN(), m.keptBytes, m.ksTicking)
+		}
 		if m.stW > 0 {
 			m.stW /= 2
 			stripeStat.cuts.Add(1)
-			m.tr.ev("stripe: queue %v > %v, width -> %d", q, target, m.stW)
+			m.tr.ev("stripe: queue %v > %v, width -> %d", cutQ, cutAt, m.stW)
 		}
 		m.stGrowAt = now
 		if stripeRel {
@@ -175,8 +225,14 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 			why = gwToken
 		}
 	}
+	if cutQ <= cutAt {
+		m.stripeUpCapClearLocked(now, q, target)
+	}
 	m.stW = min(m.stW, live)
 	stripeDiagGate(why, m.stW, live, qRaw, q, base, pq.busyN())
+	if m.iran {
+		m.trGateLocked(why, m.stW, cutQ, cutAt) // ul197 (mconn_stripe_dltrace.go)
+	}
 	if stripeLog && now.Sub(m.stLogAt) >= time.Second {
 		m.stLogAt = now
 		log.Printf("stripe gate %x: q=%v base=%v w=%d live=%d", m.id&0xffffff, q.Round(100*time.Microsecond), base.Round(100*time.Microsecond), m.stW, live)
@@ -339,7 +395,16 @@ type stripeQ struct {
 	hist  []time.Duration
 	histI int
 	bq    time.Duration
-	step  stepB // HS2_MCONN_STRIPE_STEP (mconn_stripe_linkbase.go)
+	p10   time.Duration // the uncapped percentile (gate74: the grow and cut bases)
+	step  stepB         // HS2_MCONN_STRIPE_STEP (mconn_stripe_linkbase.go)
+	// b264 L4 (mconn_dl259.go): gen counts track/untrack; pq is the per-path
+	// sorted busy queues of the measurement at pqAt and the set at pqGen
+	gen   uint64
+	pqOK  bool
+	pqAt  time.Time
+	pqGen uint64
+	pq    []dl259Path
+	pqIdx map[string]int
 }
 
 // stripeLinkQ: one link at the last measurement.
@@ -367,10 +432,12 @@ func stripeTrack(mtr *linkMeter) func() {
 	p := stripePathQ
 	p.mu.Lock()
 	p.links[mtr] = &stripeLinkQ{}
+	p.gen++
 	p.mu.Unlock()
 	return func() {
 		p.mu.Lock()
 		delete(p.links, mtr)
+		p.gen++
 		p.mu.Unlock()
 	}
 }
@@ -398,6 +465,7 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 	if now.Sub(p.at) >= stripeQEvery {
 		first := p.at.IsZero()
 		p.at = now
+		p.gen++ // b264 L4: a new measurement (the dl259 cache)
 		for mtr, l := range p.links {
 			var st tcpStat
 			var ok bool
@@ -420,6 +488,9 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 			}
 			if st.rttUs > lo {
 				l.q = time.Duration(st.rttUs-lo) * time.Microsecond
+			}
+			if dlp217ShareQ > 0 {
+				dlp217NoteQ(mtr, l.q, now) // HS2_FX212_DL_SHAREQ_MS (mconn_dlp217.go)
 			}
 			if stripeLinkBase && !p.light && l.busy {
 				l.lb.note(l.q, p.baseMax())
@@ -517,7 +588,33 @@ var stripeBaseMax = envMsDefault("HS2_MCONN_STRIPE_BASE_MAX", 4*time.Millisecond
 // game p99 126 -> 137 ms (p=0.01) under one upload; 2 ms kept it at 128 with
 // the same upload speed (468 vs 443 Mbit). The exit (download) keeps 4 ms: there
 // 2 ms cost a quarter of the speed (298 vs 395 Mbit) and no light user gained.
+//
+// prod73 (opt-in, default unchanged): production (tunnel 1, rel58, ~10k
+// users) showed the upload path queue at 3-7 ms with the path healthy, so
+// with the 2 ms cap the gate read the path's own standing queue as the
+// stripe's (gate cut 47756, grow 1). In the lab emulating it (netem normal
+// jitter 4 ms, 1-2% loss on two of four paths, crowd 3000 on 40 links) the
+// cap at 10 ms with HS2_MCONN_STRIPE_UP_MED=3 took a single upload's median
+// 343 -> 626 Mbit/s (p10 179 -> 354, n=14, p<0.01) but crowd p99 +4.7 ms
+// (p<0.01) and echo p99 +31 ms (p=0.02); 10 ms alone (MED=1) +102 Mbit/s
+// with game p99 +31 ms (n=8, p=0.08). Neither met the light users' budget, so
+// both stay opt-in: HS2_MCONN_STRIPE_UP_BASE_MAX=10 (ms).
 var stripeUpBaseMax = envMsDefault("HS2_MCONN_STRIPE_UP_BASE_MAX", 2*time.Millisecond)
+
+// stripeUpMed: HS2_MCONN_STRIPE_UP_MED (prod73, opt-in; default 1 = off): Iran's
+// upload gate decides on the median of its last N samples (100 ms each), so
+// one sample of path noise (production: p10-p90 of the light links' queue ~3.5
+// ms, wider than the gate's 1.5-3 ms band) neither halves the width (and holds
+// growth 2 s) nor grows it; a real queue still cuts after ceil(N/2) samples.
+// Lab: that delay of the cut is what cost the light users (echo p99 +31 ms).
+var stripeUpMed = min(stripeUpMedMax, envIntDefault("HS2_MCONN_STRIPE_UP_MED", 1))
+
+const stripeUpMedMax = 7
+
+// stripeUpMedLocked (under m.mu): q filtered by stripeUpMed.
+func (m *mConn) stripeUpMedLocked(q time.Duration) time.Duration {
+	return m.stripeUpMedNLocked(q, stripeUpMed)
+}
 
 // envMsDefault: env k in ms (fractions allowed, >= 0), else d.
 func envMsDefault(k string, d time.Duration) time.Duration {
@@ -540,12 +637,13 @@ func (p *stripeQ) noteBaseLocked(q time.Duration) {
 		p.histI = (p.histI + 1) % stripeBaseN
 	}
 	if len(p.hist) < stripeBaseMin {
-		p.bq = 0
+		p.bq, p.p10 = 0, 0
 		return
 	}
 	s := slices.Clone(p.hist)
 	slices.Sort(s)
-	p.bq = min(s[len(s)*stripeBasePct/100], p.baseMax())
+	p.p10 = s[len(s)*stripeBasePct/100]
+	p.bq = min(p.p10, p.baseMax())
 }
 
 // baseMax: the baseline's cap (Iran's upload gate: stripeUpBaseMax).

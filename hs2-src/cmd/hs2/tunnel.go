@@ -464,16 +464,54 @@ func specFromConfig(unit string, fc fileConfig, publicIP string) tunnelSpec {
 		if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() {
 			s.BindIP = host
 		}
-		s.PublicIP = publicIP
-		if s.PublicIP == "" {
-			s.PublicIP = s.BindIP
-		}
+		s.PublicIP = codeIP(s.BindIP, ownLBIP(fc), publicIP)
 	} else {
 		s.Peer = host
 		s.BindIP = fc.BindLocalIP
-		s.PublicIP = publicIP
+		s.PublicIP = codeIP(s.BindIP, ownLBIP(fc), publicIP)
 	}
 	return s
+}
+
+// codeIP: the IP a code announces for THIS side (rt80). The tunnel's own
+// bound IP (addr / bind_local_ip) when it is a public one; else the first IP
+// of this side's lb list; only then the fallback (the server's first public
+// IP, i.e. usually the default-route IP — a different IP on a multi-IP host,
+// so it must never override a fixed bind). A private bind (1:1 NAT) keeps the
+// fallback; with none of them the private bind is still better than nothing.
+func codeIP(bind, lbIP, fallback string) string {
+	if ip := net.ParseIP(bind); ip != nil && !ip.IsUnspecified() && isPublicAddr(ip) {
+		return ip.String()
+	}
+	if lbIP != "" {
+		return lbIP
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return bind
+}
+
+// isPublicAddr: not loopback/link-local/private/multicast.
+func isPublicAddr(ip net.IP) bool {
+	return !(ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsPrivate() || ip.IsMulticast() || ip.IsUnspecified())
+}
+
+// ownLBIP: the first public IP of this side's lb list ("" none).
+func ownLBIP(fc fileConfig) string {
+	if fc.LB == nil {
+		return ""
+	}
+	l := fc.LB.Kharej
+	if own, _ := lbSide(fc); own == "iran" {
+		l = fc.LB.Iran
+	}
+	for _, e := range l {
+		if ip := net.ParseIP(e.IP); ip != nil && isPublicAddr(ip) {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 // ---- pre-flight -----------------------------------------------------------

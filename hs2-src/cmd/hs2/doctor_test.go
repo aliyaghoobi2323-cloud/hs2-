@@ -2,9 +2,13 @@ package main
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 )
 
 func TestNormalizeWS(t *testing.T) {
@@ -160,4 +164,56 @@ func TestCheckEndpointGating(t *testing.T) {
 	if d.fails != 1 {
 		t.Errorf("unreachable endpoint should FAIL, got %v", d.lines)
 	}
+}
+
+func TestCheckMTUProbing(t *testing.T) {
+	for _, tc := range []struct {
+		val       string // "" = file missing
+		warns     int
+		tag, want string
+		deep      bool // a deep WARN finding expected
+	}{
+		{"1\n", 0, " ok ", "1 —", false},
+		{"0\n", 1, "warn", "MTU blackhole", true},
+		{"2\n", 1, "warn", "probing on every connection", true},
+		{"", 0, "info", "skipped", false},
+	} {
+		proc := t.TempDir()
+		if tc.val != "" {
+			dir := filepath.Join(proc, "sys", "net", "ipv4")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "tcp_mtu_probing"), []byte(tc.val), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d := &doctorReport{}
+		checkMTUProbing(d, proc)
+		if d.warns != tc.warns || d.fails != 0 || len(d.lines) != 1 {
+			t.Fatalf("%q: warns=%d fails=%d lines=%q", tc.val, d.warns, d.fails, d.lines)
+		}
+		if !strings.Contains(d.lines[0], tc.tag) || !strings.Contains(d.lines[0], tc.want) {
+			t.Errorf("%q: line %q, want tag %q and %q", tc.val, d.lines[0], tc.tag, tc.want)
+		}
+		f := mtuProbingFindings(proc)
+		if got := len(f) == 1 && f[0].Sev == "WARN"; got != tc.deep || (!tc.deep && len(f) != 0) {
+			t.Errorf("%q: deep findings %+v, want WARN=%v", tc.val, f, tc.deep)
+		}
+	}
+}
+
+// The doctor check is only useful because hs2's own tuning sets the value it
+// expects: the plan must carry tcp_mtu_probing=1 in auto mode.
+func TestTunePlanSetsMTUProbing(t *testing.T) {
+	p := tune.Build(tune.Config{}, 2048, 2, func(string) bool { return true }, func(string) bool { return true })
+	for _, kv := range p.Sysctls {
+		if kv.Key == "net.ipv4.tcp_mtu_probing" {
+			if kv.Val != "1" {
+				t.Fatalf("plan sets tcp_mtu_probing=%q, want 1", kv.Val)
+			}
+			return
+		}
+	}
+	t.Fatal("the tuning plan does not set net.ipv4.tcp_mtu_probing")
 }

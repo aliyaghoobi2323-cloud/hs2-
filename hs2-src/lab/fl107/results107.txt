@@ -1,0 +1,74 @@
+fl107 — lab1 (198.51.100.168), 2026-11-13. Base fl106 061b93cf. Same mesh/crowd as fl106 (10 paths, crowd 3000, 40 s churn).
+Code: HS2_LB_FLAP_FAST removed (fl106: no gain). HS2_LB_CUT_NONEW (edge) now read in loadEnvKeys (envOn).
+
+1) fl106 queue2 (binary hs2-c 309bd54b; arm C = FLAP_FAST + CUT_NONEW draw-only, A = rel60 defaults)
+  F (flap, dark 25 s / clean 25 s x5) fails per dark phase, phases 2-5 summed:
+    A: F1A [172 23 21 13 20] 77 | F2A [158 30 20 15 19] 84 | F3A [167 31 14 25 17] 87 | F4A [157 30 17 17 16] 80   mean 82
+    C: F1C [157 37 13 13 11] 74 | F2C [136 17 16 19 16] 68 | F3C [159 35 11 12 11] 69 | F4C [133 16 16 17 14] 63   mean 68.5 (-16 %)
+    Phases 3-5 still ~16 fails each under C, in two 5 s bins 10-20 s after the dark start (A and C alike).
+  bP (single blackhole 30..150 s): fails A 146/166, C 143/179; no fails after the clear in any run.
+    event path back to >=5 links (clear at 150 s): A 159/159 s, C 169/199 s  <- C regrows later (n=2)
+  Qt n=1: crowd p99 med5s / worst5s: A 212/555, C 201/397, H(DEAD_HYST=5) 179/310; flips of 0.8 % paths /10 min A 2.0 C 6.0 H 0.0
+2) Diagnosis of the remaining ~16/phase: the steering draw is not the only way onto a cut path. pickKey orders
+   "pressed" BEFORE the path rank, and under the crowd's churn every uncut link is pressed (or took a burst), so the cut
+   path's 2 probe links (unpressed, empty) win new connections anyway. fl107 adds pickKey.cutNew (same key): a link of a
+   path the dialing side reports cut sorts after every other link, before pressure (all paths cut: no effect).
+   Lab binary hs2-n 2bbf7a4b (commit 1b27e11d).
+3) fl107 A/B on hs2-n (2bbf7a4b), interleaved, A = CUT_NONEW=0 (rel60 behaviour), N = HS2_LB_CUT_NONEW=1 (edge):
+  F (flap) fails per dark phase [1..5], phases 2-5 summed:
+    N: F7N [153 0 0 0 0] 0 | F8N [145 0 0 0 0] 0 | F9N [156 0 0 0 0] 0 | F10N [127 0 0 0 0] 0          total 153/145/156/127
+    A: F7A [150 51 16 16 14] 97 | F8A [165 42 16 20 15] 93 | F9A [102 59 16 18 18] 111 | F10A [169 19 17 19 18] 73  total 247/258/213/242
+    -> phases 2-5: 0 vs mean 94 (every N run 0, every A run >= 73). Phase 1 (plain blackhole cost) unchanged.
+    Event path under N: cut once at ~42 s and held cut with its 2 probe links through the whole flap (no data -> no
+    "recovering"), back r297-r322 after the last clear at 280 s (A: r292-r327).
+    Light: crowd p99 med 5 s bucket N 182/164/156/175 (mean 169) vs A 161/186/156/161 (166); worst 5 s bucket N 328/279/251/346
+    (301) vs A 289/339/310/253 (298) -> no change. call p99 N 194/263/339/284 vs A 196/211/248/279 (noisy; F9N 339 single).
+  bP (single blackhole 30..150 s), n=1 so far: P3N fails 144 (A on hs2-c 146/166), 0 after the clear, back to >=5 links at
+    159 s (A 159/159). The draw-only C arm (hs2-c) was 169/199 s — n=2, not seen with the full key so far.
+  bP round 4: P3A fails 158 (0 after the clear), back to >=5 links at 170 s. So bP hs2-n: N 144 / 159 s vs A 158 / 170 s (n=1 each).
+  Qt (hs2-n) n=1: crowd p99 med5s/worst5s N 189/291 vs A 180/335; call p99 N 211 vs A 276; 0 fails both.
+4) DEAD_HYST: only fl106 Q1H (300 s, n=1): flips of 0.8 % paths 0.0/10 min vs A 2.0 / C 6.0, crowd p99 med5s 179 vs 212.
+   n>=4 10-min runs (SC Ql) are queued (j107b).
+
+VERDICT (agent stopped at the 50 min budget, 08:44 UTC):
+  CUT_NONEW (full key, hs2-n): flap n=4+4 is a clear, consistent win (phases 2-5: 0 vs 73-111 failed crowd connections per
+  run, ~-40 % of all flap fails), light p99 unchanged, the path is re-admitted normally after the flap and after a single
+  blackhole (n=1: 159 s vs 170 s). NOT yet proven clean to the bar: bP n=1+1 (need n>=4), Qt n=1+1 (need n>=2), no test
+  suite run. Default stays OFF in envdef (not changed). Next agent: read fl107/res (P4N P4A Q2H Q3A) + fl107/resb
+  (bP N/A x3, Qt N, DEAD_HYST Ql H/A x4) + fl107/res/tests (gofmt/vet/full/race, run with labslot --all after queue b);
+  if bP/Qt clean -> envdef {"HS2_LB_CUT_NONEW","1",Edge} + TestSides row + README table + CHANGELOG, build bin107, mixed runs.
+Unattended on lab1: fl107 queue (units fl107q0-2) then waiter fl107wb (go107b.sh -> j107b -> tests107.sh).
+  Summaries: python3 /opt/hs2lab/fl106/sum106.py /opt/hs2lab/fl107/res/* /opt/hs2lab/fl107/resb/*;
+  python3 /opt/hs2lab/fl107/ev107.py <bP dirs>. Stop before the next job: touch /opt/hs2lab/fl107/stop.
+
+fl108 — lab1, 2026-11-13 (agent fl108, 08:43-09:35 UTC). Binary under test hs2-n 2bbf7a4b unless noted.
+A) bP single blackhole 30..150 s (N = HS2_LB_CUT_NONEW=1, A = off), n=5+5 (P3..P7):
+   run      fails  after-clear  cut at  back to >=5 links   crowd p99 med5s/worst5s
+   P3N       144      0          41 s     159 s              155/265
+   P4N       161      0          42 s     169 s              180/328
+   P5N       167      0          42 s     169 s              198/321
+   P6N       114      0          42 s     169 s              171/388
+   P7N       143      0          42 s     177 s              216/378
+   P3A       158      0          42 s     170 s              195/423
+   P4A       134      0          42 s     169 s              180/305
+   P5A       151      0          42 s     159 s              178/270
+   P6A       142      0          42 s     179 s              176/230
+   P7A       143      0          42 s     170 s              204/318
+   mean N (n=5) 145.8 fails / 168.6 s, A (n=5) 145.6 fails / 169.4 s -> no difference (recovery within noise, no extra fails).
+   (fails = failed crowd connections = connections dead on the blackholed path; none after the clear in any run)
+B) Qt quiet 300 s: N Q2N 189/291, Q3N 220/644*; A Q2A 180/335, Q3A 184/356; H Q2H 185/311; 0 fails everywhere.
+   * Q3N (and L2A) overlapped this agent's nice-19 build + targeted tests (09:06-09:08 UTC): Q3N heavy 596 vs
+     990-1500 in the other quiet runs -> tainted, not counted. CUT_NONEW only acts on a path the dialing side
+     reports cut; no path was cut in any quiet run (ev-path cut 0), so the key is inert there by construction.
+C) DEAD_HYST (H = HS2_LB_DEAD_HYST=5 both sides) — flips of the 0.8 % path per 10 min / crowd p99 med5s/worst5s:
+   Ql 600 s: L1H 2.0 186/322, L2H 1.0 181/435 | L1A 0.0 200/510, L2A 0.0 185/432*
+   Qt 300 s: Q2H 0.0 185/311, Q2A 8.0 180/335, Q3A 0.0 184/356 (fl106 Q1H 0.0 179/310 vs Q1A 2.0 212/555)
+   -> flips do NOT drop reliably (A is 0 in 3 of 4 recent runs; H 2.0 and 1.0 in both 10-min runs). DEAD_HYST stays OFF.
+   L3H/L4H/L3A/L4A still running in queue b (fl107/resb) at the end of this agent.
+D) Tests: fl107 suite (tests107.sh, --all) not yet run (queued after queue b, ~10:00 UTC). fl108 HEAD 8bf94aac:
+   go test ./envdef + engine TestApplyDefaults/TestCutNoNew* on lab1: ok. Full + race queued (fl108w, tests108.sh).
+VERDICT: HS2_LB_CUT_NONEW default ON (edge), commit 8bf94aac; bin108 hs2-linux-amd64 sha 403fe797 (C:\h2w\bin108).
+  Mixed runs queued on lab1 (unit fl108w, waits for fl107/res/tests/DONE): M1 = bin108 edge + rel58 exit
+  (C:\h2w\bin58 5d87000d), M2 = bin108 edge + rel60 exit (C:\h2w\bin60 f72168b6), M0 = rel60/rel60 baseline,
+  each F (flap) + bP; arm X = binary defaults. Results /opt/hs2lab/fl108/res/M*, tests /opt/hs2lab/fl108/res/tests.
+  Summaries: python3 /opt/hs2lab/fl106/sum106.py /opt/hs2lab/fl108/res/M*; python3 /opt/hs2lab/fl107/ev107.py <M?P>.

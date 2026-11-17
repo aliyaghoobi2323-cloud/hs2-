@@ -1,0 +1,24 @@
+== x7
+d8 A  n=6 mbps mean=1054.0 med=1021.8 | p99 crowd=176.9 call=237.5 game=144.9 echo=134.6 ping=106.9 | rss ir=311.3 kh=438.4
+d8 B  n=6 mbps mean=1829.0 med=1850.8 | p99 crowd=182.6 call=268.7 game=153.0 echo=133.1 ping=104.0 | rss ir=303.2 kh=453.0
+d8 C  n=5 mbps mean=1690.0 med=1758.2 | p99 crowd=181.3 call=265.6 game=150.8 echo=121.7 ping=139.4 | rss ir=306.7 kh=439.7
+u1 A  n=2 mbps mean= 427.4 med= 427.4 | p99 crowd=169.0 call=188.9 game=162.8 echo=127.4 ping=104.0 | rss ir=288.4 kh=308.4
+u1 B  n=2 mbps mean= 258.6 med= 258.6 | p99 crowd=169.5 call=249.6 game=133.5 echo=118.1 ping=116.5 | rss ir=291.6 kh=301.9
+u1 C  n=2 mbps mean= 448.1 med= 448.1 | p99 crowd=167.2 call=247.9 game=124.9 echo=122.6 ping=101.3 | rss ir=295.9 kh=321.1
+== y7
+d1 A  n=6 mbps mean= 356.9 med= 389.4 | p99 crowd=171.1 call=268.0 game=135.7 echo=112.1 ping=120.5 | rss ir=278.2 kh=313.2
+d1 B  n=6 mbps mean= 582.8 med= 632.0 | p99 crowd=170.8 call=240.3 game=143.8 echo=128.0 ping=112.4 | rss ir=298.4 kh=318.7
+d1 H  n=6 mbps mean= 450.4 med= 425.2 | p99 crowd=171.7 call=250.4 game=144.0 echo=129.6 ping=124.5 | rss ir=290.4 kh=319.7
+d1 S  n=6 mbps mean= 530.6 med= 539.2 | p99 crowd=174.2 call=241.3 game=132.6 echo=137.2 ping=122.0 | rss ir=287.1 kh=317.4
+d8 A  n=4 mbps mean=1073.8 med=1035.2 | p99 crowd=176.8 call=232.3 game=142.2 echo=107.3 ping=111.5 | rss ir=311.5 kh=446.5
+d8 B  n=4 mbps mean=1722.7 med=1728.1 | p99 crowd=182.7 call=226.2 game=139.9 echo=143.6 ping=107.2 | rss ir=304.1 kh=436.0
+d8 H  n=4 mbps mean=1633.5 med=1690.1 | p99 crowd=178.7 call=200.1 game=143.0 echo=143.1 ping=107.0 | rss ir=309.5 kh=433.6
+d8 S  n=4 mbps mean=1705.0 med=1690.7 | p99 crowd=181.5 call=217.1 game=153.9 echo=101.2 ping=109.7 | rss ir=297.9 kh=445.2
+u1 A  n=2 mbps mean= 431.4 med= 431.4 | p99 crowd=167.7 call=217.5 game=176.7 echo=101.1 ping=123.8 | rss ir=281.8 kh=330.8
+u1 S  n=2 mbps mean= 306.8 med= 306.8 | p99 crowd=168.2 call=208.3 game=143.3 echo=122.4 ping=138.2 | rss ir=284.4 kh=314.4
+== z7
+== w7
+d1 A  n=5 mbps mean= 342.4 med= 366.8 | p99 crowd=168.7 call=217.7 game=148.9 echo=122.4 ping=110.1 | rss ir=269.8 kh=309.3
+d1 H  n=5 mbps mean= 636.4 med= 715.0 | p99 crowd=169.5 call=239.4 game=157.5 echo=117.6 ping=110.1 | rss ir=299.6 kh=325.0
+d8 A  n=3 mbps mean=1104.9 med=1018.2 | p99 crowd=174.9 call=237.9 game=137.5 echo=109.7 ping=124.7 | rss ir=314.3 kh=435.1
+d8 H  n=2 mbps mean=1664.8 med=1664.8 | p99 crowd=177.3 call=209.7 game=137.2 echo=120.9 ping=109.0 | rss ir=303.8 kh=443.3

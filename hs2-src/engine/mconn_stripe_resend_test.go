@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -92,7 +93,33 @@ func stripeAllDie(t *testing.T, grace time.Duration) error {
 	resetLiteBudget()
 	n := &tNet{exit: newMConnExit(62)}
 	rateLinks(n, 2<<20)
-	iran, err := newMConnIran(62, n.open)
+	// race147: with the grace on, a sub Iran opens after the cut joins only
+	// once the exit has seen every sub die (its grace began). Otherwise the
+	// order was left to the scheduler: when Iran's new sub reached the exit
+	// first, the exit's plain stripe resend carried the chunks and the grace
+	// path under test never ran (TestStripeAllDieGraceRejoins, ~1 in 20).
+	var (
+		openMu sync.Mutex // an open and the cut's last look at the links do not overlap
+		cut    bool
+	)
+	open := func(p mPlane, avoid []any) (mSub, any, error) {
+		openMu.Lock()
+		if !cut || grace == 0 {
+			defer openMu.Unlock()
+			return n.open(p, avoid)
+		}
+		openMu.Unlock()
+		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+			n.exit.mu.Lock()
+			in := !n.exit.graceUntil.IsZero() || n.exit.ended
+			n.exit.mu.Unlock()
+			if in {
+				break
+			}
+		}
+		return n.open(p, avoid)
+	}
+	iran, err := newMConnIran(62, open)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,14 +127,27 @@ func stripeAllDie(t *testing.T, grace time.Duration) error {
 	data := randBytes(12<<20, 62)
 	go func() {
 		mWaitFor(t, "stripe", 10*time.Second, func() bool { return stripeSubs(iran) == 2 })
+		// hs115: take every link again right before the close (a link
+		// opened between the drop and the close stays out of the cut).
 		time.Sleep(300 * time.Millisecond)
-		n.mu.Lock()
-		ls := append([]*tLink(nil), n.links...) // every link the connection has
-		n.mu.Unlock()
-		for _, l := range ls {
+		snap := func() []*tLink {
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			return append([]*tLink(nil), n.links...) // every link the connection has
+		}
+		first := snap()
+		for _, l := range first {
 			l.exit.drop.Store(true) // written, never delivered
 		}
 		time.Sleep(300 * time.Millisecond)
+		openMu.Lock()
+		cut = true // from here Iran's reopen waits for the exit's grace
+		ls := snap()
+		openMu.Unlock()
+		t.Logf("cut: %d stripe subs, %d links, %d more by the close", stripeSubs(iran), len(first), len(ls)-len(first))
+		for _, l := range ls {
+			l.exit.drop.Store(true)
+		}
 		for _, l := range ls {
 			l.exit.Close()
 			l.iran.Close()
@@ -147,12 +187,17 @@ func TestStripeAllDieNoGraceEnds(t *testing.T) {
 // With the grace Iran opens a new sub, the exit keeps the connection and
 // resends what the dead subs held: the download completes byte-exact.
 func TestStripeAllDieGraceRejoins(t *testing.T) {
-	g0, r0 := stripeResendStat.graces.Load(), stripeResendStat.rejoined.Load()
-	if err := stripeAllDie(t, 3*time.Second); err != nil {
-		t.Fatalf("download failed: %v", err)
-	}
-	if stripeResendStat.graces.Load() == g0 || stripeResendStat.rejoined.Load() == r0 {
-		t.Fatal("no grace or no rejoin counted")
+	// race147: stripeAllDie holds Iran's reopen until the exit's grace has
+	// begun, so every round takes the grace path (hs115 left that order to
+	// the scheduler and accepted it in one of 4 rounds: still ~1 in 20 lost).
+	for i := range 2 {
+		g0, r0 := stripeResendStat.graces.Load(), stripeResendStat.rejoined.Load()
+		if err := stripeAllDie(t, 3*time.Second); err != nil {
+			t.Fatalf("round %d: download failed: %v", i, err)
+		}
+		if g, r := stripeResendStat.graces.Load()-g0, stripeResendStat.rejoined.Load()-r0; g == 0 || r == 0 {
+			t.Fatalf("round %d: delivered without the grace path (graces +%d, rejoins +%d)", i, g, r)
+		}
 	}
 }
 

@@ -1,0 +1,57 @@
+# hs123 lab1 (198.51.100.168 only) — KEEPSTALL quiet cost + idle-sub false close, on rel61
+# branch hs123 = rel61 HEAD cfe30280 + merge hs112 (47522b32, clean merge) + 63cdb75a. All rel61 defaults unchanged;
+# HS2_MCONN_STRIPE_KEEPSTALL stays a lab key (off). Binary hs2-k123 (63cdb75a) both sides, key on/off by env only.
+# Q = quiet 150 s (2.5 % loss on one path), bS = path 49.2->53.1 dark one way 30..90 s; HEAVY_CTL=direct everywhere.
+# 24 runs, 3 slots, interleaved (j1.txt, j2.txt); per-run lines: ana-all.txt (ana123.py + rss).
+
+## root cause work (a) — quiet download cost
+hs121 logs (k121, key on): Iran (the download receiver) used the KEEPSTALL hole rooms in quiet runs:
+  gap_room 304 / 619 / 3076 chunks in qd1on1 (586 Mbit/s) / qd8on1 (1052) / qd8on2 (831); 0 in the faster qd1on2/3
+  (859 / 1081). The rooms were checked BEFORE the STRIPE_UP reorder growth (growOOOLocked), so a quiet hole >= 500 ms
+  took the +32 MiB room instead of growing oooMax — the reorder bound stayed small for the rest of the run.
+  FIX 1: hole rooms (gapRoom / gapFill / holeSub) only after the normal growth fails -> key on == key off until the
+  reorder growth is exhausted. hs123: gap_room = 0 in every quiet run (only dark runs: xd1 9333).
+Sender (exit) bookkeeping: every write scanned every sub's smux marks (type switch + atomics) and updated the global
+  kept counter per chunk (shared cache line, also with the key off since hs112).
+  FIX 2: a write trims only its own sub's acked prefix; the all-sub trim runs on the 100 ms tick or when a bound is
+  crossed; kept counter updated once per write / drop.
+Memory: kept bytes key on 22-32 MB per process (kh) vs the key-off rule (16 MiB per connection, 2 s) — the key keeps
+  less on d8 (RSS kh 816/875 on vs 910/911 off) and ~+60..90 MB on d1 (720-752 vs 662-667). No copies: kept chunks are
+  references until the smux ack.
+What remains: d8 throughput tracks the EXIT scavenger gate width (stripe gate w avg 1.7 of 4.6 live in the 702 run vs
+  3.5-4.5 in the 1000-1230 runs, key off runs included) — the gate cuts on path-queue samples; the key does not touch
+  the gate or the path-queue measure. Key exit-only 1134/890, Iran-only 1208/1198 (no side carries a cost).
+
+## (b) idle-sub false close
+Ack-stall candidate now also needs the sub to WRITE: bytes queued / being written, or a kept chunk within
+ackStallActive (6 s; a dark sub fills its window in ~0.3 s and is closed within ~1.8-3 s). hs121 qu8on2 case (no write
+for 57 s, unacked=1) is no longer a candidate. TestAckStallIdleSubNotCandidate. hs123: 0 quiet ack-stall closes in
+13 key-on quiet runs.
+
+## A/B quiet (Mbit/s; light p99 ms ping/echo/call/crowd; cpu cores ir/kh; RSS MB ir/kh)
+d1 ON  n=3  949 849 824 (med 849)  ping 196-239 echo 194-220 call 276-308 crowd 241-273  cpu 2.0-2.3/2.2-2.6 rss ~550/720-752
+d1 off n=3  859 511 822 (med 822)  ping 249-301 echo 214-288 call 299-329 crowd 259-334  cpu 2.1-2.3/2.1-2.5 rss ~600/662-667
+d8 ON  n=2  702 1230 (med 966)     echo 394/324 call 579/573 crowd 494/455                cpu 2.1-2.4/2.2-2.7 rss 612-660/816-875
+d8 off n=2 1019 1063 (med 1041)    echo 331/327 call 507/488 crowd 486/425                cpu 2.1-2.4/2.3-2.6 rss 528-628/910
+   (+ one each void: qd8off2 / qd8on3 iperf3 SEGFAULT in the harness, not hs2)
+d8 key exit-only n=2 1134 890; key Iran-only n=2 1208 1198
+u1 ON 554 / off 382 (n=1 each); u8 ON 1177 / off 773 (n=1 each); light p99 lower with ON in both
+## dark (key ON): download xd1 657 / xd2 854 zero=0, survive 2/2 (kh rto closes 2 / 1, hole_sub 1067 / 471);
+                  upload xu1 589 / xu2 654 zero=0, survive 2/2 (iperf control direct). crowdfail 66-83 per dark run
+                  (light users on the dark path; no key-off dark baseline in this batch).
+
+## verdict
+The hs121 quiet cost does not reproduce on the fixed build: d1 ON >= off (median 849 vs 822, light p99 lower), u1/u8
+ON higher, d8 ON median 966 vs 1041 (-7 %, n=2, one ON run at 702 with the gate held narrow; key-on-one-side runs are
+all >= 890). The receiver-room ordering was a real quiet-run interaction (now 0 gap_room in quiet) and the idle-sub
+close is gone. NOT DONE: n below target (d1 3/3, d8 2/2 valid, u1/u8 1/1, dark down 2 of 4, up 2 of 2) — two d8 runs
+lost to iperf3 segfaults. Key stays OFF (no envdef / README / CHANGELOG change): default ON needs d8 n>=6 to rule out
+the -7 % and a key-off dark baseline.
+
+## binary (63cdb75a, KEEPSTALL default OFF; -trimpath -ldflags="-s -w", CGO_ENABLED=0, built on lab1)
+C:\h2w\bin123\hs2-linux-amd64  sha256 f1731e4cc7915fb75341c56db5df6ebe2910ca67751efb4acfe096d012c9c8e2
+
+## tests (63cdb75a, idle lab1 after all runs; tests123.sh)
+gofmt clean; go vet ./engine ./envdef ./cmd/... ok.
+go test ./... -timeout 30m: 12 packages ok, no FAIL (engine 703 s, udpcarrier 85 s) -> test-all.txt
+go test -race ./engine -timeout 30m: ok 834 s, 0 DATA RACE -> test-race.txt

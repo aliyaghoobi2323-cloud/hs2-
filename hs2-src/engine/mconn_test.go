@@ -202,6 +202,35 @@ func closeAndWait(t *testing.T, ms ...*mConn) {
 			t.Fatal("mconn did not end after Close")
 		}
 	}
+	waitConnLoops(t.Logf, mRSTWait+4*time.Second)
+}
+
+// upgradesInFlight counts forceUpgrade goroutines (they may start a manage
+// loop after the conn was closed).
+var upgradesInFlight atomic.Int64
+
+// connLoopsDumped: the first timeout of waitConnLoops dumped the stacks.
+var connLoopsDumped atomic.Bool
+
+// waitConnLoops (b278) waits until no mConn manage or sub loop (connLoops)
+// and no forceUpgrade runs any more: a loop left by a test reads package
+// switches that later tests and cleanups write (the -race reports of b266,
+// b276, b277). It never fails; on a timeout it logs the count (and once
+// per process the stacks) so the conn left open can be found.
+func waitConnLoops(logf func(string, ...any), d time.Duration) bool {
+	end := time.Now().Add(d)
+	for connLoops.Load() > 0 || upgradesInFlight.Load() > 0 {
+		if time.Now().After(end) {
+			logf("waitConnLoops: %d conn loops, %d upgrades still running after %v", connLoops.Load(), upgradesInFlight.Load(), d)
+			if connLoopsDumped.CompareAndSwap(false, true) {
+				buf := make([]byte, 1<<20)
+				logf("waitConnLoops stacks:\n%s", buf[:runtime.Stack(buf, true)])
+			}
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
 }
 
 // noLeak fails if goroutines started since before are still running.

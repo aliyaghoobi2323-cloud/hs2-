@@ -1,0 +1,74 @@
+
+d1 A  n=3 mbps mean= 475.2 med= 428.0 | p99 crowd=171.0 call=226.8 game=134.0 echo=132.5 ping=140.3 | rss ir=291.7 kh=323.6
+d1 B  n=3 mbps mean= 606.4 med= 706.0 | p99 crowd=171.5 call=200.6 game=155.8 echo=122.0 ping=113.8 | rss ir=295.5 kh=317.9
+d1 E  n=3 mbps mean= 604.7 med= 593.2 | p99 crowd=170.6 call=222.4 game=150.1 echo=146.7 ping=112.1 | rss ir=299.0 kh=317.8
+d1 F  n=3 mbps mean= 284.0 med= 257.2 | p99 crowd=168.7 call=213.8 game=150.8 echo=115.1 ping=128.5 | rss ir=277.1 kh=307.1
+  d1 mbps  A=  475.2 B=  606.4 d= +27.6% welch p=0.491 mwu p=0.663
+  d1 crowd A=  171.0 B=  171.5 d=  +0.3% welch p=0.833 mwu p=0.663
+  d1 call  A=  226.8 B=  200.6 d= -11.5% welch p=0.388 mwu p=0.383
+  d1 game  A=  134.0 B=  155.8 d= +16.3% welch p=0.349 mwu p=0.383
+  d1 echo  A=  132.5 B=  122.0 d=  -7.9% welch p=0.644 mwu p=0.663
+  d1 ping  A=  140.3 B=  113.8 d= -18.9% welch p=0.156 mwu p=0.383
+  d1 mbps  A=  475.2 E=  604.7 d= +27.2% welch p=0.226 mwu p=0.383
+  d1 crowd A=  171.0 E=  170.6 d=  -0.2% welch p=0.899 mwu p=1.000
+  d1 call  A=  226.8 E=  222.4 d=  -1.9% welch p=0.926 mwu p=0.663
+  d1 game  A=  134.0 E=  150.1 d= +12.0% welch p=0.547 mwu p=0.663
+  d1 echo  A=  132.5 E=  146.7 d= +10.8% welch p=0.478 mwu p=0.663
+  d1 ping  A=  140.3 E=  112.1 d= -20.1% welch p=0.263 mwu p=0.190
+  d1 mbps  A=  475.2 F=  284.0 d= -40.2% welch p=0.118 mwu p=0.190
+  d1 crowd A=  171.0 F=  168.7 d=  -1.3% welch p=0.422 mwu p=0.663
+  d1 call  A=  226.8 F=  213.8 d=  -5.7% welch p=0.648 mwu p=1.000
+  d1 game  A=  134.0 F=  150.8 d= +12.5% welch p=0.560 mwu p=0.383
+  d1 echo  A=  132.5 F=  115.1 d= -13.1% welch p=0.511 mwu p=0.383
+  d1 ping  A=  140.3 F=  128.5 d=  -8.5% welch p=0.596 mwu p=1.000
+d8 A  n=7 mbps mean=1510.8 med=1444.2 | p99 crowd=180.3 call=215.2 game=134.4 echo=111.6 ping=114.9 | rss ir=322.1 kh=449.1
+d8 B  n=13 mbps mean=1392.6 med=1385.2 | p99 crowd=180.3 call=221.6 game=152.8 echo=122.6 ping=125.2 | rss ir=311.8 kh=446.2
+d8 E  n=7 mbps mean=1500.3 med=1505.7 | p99 crowd=178.8 call=224.2 game=138.5 echo=131.1 ping=125.6 | rss ir=316.8 kh=443.4
+d8 F  n=3 mbps mean=1090.5 med=1028.6 | p99 crowd=176.2 call=292.0 game=152.9 echo=139.2 ping=124.0 | rss ir=308.3 kh=440.0
+d8 G  n=5 mbps mean=1469.2 med=1489.9 | p99 crowd=181.4 call=215.2 game=152.4 echo=139.6 ping=111.8 | rss ir=304.1 kh=440.0
+  d8 mbps  A= 1510.8 B= 1392.6 d=  -7.8% welch p=0.141 mwu p=0.132
+  d8 crowd A=  180.3 B=  180.3 d=  -0.0% welch p=0.973 mwu p=1.000
+  d8 call  A=  215.2 B=  221.6 d=  +3.0% welch p=0.704 mwu p=0.812
+  d8 game  A=  134.4 B=  152.8 d= +13.7% welch p=0.210 mwu p=0.235
+  d8 echo  A=  111.6 B=  122.6 d=  +9.8% welch p=0.120 mwu p=0.132
+  d8 ping  A=  114.9 B=  125.2 d=  +8.9% welch p=0.335 mwu p=0.552
+  d8 mbps  A= 1510.8 E= 1500.3 d=  -0.7% welch p=0.902 mwu p=1.000
+  d8 crowd A=  180.3 E=  178.8 d=  -0.9% welch p=0.133 mwu p=0.125
+  d8 call  A=  215.2 E=  224.2 d=  +4.2% welch p=0.670 mwu p=0.609
+  d8 game  A=  134.4 E=  138.5 d=  +3.1% welch p=0.765 mwu p=0.701
+  d8 echo  A=  111.6 E=  131.1 d= +17.5% welch p=0.245 mwu p=0.898
+  d8 ping  A=  114.9 E=  125.6 d=  +9.3% welch p=0.418 mwu p=0.609
+  d8 mbps  A= 1510.8 F= 1090.5 d= -27.8% welch p=0.055 mwu p=0.023
+  d8 crowd A=  180.3 F=  176.2 d=  -2.3% welch p=0.001 mwu p=0.023
+  d8 call  A=  215.2 F=  292.0 d= +35.7% welch p=0.068 mwu p=0.023
+  d8 game  A=  134.4 F=  152.9 d= +13.8% welch p=0.348 mwu p=0.494
+  d8 echo  A=  111.6 F=  139.2 d= +24.7% welch p=0.294 mwu p=0.494
+  d8 ping  A=  114.9 F=  124.0 d=  +7.9% welch p=0.641 mwu p=0.649
+  d8 mbps  A= 1510.8 G= 1469.2 d=  -2.7% welch p=0.677 mwu p=0.871
+  d8 crowd A=  180.3 G=  181.4 d=  +0.6% welch p=0.344 mwu p=0.194
+  d8 call  A=  215.2 G=  215.2 d=  -0.0% welch p=0.999 mwu p=1.000
+  d8 game  A=  134.4 G=  152.4 d= +13.4% welch p=0.203 mwu p=0.256
+  d8 echo  A=  111.6 G=  139.6 d= +25.0% welch p=0.096 mwu p=0.051
+  d8 ping  A=  114.9 G=  111.8 d=  -2.7% welch p=0.718 mwu p=0.871
+u1 A  n=3 mbps mean= 383.3 med= 334.1 | p99 crowd=169.1 call=226.8 game=138.8 echo=131.3 ping=117.8 | rss ir=293.5 kh=306.0
+u1 B  n=3 mbps mean= 435.0 med= 428.3 | p99 crowd=168.1 call=262.6 game=152.1 echo=116.5 ping=111.7 | rss ir=299.3 kh=328.6
+u1 E  n=3 mbps mean= 443.5 med= 442.3 | p99 crowd=171.3 call=240.2 game=171.8 echo=128.3 ping=104.6 | rss ir=293.0 kh=309.8
+u1 F  n=3 mbps mean= 477.4 med= 487.3 | p99 crowd=168.4 call=214.9 game=159.9 echo=122.8 ping=106.3 | rss ir=301.5 kh=323.2
+  u1 mbps  A=  383.3 B=  435.0 d= +13.5% welch p=0.649 mwu p=0.663
+  u1 crowd A=  169.1 B=  168.1 d=  -0.6% welch p=0.681 mwu p=0.663
+  u1 call  A=  226.8 B=  262.6 d= +15.7% welch p=0.203 mwu p=0.383
+  u1 game  A=  138.8 B=  152.1 d=  +9.6% welch p=0.115 mwu p=0.190
+  u1 echo  A=  131.3 B=  116.5 d= -11.3% welch p=0.052 mwu p=0.081
+  u1 ping  A=  117.8 B=  111.7 d=  -5.1% welch p=0.817 mwu p=1.000
+  u1 mbps  A=  383.3 E=  443.5 d= +15.7% welch p=0.550 mwu p=0.663
+  u1 crowd A=  169.1 E=  171.3 d=  +1.3% welch p=0.246 mwu p=0.383
+  u1 call  A=  226.8 E=  240.2 d=  +5.9% welch p=0.560 mwu p=1.000
+  u1 game  A=  138.8 E=  171.8 d= +23.7% welch p=0.014 mwu p=0.081
+  u1 echo  A=  131.3 E=  128.3 d=  -2.3% welch p=0.785 mwu p=0.663
+  u1 ping  A=  117.8 E=  104.6 d= -11.2% welch p=0.601 mwu p=1.000
+  u1 mbps  A=  383.3 F=  477.4 d= +24.5% welch p=0.375 mwu p=0.663
+  u1 crowd A=  169.1 F=  168.4 d=  -0.4% welch p=0.786 mwu p=1.000
+  u1 call  A=  226.8 F=  214.9 d=  -5.3% welch p=0.679 mwu p=0.663
+  u1 game  A=  138.8 F=  159.9 d= +15.2% welch p=0.257 mwu p=0.190
+  u1 echo  A=  131.3 F=  122.8 d=  -6.5% welch p=0.603 mwu p=1.000
+  u1 ping  A=  117.8 F=  106.3 d=  -9.7% welch p=0.661 mwu p=1.000

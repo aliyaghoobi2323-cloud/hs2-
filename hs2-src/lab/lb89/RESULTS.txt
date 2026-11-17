@@ -1,0 +1,74 @@
+lb89 — branch lb89 from lb84 21c0f8d0, lab3 only (198.51.100.235), 2026-11-13.
+Build for the A/B: hs2P0 c6db4f16 (= lb84 tree; same hash as lb84's hs2P), same binary both sides.
+Scripts: lab/lb84 (lb84.sh + q84.sh + an84.sh; lb84.sh on the lab got "rm -rf $W $WD" appended to
+keep lab3's disk), lab/lbv81/lbv81.sh SHORT=1 for (c), rev89.py (one path's verdict reversals).
+
+== (a) HS2_LB_SLOW_SKIP_COPY=1 — n=6 per arm, 3 slots in parallel, arms interleaved per slot
+Scenario (lb84 F3): 4 paths rtt ~90 ms, base loss 0.1/0.2/0.3/0.8 %, path a 10 % loss t=40..260 ->
+lowered, cut, cut-drained; crowd 1500 with conn life 200 s (CLIFE=200s) so copy subs sit on the
+cut-drained links past cutDrainForce (60 s); 2 Mbit call, game, heavy down x4 30 s at t=270.
+Command: labslot.sh bash q84.sh A1 B1 A2 B2 | B3 A3 B4 A4 | A5 B5 B6 A6, ARMB=HS2_LB_SLOW_SKIP_COPY=1,
+HS2E=HS2X=hs2P0, CLIFE=200s.
+  run  force closes (edge, "trickling" on cut-path links 1m+)  crowd fail  call  crowd p99  game p99  call p99  heavy
+  A1   3 (1+2)                                                0           ok    122.1      162.5     172.3     889
+  A2   0                                                      0           ok    124.8      108.7     145.4     1199
+  A3   3 (2+1)                                                0           ok    129.9      118.8     183.1     1150
+  A4   0                                                      0           ok    134.3      124.8     182.6     947
+  A5   0                                                      0           ok    119.2      105.5     167.1     1007
+  A6   0                                                      0           ok    119.5      108.4     174.7     847
+  B1   1 (a trickling PRIMARY: copies are skipped by construction) 0     ok    125.3      107.6     181.1     1071
+  B2   0                                                      0           ok    118.8      183.5     145.8     1332
+  B3   0                                                      0           ok    137.3      180.8     205.8     972
+  B4   0                                                      0           ok    123.3      110.0     161.9     956
+  B5   0                                                      0           ok    119.1      117.6     176.3     1105
+  B6   0                                                      0           ok    125.6      111.6     181.0     1093
+  mean      off: closes 1.0/run (2 of 6 runs), crowd p99 125.0, game p99 median 113.7, call p99 170.9, heavy 1007
+            on : copy closes 0 (1 primary close), crowd p99 124.9, game p99 median 114.6, call p99 175.3, heavy 1088
+  With lb84's runs: off arm had copy-sub force closes in 4 of 9 runs (14 closes), on arm 0 copy closes in
+  8 runs (Fisher, runs with >=1 close: p = 0.053). No user conn or call died in either arm (the primary
+  sat on a good path); lbv81 s1-lab2 shows the user-visible case (the 2 Mbit call ended at t=226 by such
+  a close). Light p99 equal (125.0 vs 124.9); game/call p99 within run noise (two on-arm game
+  outliers B2/B3 ~180 ms, and off A1 162 ms: the key's code runs only in slowStreams on retiring links,
+  at cut+60 s, so it cannot touch the rest of a run). Heavy +8 % on (noise).
+Verdict: ACCEPT, default ON on the edge (envdef {"HS2_LB_SLOW_SKIP_COPY","1",Edge}; the key moved from a
+package-level os.Getenv to loadEnvKeys so the table applies; HS2_LB_SLOW_SKIP_COPY=0 turns it off).
+Only the edge logs force closes in this layout (kh.log: 0 in every run). Tests: TestSlowSkipCopy
+(unchanged), TestApplyDefaults* edge on / exit off, envdef table 58 keys.
+
+== (b) EARLY RESCUE on blackholed paths — NOT implemented; see EARLY-RESCUE-DESIGN.txt.
+A copy opened at +1.5 s carries only bytes written after it opens: raw first subs keep no buffer and their
+upgrade must finish over the dead sub; records-mode light conns keep no sent chunks (keepSentLocked only
+for striping conns, m.stN > 0). The in-flight requests that make the +8..+12 s failure bulk cannot be
+saved by a copy; it needs a resend (ring of recent raw bytes / light keep buffer + a RESCUE handshake
+that does not wait on the dead sub, capability bit). Out of this job's time.
+
+== (c) HS2_LB_DEAD_HYST — 10-path reproduction attempt (lbv81.sh SHORT=1, --all, 500 s, no events,
+periodic heavy down x4 / up x2 every 120 s, crowd 3000, keys off, hs2P0, labslot --all).
+  c89off: path h (192.168.57.1, steady 0.8 %) 6 verdict reversals (3 lowerings to 0.53-0.56 "loss
+  0.9-1.0 %", each back to ok 5-10 s later) in 500 s = ~7 per 10 min (lbv81 s1: 30+ in 30 min). The
+  other paths: c 2 reversals (one a queue lowering at a heavy start, F2), e 2, the rest 0.
+  crowd p99 112.2 ms, 0 fails, call p99 164 ms, 0 panics.
+  -> The flip IS reproduced with 10 paths (it was not on 4 paths in lb84: 0-2 per 330 s).
+  A/B n>=6 NOT run: each 10-path run needs the whole lab for ~10 min (12 runs = 2 h), over this job's
+  budget. Next: q of 6+6 SHORT --all runs, ARM=HS2_LB_DEAD_HYST=8, rev89.py 192.168.57.1 res/*.
+  HS2_LB_DEAD_HYST stays OFF.
+
+== Checks (tree 34277172 code)
+  gofmt -l: clean outside third_party; go vet ./... rc=0.
+  go test ./... -p 2 -count=1 -timeout 30m rc=0 (12 packages ok, 0 FAIL) — lab3, nice 19, during the A/B.
+  go test -race -count=1 ./engine (full package, 882 s, during the --all run): rc=1, ONE failure
+  TestStripeAllDieGraceRejoins ("no grace or no rejoin counted", a timing test of the stripe grace,
+  untouched by lb89), 0 "DATA RACE"; rerun alone -race -count=3: ok. Load-induced flake.
+  bin89: C:\h2w\bin89\hs2-linux-amd64 sha256 707e58cefc88f86c997b618aa58ab01999cb78d632b59a399f91cfbb0cdcda91
+  (CGO_ENABLED=0 -trimpath -ldflags="-s -w", Go on lab3).
+  Mixed run M89 (edge bin89 707e58ce + exit rel58 5d87000d, lb84.sh scenario, no env keys, crowdlife 40 s):
+  crowd p50/p99 93.8/140.3 ms, 0 fails, call p99 210 ms ok, game p99 98.9, heavy down 737 Mbit/s, path a
+  cut-drained as in the A/B, 0 panics, edge "defaults: production set on" -> PASS (one run; crowd p99
+  above the A/B's 125 and lb84 M1's 131.8 — single-run spread, the 40 s crowd churn differs from CLIFE 200).
+
+== Verdicts
+  HS2_LB_SLOW_SKIP_COPY  default ON (edge): copy closes 6 -> 0 (n=6+6), no light/call regression.
+  EARLY RESCUE           not implemented: a copy cannot carry in-flight bytes; needs a resend design
+                         (EARLY-RESCUE-DESIGN.txt). HS2_LB_PATH_SILENT stays off.
+  HS2_LB_DEAD_HYST       flip reproduced on 10 paths (~7/10 min on the 0.8 % path); A/B not run -> off.
+  HS2_LB_SELFQ           not tested -> off.

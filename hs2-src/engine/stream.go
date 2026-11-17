@@ -60,20 +60,74 @@ var copyBufs = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b 
 // relay copies both ways between a and b and returns when either direction
 // ends, closing both so the other direction unblocks. (A user connection over
 // a smux stream uses relayStream, wedge.go, which also guards the link.)
+// fx170: a side whose reads ended with an error (it was reset) has its
+// peer closed with an RST, not a FIN, so a cut transfer is not passed on as
+// a complete one.
+//
+// hc183 (halfclose.go): two TCP sockets (dgforward, dgports) half-close
+// natively: an EOF from one side is a CloseWrite on the other, and the relay
+// goes on until the other direction ends too, halfCloseIdle without
+// progress, or an abnormal end (both reset).
 func relay(a, b io.ReadWriteCloser) {
 	done := make(chan struct{}, 2)
-	cp := func(dst io.Writer, src io.Reader) {
-		bp := copyBufs.Get().(*[]byte)
-		io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, *bp)
-		copyBufs.Put(bp)
+	ra, rb := &relayEnd{r: a}, &relayEnd{r: b}
+	hc := halfCloseOn.Load()
+	var halfA, halfB atomic.Bool
+	cp := func(dst io.ReadWriteCloser, src *relayEnd, half *atomic.Bool) {
+		relayCopy(dst, src)
+		if hc && src.state.Load() == relayEndEOF {
+			if cw, ok := dst.(closeWriter); ok && cw.CloseWrite() == nil {
+				half.Store(true)
+			}
+		}
 		done <- struct{}{}
 	}
-	go cp(a, b)
-	go cp(b, a)
+	go cp(a, rb, &halfA)
+	go cp(b, ra, &halfB)
 	<-done
+	got := 1
+	halfCut := false
+	if (halfA.Load() || halfB.Load()) && halfOpenAdmit() {
+		halfCloses.Add(1)
+		t := time.NewTicker(time.Duration(halfClosePoll.Load()))
+		limit := hcEdge.idle()
+		last, quiet := ra.n.Load()+rb.n.Load(), time.Now()
+		idle := false
+	wait:
+		for {
+			select {
+			case <-done:
+				got = 2
+				break wait
+			case now := <-t.C:
+				if n := ra.n.Load() + rb.n.Load(); n != last {
+					last, quiet = n, now
+				} else if now.Sub(quiet) >= limit {
+					idle = true
+					halfCloseIdles.Add(1)
+					break wait
+				}
+			}
+		}
+		t.Stop()
+		halfOpenNow.Add(-1)
+		halfCut = idle || ra.state.Load() != relayEndEOF || rb.state.Load() != relayEndEOF
+	}
+	for _, d := range [2]struct {
+		src *relayEnd
+		dst io.ReadWriteCloser
+	}{{rb, a}, {ra, b}} {
+		if d.src.state.Load() == relayEndErr || halfCut {
+			if lc, ok := d.dst.(interface{ SetLinger(int) error }); ok {
+				lc.SetLinger(0)
+			}
+		}
+	}
 	a.Close()
 	b.Close()
-	<-done
+	for ; got < 2; got++ {
+		<-done
+	}
 }
 
 // watchConn closes the smux session over it on the first read or write
@@ -224,6 +278,10 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 		go q.watch(sess, w)
 	}
 	g := &sessGuard{w: w, tcp: tcpOfConn(conn)}
+	memTrack(g, &memObjGuards)
+	if meter != nil {
+		memTrack(meter, &memObjMeters)
+	}
 	g.sess.Store(sess)
 	if meter != nil {
 		meter.guard = g

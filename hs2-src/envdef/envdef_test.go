@@ -47,6 +47,8 @@ func TestSides(t *testing.T) {
 		{"HS2_PICK_LANE", "on", ""},
 		{"HS2_STRIPE_AW_HEAVY", "2", ""},
 		{"HS2_LB_FILL_PCT", "", "25"},
+		{"HS2_LB_SPARE_EDGE", "", "1"},
+		{"HS2_AP_SHRINK_HYST", "1", "1"},
 		{"HS2_LB_REC_CONFIRM", "", "1"},
 		{"HS2_LB_FLAP_PEN", "", "1"},
 		{"HS2_LB_JUDGE_DATA", "1", "1"},
@@ -56,9 +58,24 @@ func TestSides(t *testing.T) {
 		{"HS2_LB_RESCUE_CALLFREE", "1", ""},
 		{"HS2_LB_CALL_RESCUE", "", ""},
 		{"HS2_LB_CALL_LATE", "1", ""},
+		{"HS2_LB_RESCUE_CUT", "1", ""},
+		{"HS2_LB_RESCUE_CUT_L3", "", ""},
+		{"HS2_LB_RESCUE_CUT_PER_SEC", "", ""},
+		{"HS2_LB_EDGE_SYNC", "1", ""},
+		{"HS2_LB_SLOW_SKIP_COPY", "1", ""},
 		{"HS2_REFILL_WAIT_BYTES", "1", ""},
 		{"HS2_START_DIAL", "", "1"},
 		{"HS2_LB_FAST_VERDICT", "", ""},
+		{"HS2_LB_SILENT", "", "1"},
+		{"HS2_LB_CUT_NONEW", "1", ""},
+		{"HS2_RETIRE_KEEP_IDLE", "1", ""},
+		{"HS2_MCONN_STRIPE_DL_FAIR", "1", ""},
+		{"HS2_MCONN_RESCUE", "1", "1"},
+		{"HS2_MCONN_RESCUE_JOINPICK", "1", ""},
+		{"HS2_MCONN_RESCUE_SCALE", "1", "1"},
+		{"HS2_MCONN_RESCUE_RETRY", "1", ""},
+		{"HS2_MCONN_STRIPE_KEEPSTALL", "1", "1"},
+		{"HS2_LM_FASTPICK", "1", ""},
 		{"HS2_REFILL_WAIT_MS", "300", ""},
 		{"HS2_MCONN_STRIPE", "8", "8"},
 		{"HS2_MCONN_STRIPE_JUMP_MS", "", ""},
@@ -66,8 +83,23 @@ func TestSides(t *testing.T) {
 		{"HS2_MCONN_STRIPE_FAST", "1", ""},
 		{"HS2_MCONN_STRIPE_FAST_EARLY_MS", "200", ""},
 		{"HS2_MCONN_STRIPE_FAST_SOLO", "1", ""},
+		{"HS2_MCONN_STRIPE_DL_FAST", "1", ""},
 		{"HS2_MCONN_STRIPE_UP_PATHQ", "1", ""},
+		{"HS2_MCONN_STRIPE_UP_SPLIT", "1", ""},
 		{"HS2_MCONN_STRIPE_UP_NOSHARE", "", ""},
+		{"HS2_MCONN_STRIPE_SHARE_COPIES", "1", ""},
+		{"HS2_MCONN_STRIPE_SHARE_COPIES_LANEQ", "", ""},
+		{"HS2_QUEUE_CTL_UP", "1", ""},
+		{"HS2_QUEUE_CTL", "", "1"},
+		{"HS2_QUEUE_CTL_FAST", "1", "1"},
+		{"HS2_QUEUE_CTL_KEEP", "1", "1"},
+		{"HS2_QUEUE_CTL_SHAPER", "mqchild", "mqchild"},
+		{"HS2_LINK_CC_REFRESH", "1", "1"},
+		{"HS2_QUEUE_DEBUG", "", ""},
+		{"HS2_STRIPE_HEAVY_FLOOR_MB", "4", ""},
+		{"HS2_STRIPE_HEAVY_FLOOR_GATE", "2", ""},
+		{"HS2_STRIPE_HEAVY_FLOOR_SOFT", "", ""},
+		{"HS2_STRIPE_HEAVY_FLOOR_QUS", "", ""},
 	}
 	for _, c := range cases {
 		Activate(true)
@@ -128,7 +160,7 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 50 {
-		t.Fatalf("table has %d keys, want 50", len(Table))
+	if len(Table) != 105 {
+		t.Fatalf("table has %d keys, want 105", len(Table))
 	}
 }

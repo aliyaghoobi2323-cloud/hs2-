@@ -1,0 +1,43 @@
+# hs119 lab1 (198.51.100.168 only) — HS2_MCONN_STRIPE_KEEPSTALL deadlock fix + frozen limit
+# binary hs2-k119 = bffc1feb (both sides), key off vs on (=1 both sides), interleaved, 3 slots.
+# bS = path 49.2->53.1 dark one way 30..90 s, T 150 s; Q = quiet 150 s (2.5 % loss on one path). per-run: ana-all.txt (ana119.py)
+
+## change
+- receiver: holeSubRoomLocked — while the hole is old (gapRoomAfter 500 ms) and the buffer, the gap room and the span
+  (gapFill) are used up, each sub may still put up to its smux window (SmuxStreamBuffer + 256 KiB, <= 32 MiB) past every
+  limit for THAT hole (reset when r.next moves); <= 64 MiB per connection per hole. The sub carrying the resend (queued
+  behind its window in flight) therefore always reaches it. Counter hole_sub in the keepstall log line.
+- sender: ack-stall frozen path max(1 s, 8 x srtt) (was max(300 ms, 4 x srtt)); RTO path unchanged.
+- TestHoleSubRoomDeadlock: off arm reproduces the hs117 deadlock (other subs fill buffer+gap room+own share, target
+  backlog beyond the span, resend behind it -> blocked 2 s), on arm drains and data is byte-exact.
+
+## dark download (bS)
+ON : a1..a8 8/8 survive, zero=0 s each; Mbit/s 831 1232 711 1202 771 676 1007 778 (median ~805)
+     closes kh: 1,3,3,3,3,2,3,0 all tcp=rto; hole_sub engaged in 6/8 (10..2102). a2/a4/a5/a7 = the hs117 s7/s8 pattern
+     (3 rto closes) now survive.
+off: b1 b2 2/2 FREEZE (119 s at 0 + gapCheck RST)
+## dark upload (bS, HEAVY=up)
+ON : f1 630, f2 687, f3 510 -> 3/3 survive (1 Iran rto close each)
+off: g1 476 survived (n=1; g2 cut by the time budget)            -> NOT DONE to n>=4 each
+## quiet (Q) median, light p99 ms, CPU cores ir/kh
+u8 ON  n=3  1282 (1282/1047/1320) ping99 242 echo99 204 call99 298  cpu ir 2.84 kh 2.20  closes 0/1/0
+u8 off n=3  1173 (1222/1173/963)  ping99 225 echo99 218 call99 310  cpu ir 2.83 kh 2.21  closes 0
+d1 ON  n=2   856/1027  ping99 226/188 echo99 224/192 call99 288/251  closes 1/0
+d1 off n=2  1048/1127  ping99 189/176 echo99 186/192 call99 264/210  closes 0
+u1 / d8 quiet: NOT RUN (budget). u8: no cost seen at n=3 (hs117 u8 cost signal not reproduced).
+d1: ON lower in both pairs (n=2) — a cost SIGNAL, not settled.
+## false closes (quiet ON): c2 1, h1 1 in 5 runs = 0.4/run; ALL tcp=rto now, 0 tcp=frozen (the 4 x srtt ones are gone).
+  c2 Iran: sub with 1 kept chunk, no ack 58 s, tcp=rto frozen=647 ms unacked=1; h1 kh: 40 chunks, no ack 2.0 s,
+  tcp=rto frozen=200 ms. Next: require frozen >= ackStallTCPMin on the RTO path too (dark closes would take <=1 s
+  longer; with the hole room a later close no longer deadlocks).
+
+## verdict
+Deadlock FIXED (8/8 dark downloads survive vs 0/2 off; 4/7 in hs117). NOT default ON yet: quiet false closes 0.4/run
+(rto path), quiet d1 n=2 shows ON lower, d8/u1 quiet and dark upload n>=4 not run. Key stays OFF (lab key).
+
+## tests (bffc1feb, idle lab1, after all lab runs; ./... and -race ./engine concurrently)
+gofmt clean, go vet ./engine ./envdef ./cmd/... clean.
+go test ./... -timeout 30m: ALL ok (engine 697 s, udpcarrier 81 s; no flaky failures this time) -> test-all.txt
+go test -race ./engine -timeout 30m: ok 817 s, 0 DATA RACE.
+## binary
+C:\h2w\bin119\hs2-linux-amd64  sha256 321d9e0eaa29e868074b70bbb0393eebe9224cbe72fede0fcaae4d514216eeee  (KEEPSTALL default OFF)

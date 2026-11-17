@@ -1,0 +1,42 @@
+# hs128 lab1 (198.51.100.168 only) — why HS2_MCONN_STRIPE_KEEPSTALL cost quiet d8 on the exit, and the fix (lazy poll)
+# Base hs123 (99af0533). Binary hs2-k128 (both sides; arms by env only): off = key unset; FULL = KEEPSTALL=1,
+# KEEPSTALL_LAZY=0 (= hs123/hs126 behaviour); ON = KEEPSTALL=1 (lazy, new default). 3 slots, interleaved (j1.txt).
+# Q = quiet 150 s; bS = path 49.2->53.1 one-way blackhole 30..90 s. Per-run: ana-all.txt (ana128.py); stats: stat-*.txt.
+# New instrumentation: exit "stripe cut" line per cut sample (cutQ/raw/base/w/live/busy/kept/ksTick), keepstall line
+# + ticks / lazy_on / lazy_off / gate_cut / gate_band / gate_grow. cutS = cut samples, halv = cuts with w>0 (halvings).
+
+## mechanism (what the exit gate saw)
+- hs126 logs (re-read): the exit's TCP path queue was NOT higher with the key on: busy exit links in ss -tni (2 s
+  snapshots, Send-Q>200 KB) rtt-minrtt median 1.4-1.7 ms in both arms, p90 4.4-6.5 vs 3.5-5.0 ms. Kept chunks are not
+  counted as queue anywhere (s.sent is read only by resend/evac/keepstall); kept bytes in d8 were LOWER with the key
+  (23-59 MB total vs off's 16 MiB/conn bound); marks are two atomics. What differed: the exit gate's decreases
+  (ON 58-146 vs off 15-68 per run, gate log) and Iran's stripe churn (retired subs ON 0-15 vs off 0-4, "a sub unused").
+- Knock-out on one binary: FULL vs ON(lazy) differ ONLY in when the ack-stall poll runs (keep, marks, trim, resend,
+  target, receiver rooms identical). FULL: the manager of every striped connection polls every 100 ms from its first
+  kept chunk to its end, on BOTH sides (exit ticks ~10.2k/run, Iran ~6.4k; lazy 3-6k / ~2.9k, most of them the normal
+  cadence). Result below: FULL reproduces the hs126 cost (low-width runs, many halvings), lazy does not.
+- So the cost is the always-on 100 ms poll, not the retention. The poll drives each connection's manager tick at
+  10 Hz; on Iran that tick also runs the lite/stripe housekeeping (autowin width resets, warm/idle/retire, rescue)
+  ten times as often. Exactly which of those turns into the exit's extra cuts is NOT isolated (no per-side split run
+  in budget; hs123's Iran-only key, n=2, had no cost, which points at the exit's poll).
+
+## results (36 runs, 16:53-17:26 UTC; void: qd8off2, qd8lz6 iperf3 segfault, qu8lz1 iperf3 "Address already in use")
+quiet d8 (Mbit/s):  ON(lazy) 1062 1267 1072 1091 1094          mean 1117  gw 4.0-4.6  halv 57-114
+                    off      955 791 950 1124 756 1220         mean  966  halv 45-190
+                    FULL     602 1037 1120 686                 mean  861  gw 1.5/4.5/3.7/1.8  halv 233/100/72/217
+  lazy vs off +16 % (Welch 0.11); FULL reproduces hs126 (2 of 4 runs at width 1.5-1.8, 600-690 Mbit/s).
+  light p99 d8 lazy vs off: echo 340 vs 330, crowd 469 vs 418 (ns), ping 381 vs 356, CALL 645 vs 491 (Welch 0.087,
+  MWU 0.126; FULL 576) — call p99 trend worse, not significant, NOT shown gone. RSS kh 887 vs 904 MB.
+quiet d1: lazy 955 785 815 893 (862) vs off 874 663 609 798 (736), p 0.14; call99 271 vs 314, crowd 239 vs 277;
+  RSS kh 741 vs 664 MB (+77 MB, p 0.001: retention until ack is unchanged by the fix).
+quiet u8: lazy 1075 675 (n=2 valid) vs off 1129 738 1012 (n=3), ns; call99 lazy 287/448 vs off 427/1377/381.
+dark download (lazy): 734 / 767 / 865 Mbit/s, zero 0, gapRST 0 -> 3/3 survive.
+dark upload (lazy): 400 (zero 0) / 466 (zero 2 s), gapRST 0 -> 2/2 survive.
+
+## verdict
+- Cause: the always-on 100 ms ack-stall poll (FULL), not kept bytes/marks/resend/queue accounting. The lazy poll
+  (HS2_MCONN_STRIPE_KEEPSTALL_LAZY, on by default under the key) removes the d8/d1 throughput cost and keeps dark
+  survival (download 3/3, upload 2/2).
+- Default: KEY STAYS OFF (no envdef/README/CHANGELOG change). Quiet throughput cost is gone, but d8 call p99 is
+  higher with the key (645 vs 491, p 0.09) and u8 has only n=2 valid ON runs; kh RSS +77 MB on d1 remains.
+  Next: d8 call p99 n>=8 per arm (lazy vs off) and u8 n>=4; if call p99 is equal -> envdef row Both.

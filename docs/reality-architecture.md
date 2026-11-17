@@ -1699,7 +1699,7 @@ Menu screen 4: the picker and the one-target check pass `-u <tunnel>`; the
 screen explains the rule (fa/en) and each row shows `match|mismatch CC ASN`
 and the reason.
 
-**Evidence** (lab 2, 5.160.110.234, a Tehran DC, 2026-11-11: `hs2 reality
+**Evidence** (lab 2, 198.51.100.234, a Tehran DC, 2026-11-11: `hs2 reality
 targets --json`, Team Cymru, ping; RTT = ICMP from lab 2, handshake = TCP +
 TLS from lab 2 including DNS). Lab 3 confirms: TCP connect to
 www.digikala.com 0.9 ms, to www.hetzner.com 70.7 ms.
@@ -3210,3 +3210,429 @@ rebuilt from the git checkout of c4562e3d: build c4562e3dbbed, sha256
 bea01c7c3e9db7f40b7974edee1405df3583230bdfaca12323d996d205cb2043 (Go sources
 identical to the tested bundle). The r31 upgrade runs of §11.11.6 used
 a53160876016; no upgrade-path code changed since.
+
+### 11.12 lat58 (2026-11-12): where a light user's time goes under heavy load
+
+Lab 1 (198.51.100.168), `labslot.sh --all`, the rel54 production env of the
+upov57 harness (reverse l3mtcp, 3 paths of 1 Gbit/s, 37 ms each way, 100 ms
+path queue, 150 links, crowd 3000 + call + game + echo + ping, FAST on Iran),
+binary = upov57 head + this branch, every new key off unless the arm says so.
+
+#### 11.12.1 Measurement (u8, one run sampled twice a second)
+
+`ss -tin` on every link socket of both sides, `tc -s qdisc` on Iran's
+interface and on the middle box's netem, and the per-sub trace
+(`HS2_MCONN_TRACE=1 HS2_MCONN_TRACE_GAME=1`) of the call and game
+connections:
+
+| where | measured |
+|---|---|
+| path bottleneck (netem, Iran→kharej) | backlog p50 4.3 MB / p90 12.3 MB / max 14.9 MB on the busiest path (≈4.6 MB is the 37 ms delay line itself at 1 Gbit/s: a standing queue of 60–80 ms); 3.2–3.8 MB on the others |
+| Iran link sockets (busy, >5 Mbit/s) | srtt p50 81 / p90 138 / p99 166 ms (base 74) |
+| Iran send queue (notsent) | busy links p50 0 / p90 48 / p99 64 KB → as time at the link's own rate: p50 0 / p90 2.6 / p99 15.5 ms |
+| kharej send queue | p99 1 KB, ≤1.5 ms |
+| Iran interface (htb+cake, only while QUEUE_CTL_UP caps) | backlog p90 395 KB at 856 Mbit/s ≈ 3.7 ms |
+| the call's subs (trace) | `q=0 notsent=0` on both subs all run; one sub's link srtt 122–135 ms (on the queued path), the other 77–79 ms |
+| smux write scheduler (`obs_smux_small_first`, below) | a small frame found an older bulk frame waiting 14–57 times per 14 s u8 run on Iran, 0–3 on kharej |
+
+So under 8 uploads the light users' time is the **path's queue** (the 1 Gbit/s
+paths are full: 2.4 Gbit/s over 3 paths), not hs2's own queues: the links
+that carry the call have nothing queued in hs2 or in the socket, and smux's
+FIFO almost never holds a light frame behind a bulk one. The queue
+controller (`HS2_QUEUE_CTL_UP`) needs ~10 s of queue before it caps
+(qStartTicks); the lab's heavy phase is 14 s, so in most runs it caps at the
+very end or not at all.
+
+#### 11.12.2 Keys tried (all off by default)
+
+- `HS2_SMUX_SMALL_FIRST=1` (or `=<bytes>`; third_party/smux `Config.SmallFirst`):
+  a data frame of at most 4 KiB overtakes up to 256 earlier queued requests
+  in a session's write scheduler (bounded, a bulk frame is never starved);
+  wire format unchanged. Counter `obs_smux_small_first` in the status.
+- `HS2_QUEUE_CTL_FAST=1` (queuectl.go): a queue of 40 ms or more is capped
+  after 2 ticks (~4 s) instead of 5 (~10 s).
+- `HS2_TUNE_NOTSENT=16384` (existing): half the per-link notsent_lowat.
+
+#### 11.12.3 A/B (interleaved whole-lab runs, 18 s, 14 s heavy; means, Mann-Whitney p vs O)
+
+O = all new keys off, V = `HS2_SMUX_SMALL_FIRST=1`, F = `HS2_QUEUE_CTL_FAST=1`,
+N = `HS2_TUNE_NOTSENT=16384`, each on both sides (Q = V+F, n=2, left out).
+Three runs (one O u8, one Q d8, one N u8) lost the iperf3 stream at its
+start ("Address already in use", the harness's fixed `--cport`) and are
+excluded.
+
+u1 (one upload):
+
+| metric | O (n=8) | V (n=8) | N (n=6) |
+|---|---|---|---|
+| heavy Mbit/s | 893 | **636 (−29%, p=0.06; p=0.025 at n=6)** | 902 (p=0.70) |
+| crowd p99 / p50 | 81.3 / 75.4 | 85.0 / 75.7 (p=0.25) | 81.5 / 75.3 |
+| call p99 | 86.6 | 90.1 | 99.0 (p=0.52) |
+| game p99 | 81.8 | 86.0 | 81.9 |
+| echo p99 / p50 | 81.4 / 75.0 | 83.8 / 75.4 | 79.0 / 74.9 (p=0.61) |
+| ping p99 | 78.4 | 81.0 (p=0.21) | 78.3 |
+
+u8 (eight uploads):
+
+| metric | O (n=7) | V (n=3) | F (n=5) | N (n=4) |
+|---|---|---|---|---|
+| heavy Mbit/s | 2380 | 2459 | 2180 (−8%, p=0.22) | 2250 (−5%, p=0.45) |
+| crowd p99 / p50 | 123.8 / 79.1 | 128.9 / 79.1 | 121.7 / 76.7 (p50 p=0.09) | 139.4 / 77.6 |
+| call p99 | 99.5 | 121.4 (p=0.05) | 101.3 | 185.7 (one outlier) |
+| game p99 | 103.0 | 114.4 | **93.0 (−10%, p=0.09)** | 108.1 |
+| echo p99 / p50 | 98.0 / 79.6 | 95.1 / 78.8 | **89.0 (−9.1 ms, p=0.03)** / 75.9 | 92.9 / 78.8 |
+| ping p99 / p50 | 96.6 / 81.1 | 97.2 / 77.2 | 88.9 / 76.6 | 88.5 / 76.2 |
+
+d1/d8 have n=2 per arm (O, V) only: no difference beyond noise. The idle
+and path-degrade scenarios were queued but not reached within the
+agent's time.
+
+#### 11.12.4 Decision and plan
+
+- `HS2_SMUX_SMALL_FIRST`: **rejected, stays off.** It engages rarely
+  (14–57 overtakes per u8 run: smux's FIFO is not where light users wait)
+  and costs a single upload 29% of its throughput (likely: small frames of
+  the striped heavy connection itself jump the queue across its own subs and
+  reorder its stripe, so the receiver's reassembly holds). The key and its
+  counter stay in the tree as a lab key.
+- `HS2_QUEUE_CTL_FAST`: the right target (the path queue is the cost) and
+  the only arm with a significant light gain (u8 echo p99 −9 ms, p=0.03;
+  game p99 −10 ms, p=0.09), but n=5, a throughput change of −8% (p=0.22,
+  over the 5% bar) not yet ruled out, and no idle/degrade runs: **not
+  accepted yet, stays off.** Plan: n≥12 of u8/d8 O vs F with
+  `HS2_QUEUE_DEBUG=1` (prove the cap comes at ~4 s), 40 s heavy phases (the
+  lab's 14 s hides the controller: O caps at ~12 s or not at all), then
+  idle and path-degrade n≥6; accept only with throughput within 5%.
+- `HS2_TUNE_NOTSENT=16384`: no light gain in u1 (where the socket queue
+  could matter: notsent p90 2.6 ms of the link's time), −5% u8 throughput:
+  not worth pursuing.
+- Not tried, by the measurement: per-link heavy budgets and light-only links
+  (soft isolation) cut hs2's own queues, which hold the light user ≤3 ms
+  here; isolation helps at the path queue only when the bottleneck is on
+  this server (cake under a QUEUE_CTL cap), which makes it a follow-up of
+  the F work, not before it.
+
+Final checks (lab 1, clean `git archive` of 616cee10, the code of this
+branch): gofmt 0 files (third_party/utls excluded), `go vet ./...` ok
+(`third_party/smux`: the upstream session_test.go:301 t.Fatal-in-goroutine
+warning, file untouched), `-race` on `QueueCtl|SmallFirst` (engine) and the
+whole smux module ok, `go test ./... -timeout 40m` rc=0 (11m37s). Binary
+(CGO_ENABLED=0, -trimpath, -s -w): sha256
+394225a66df96fe784c8f3907f3557c03366253bb00a5ee9b4808b9a64c408c6. Defaults
+unchanged: every lat58 key is off.
+
+### 11.13 lat59 (2026-11-12): HS2_QUEUE_CTL_FAST at 40 s heavy phases
+
+Lab 1, `labslot.sh --all`, the §11.12 env (QUEUE_CTL_UP on Iran, QUEUE_CTL on
+kharej), heavy phase 40 s (probe 42 s), `HS2_QUEUE_DEBUG=1` on both sides,
+arms interleaved. Harness fix: the heavy iperf3's client ports were a fixed
+`--cport 41000`, inside the links' ephemeral range (32768-60999) — a link
+socket or the last run's TIME_WAIT could hold them ("Address already in
+use" in lat58). Now each run takes a fresh 64-port block in 61000-64900 and
+reserves it in Iran's namespace (`ip_local_reserved_ports`); no run lost its
+heavy stream. O = keys off; F = `HS2_QUEUE_CTL_FAST=1` (lat58 binary);
+G = F with `qFastMinRate` (below, this branch's binary; O of round 20+ is
+the same binary with the key off). Cap times are from the logs (first busy
+tick → "egress capped").
+
+#### 11.13.1 When the cap engages (u8, the edge)
+
+| arm | first cap after the heavy start |
+|---|---|
+| O (n=7) | 7.8-9.9 s in 6 runs; never in 1 (u8_00O: the queued path's own tail drops, 3-10% retransmits, went over qMaxLoss before the 5th tick) |
+| F (n=2) | 1.9, 5.9 s |
+| G (n=5) | 5.9-6.0 s in 3 runs, 13.9 and 23.8 s in 2 (the queue under 40 ms at first) |
+
+Capped, the queued path's delay goes from 50-90 ms to 2-3 ms with no loss.
+At 14 s (lat58) the O controller capped at the very end or never; at 40 s it
+caps in most runs ~2-4 s after FAST would — so FAST's gain is a few seconds
+of queue per burst.
+
+#### 11.13.2 A/B (means, Mann-Whitney p vs O)
+
+| u8 | O (n=7) | F (n=2) | G (n=5) |
+|---|---|---|---|
+| heavy Mbit/s | 2356 | 2310 (−2%) | 2489 (+6%, p=0.22) |
+| crowd p99 | 133.1 | 103.5 (−22%, p=0.04) | **111.4 (−16%, p=0.007)** |
+| call p99 | 107.9 | 110.6 | 113.4 (p=0.29) |
+| game p99 | 126.1 | 113.5 | 102.2 (−19%, p=0.81) |
+| echo p99 | 96.6 | 90.9 | 104.7 (p=0.69) |
+| ping p99 | 95.4 | 81.5 (p=0.14) | 96.2 |
+
+d1, u1, idle: n=1 per arm (no difference beyond one run's noise); one
+path-degrade run (O only) — degrade was not compared within the agent's time.
+
+#### 11.13.3 Finding: the edge caps its own light upload under downloads
+
+Under 8 downloads the edge's links also see the download's queue (what they
+send is acknowledged behind it). On the queued path the edge's light upload
+(~7 Mbit/s: calls, game, crowd requests) shows 24-130 ms, the controller caps
+it at 0.95 of what it delivers (6.7-9.1 Mbit/s) and the cap **stays**: the
+shaped links deliver ~4.5 Mbit/s, under qFullFrac of the cap (no rise) and
+over half of it (no idle release); the queue it measures is gone (no stuck
+release). The users' upload is then held under its own demand:
+
+| d8 run (both arms pooled) | n | heavy Mbit/s | call p99 |
+|---|---|---|---|
+| edge capped (F 1, G 2, O 3) | 6 | 1628 | 98-5751 ms (3 of 6 over 1.9 s) |
+| no cap | 7 | 1989 | 82-94 ms |
+
+O hit it in 3 of 7 d8 runs, G 2 of 5, F 1 of 1: it is QUEUE_CTL_UP's, not
+FAST's (G's caps came from the normal 5-tick start, at 7 Mbit/s). FAST makes
+it likelier (2 ticks of 40 ms at 7 Mbit/s): **qFastMinRate** (this branch,
+queuectl.go) keeps the fast start to links that deliver ≥25 Mbit/s; under
+it the 5-tick start holds as before. Whether a cap may start at all at a
+rate the tunnel cannot queue a 1 Gbit/s path with (the same rule for the
+slow start), and a release for a cap that neither binds nor idles, are the
+follow-up — they change QUEUE_CTL_UP's own behaviour, which runs in the
+production env of this harness.
+
+#### 11.13.4 Decision
+
+`HS2_QUEUE_CTL_FAST` **stays off** (lab key). Under the acceptance bar
+(≥2 light classes p<0.05, throughput within 5%, no idle/degrade
+regression) it has one class (crowd p99 −16%, p=0.007) — the others move
+within noise — and idle/degrade are unmeasured at n≥6. The trade-off for
+the operator: with FAST on, the edge caps a full upload path ~2-4 s sooner
+(the crowd's p99 under 8 uploads −16 to −22%), at no measured throughput
+cost (G +6%, F −2%, both n.s.); off, the same cap comes ~8-10 s into a
+burst. The QUEUE_CTL_UP light-upload cap (11.13.3) costs far more (d8 −18%
+throughput, call p99 to seconds; 6 of 13 d8 runs) and is the next thing to fix.
+
+Final checks (lab 1, clean `git archive` of fe9e68d0, the code of this
+branch): gofmt 0 files (third_party/utls excluded), `go vet ./...` rc=0,
+`-race -run QueueCtl` (engine) ok, `go test ./... -timeout 40m` rc=0
+(11m32s). Binary (CGO_ENABLED=0, -trimpath, -s -w): sha256
+49426f93e8ed5cea6e5ab8acb3e2d1856c2aebe241d864f0e70fb8222228d432. Defaults
+unchanged: `HS2_QUEUE_CTL_FAST` stays off.
+
+### 11.14 qctl61 (2026-11-12): the queue controller's stuck cap — fixed
+
+**Production.** Tunnel 1 (rel54) runs neither `HS2_QUEUE_CTL` nor
+`HS2_QUEUE_CTL_UP`: neither is in the default table (envdef has no QUEUE
+key) nor in the Iran or kharej key lists (rel52/rel54 notes) — not
+affected. Tunnel 2 (rel54c) runs `HS2_QUEUE_CTL=1` on kharej only: the
+edge's form of the bug (§11.13.3, `QUEUE_CTL_UP` on Iran) is not on there,
+but the exit runs the same controller, so the mirror case is possible — a
+light download measured behind heavy uploads' queue, capped and kept. The
+lab never showed it (the exit capped 0 times in every lat59 and qctl61
+run: its light download rarely has a busy link), and production was not
+read (rule). The harness ran the §11.12 env: `QUEUE_CTL_UP=1` on Iran and
+`QUEUE_CTL=1` on kharej in every arm.
+
+**Root cause.** Under 8 downloads the edge's light upload (~7 Mbit/s)
+saw the download's queue (24-130 ms: what it sends is acknowledged behind
+it) and after the 5-tick start was capped at 0.95 of it (6.7-9.1 Mbit/s).
+The shaper (cake on an htb class, filtered by the peers' address and
+port) holds everything the tunnel's links send under the cap — the 8
+downloads' own ACKs included, which the controller does not count
+(TCP_INFO bytes_acked is payload only). The links then delivered ~4.5
+Mbit/s of payload: under qFullFrac (0.9) of the cap, so no rise; over
+half of it, so no idle release; the queue it measured was gone (delay 0),
+so no stuck release. Nothing could take it off, and the ACK-starved
+downloads lost 18% (§11.13.3).
+
+**Fix** (queuectl.go/queuerun.go, unconditional — it only changes what
+the opt-in keys do):
+- `qCapMinRate` = 25 Mbit/s: no cap starts while the links deliver less
+  (a tunnel sending a few Mbit/s does not make a 1 Gbit/s path's queue);
+  `qFastMinRate` is now the same constant;
+- `qRevFrac` = 4: the runner now also reads `tcpi_bytes_received`; while
+  the links receive more than 4x what they deliver the queue they see is
+  the other direction's — no cap starts, and one in place comes off after
+  `qRevTicks` = 2 (with the usual back-off). Both directions heavy (under
+  4x) keeps the controller as before;
+- `qLimboTicks` = 8 (~16 s): a cap that neither binds (≥ 0.9 of it
+  delivered) nor idles (< 0.45) for that long comes off as an idle one
+  does, without back-off (b49dbc89; the first version, 0d99c1b1, backed
+  off a minute — in u8 that took off caps that had risen past the path,
+  1080 Mbit/s cap and 900 delivered, and would have left the next queue
+  uncapped for a minute). The dbg line now carries `rx=`.
+
+Unit tests (queuectl_stuck_test.go) replay the d8 case (no cap at 7 or 30
+Mbit/s under downloads, with and without FAST; a real upload queue still
+capped), the limbo release (tick 8 at 50/67/85% of the cap; binding and
+idle caps keep their own rules; a queue that comes back is capped again
+after qStartTicks) and the reverse release.
+
+**Lab A/B** (lab 1, `labslot.sh --all`, the §11.12 env, 40 s heavy,
+`HS2_QUEUE_DEBUG=1` both sides; B = the lat59 binary (c5e5bd3e code, the
+rel54-equivalent controller), X = this branch; pairs interleaved, order
+alternating; X of u8 rounds 10-11 and d1_11 ran 0d99c1b1 and are left
+out). "Stuck" = a cap under 25 Mbit/s that neither binds nor idles for ≥ 4
+ticks, counted from the dbg lines (on lat59's runs it finds exactly the 6
+of 13 d8 runs of §11.13.3, and 0 in u8).
+
+| d8 | B (n=8) | X (n=8) | p |
+|---|---|---|---|
+| stuck edge caps | 1 run (d8_16B: 1796 Mbit/s, call p99 109 ms) | **0** (no edge cap at all) | |
+| heavy Mbit/s | 1772 | **1977 (+12%)** | 0.021 |
+| crowd / call / game p99 | 108 / 88 / 87 | 98 / 100 / 86 | 0.46 / 0.25 / 0.83 |
+| echo / ping p99 | 92 / 95 | 87 / 85 | 0.53 / 0.35 |
+
+| u8 | B (n=7) | X (n=5) | p |
+|---|---|---|---|
+| heavy Mbit/s | 2515 | 2573 (+2%) | 0.47 |
+| crowd / call / game p99 | 129 / 105 / 127 | 119 / 113 / 99 | 0.29 / 0.57 / 0.37 |
+| echo / ping p99 | 94 / 103 | 97 / 109 | 0.47 / 0.81 |
+| edge caps per run | 2.0 | 2.6 | 0.22 |
+
+The stuck cap came only once in 8 base runs this time (6 of 13 in
+lat59), so the d8 gain is mostly not the cap: X's d8 throughput was higher
+in 7 of 8 pairs, uncapped base runs included — read the +12% as "no
+loss", not as the bug's size; the bug's own cost is §11.13.3's (−18%,
+call p99 to seconds). In u8 the edge still caps the real upload (2-3 caps a
+run, ~900 Mbit/s); the limbo release fired in 2 of 5 X runs (an over-path
+cap) with no cost seen. The exit never capped (0 in every run). Reverse
+release: never needed (the start guards held). d1, u1, idle: n=1 per arm
+only (no difference beyond one run; u1 X game p99 116 vs 77 is one run) —
+the n≥6 asked for did not fit in the agent's hour.
+
+**Decision.** The fix is unconditional (a bug fix to the opt-in keys; no
+new key). `HS2_QUEUE_CTL` / `_UP` stay off by default, as before.
+`HS2_QUEUE_CTL_FAST` was not re-measured with the fix (no time after the
+d8/u8 A/B): it stays off; §11.13.4's trade-off stands — with the fix FAST
+can no longer cap a light upload (the start guard covers both starts).
+
+Final checks (lab 1, clean `git archive` of b49dbc89, the code of this
+branch): gofmt 0 files (third_party/utls excluded), `go vet ./...` rc=0,
+`-race -run "QueueCtl|QDelay|QLoss|QUpLog|QRunner"` (engine) ok,
+`go test ./... -timeout 40m` rc=0 (682 s). Binary (CGO_ENABLED=0,
+-trimpath, -s -w) in `C:\h2w\bin61q`: sha256
+fdbbd99bce652366629336308160b49fc093b783965d0960385459266ad290b2.
+
+Left: FAST with the fix (u8, n≥10 per arm); d1/u1/idle at n≥6; the
+shaper still holds the other direction's ACKs under any cap — in a mixed
+load (both directions heavy, under qRevFrac) a binding upload cap would
+also slow the downloads; cake's `ack-filter` or a filter that sends pure
+ACKs to the unshaped class is the candidate.
+
+### 11.15 qctl62 (2026-11-12): queue controller for tunnel 1 — T vs Q vs QF
+
+**Question.** Should tunnel 1 (rel54, no QUEUE key) turn on the fixed
+controller (§11.14), with or without FAST, for lower light-user latency
+under load? Arms, all with the qctl61 binary (fdbbd99b): **T** = the
+tunnel-1 lab env (the lat59 harness's rel54 env with the QUEUE keys
+removed; `HS2_MCONN_STRIPE_FAST=1` on Iran), **Q** = T +
+`HS2_QUEUE_CTL_UP=1` (Iran) + `HS2_QUEUE_CTL=1` (kharej), **QF** = Q +
+`HS2_QUEUE_CTL_FAST=1` (both). Lab 1, `labslot.sh --all`, 40 s heavy,
+`HS2_QUEUE_DEBUG=1` in every arm, arms interleaved with rotating order
+(harness /opt/hs2lab/q62). Means; Mann-Whitney p vs T.
+
+| u8 (n=6/arm) | T | Q | p | QF | p |
+|---|---|---|---|---|---|
+| heavy Mbit/s | 2497 | 2566 (+3%) | 0.42 | 2346 (−6%) | 0.20 |
+| crowd p99 / p50 | 137 / 78.5 | **117 (−15%)** / 77.3 | **0.010** / 0.08 | **122 (−11%)** / 76.7 | **0.037** / **0.037** |
+| call p99 / p50 | 170 / 102 | **107 (−37%)** / 79 | **0.037** / 0.055 | 110 (−35%) / **76** | 0.20 / **0.006** |
+| game p99 / p50 | 107 / 92 | 103 / 78 | 0.52 / 0.055 | 97 / **76** | 0.11 / **0.006** |
+| echo p99 / p50 | 99 / 76.6 | 96 / 76.1 | 0.63 / 0.26 | 91 / 76.4 | 0.26 / 0.42 |
+| ping p99 / p50 | 103 / 83 | 97 / **78** | 0.42 / **0.037** | 95 / **76** | 0.20 / **0.025** |
+| edge caps per run | 0 | 2.0 (~870-930 Mbit/s per path) | | 2.3 | |
+
+| d8 (n=3/4/3) | T | Q | p | QF | p |
+|---|---|---|---|---|---|
+| heavy Mbit/s | 2081 | 1831 (−12%) | 0.16 | 2066 (−1%) | 0.83 |
+| crowd / call / game p99 | 99 / 86 / 88 | 101 / 116 / 89 | 0.29 / 0.48 / 1.0 | 108 / 106 / 88 | 0.51 / 0.13 / 0.51 |
+| caps (edge / exit) | 0 / 0 | 0 / 0 | | 0 / 0 | |
+
+| u1 (n=3/arm) | T | Q | p | QF | p |
+|---|---|---|---|---|---|
+| heavy Mbit/s | 925 | 968 | 0.51 | 1002 | 0.83 |
+| crowd / call / game p99 | 101 / 79 / 77 | 89 / 81 / 78 | 0.51 / 0.28 / 0.28 | 104 / 79 / 78 | 0.83 / 0.51 / 0.28 |
+| echo / ping p99 | 78 / 76 | 88 / 77 | 0.83 / 0.83 | 78 / 77 | 0.83 / 0.05 |
+| edge caps per run | 0 | 0.3 | | 0.7 | |
+
+No stuck cap (§11.14's counter) and no probe error in any run. In d8
+neither side capped in any arm — with the qctl61 guards Q and QF do not
+engage under downloads, so d8's differences are run-to-run noise (Q's
+−12% is one run, d8_12Q 1594 Mbit/s, with no cap; d8 Q n=4 includes the
+unpaired d8_13Q). In u8 the edge caps the real upload (2 caps a run at
+0.95 of ~920 Mbit/s per path) and the light classes behind it gain.
+
+**Decision: default stays OFF; tunnel 1 not changed (yet).** Q meets the
+heavy-load part of the gate in u8 (two light classes at p99 with p<0.05 —
+crowd −15%, call −37% — throughput +3%), but the gate is not complete:
+d8 n=3-4 (not 10), u1 n=3 and d1/idle not run (not 6) — 60 heavy + 54
+light 40 s runs (~95 min) do not fit an hour with the final checks. QF
+is out: its u8 throughput is −6% (gate −5%) and it adds nothing over Q at
+p99. Next (qctl63): Q vs T only, d8 to n=10, u1/d1/idle n=6; if those
+hold, make `HS2_QUEUE_CTL_UP=1` (Iran) / `HS2_QUEUE_CTL=1` (kharej) default
+ON in envdef for reverse l3mtcp.
+
+Not done: pure ACKs under the cap (§11.14 "Left"): the candidate is a
+prio-1 u32 filter that sends pure TCP ACKs (IP length < 128, flags = ACK)
+to the unshaped class 1fe1:1, measured with both directions heavy — needs
+a mixed-load scenario in the harness; no lab time left.
+
+Final checks (lab 1, clean `git archive` of 294bf240 — this branch's code;
+qctl62 changes docs only): gofmt 0 files (third_party/utls excluded),
+`go vet ./...` rc=0, `-race -run "QueueCtl|QDelay|QLoss|QUpLog|QRunner"`
+(engine) ok, `go test ./... -timeout 40m` rc=0 (697 s). Binary
+(CGO_ENABLED=0, -trimpath, -s -w) in `C:\h2w\bin62q`: sha256
+fdbbd99bce652366629336308160b49fc093b783965d0960385459266ad290b2 — the
+same as qctl61's (same code, reproducible build).
+
+### 11.16 qctl63 (2026-11-12): queue controller default ON for reverse l3mtcp
+
+**Question.** §11.15's gate, completed: Q (`HS2_QUEUE_CTL_UP=1` Iran +
+`HS2_QUEUE_CTL=1` kharej) vs T (tunnel-1 env without QUEUE keys), same
+qctl61 binary (fdbbd99b), same harness (/opt/hs2lab/q62, copied to lab 3),
+40 s heavy, `HS2_QUEUE_DEBUG=1` in both arms, T/Q order alternating per
+pair. Two hosts at once, each `labslot.sh --all`: lab 1 (job63a, 34 runs,
+plus qctl62's T/Q runs) and lab 3 (job63b, 32 runs; job63c, 14 more d1/u1
+runs after an early d1 flag). Arms compared within each host; pooled =
+both hosts. Means; Mann-Whitney p (Q vs T). p99 in ms, heavy in Mbit/s.
+
+| u8 | lab 1 (n=10/10) | lab 3 (3/3) | pooled (13/13) | pooled p |
+|---|---|---|---|---|
+| heavy | 2574 → 2522 (−2%) | 2659 → 2560 (−4%) | 2593 → 2530 (−2%) | 0.086 |
+| crowd p99 | 130 → 125 | 123 → 124 | 128.5 → 124.8 (−3%) | 0.46 |
+| call p99 | 155 → **99** | 163 → 119 | 157 → **104 (−34%)** | **0.033** |
+| game p99 | 106 → 98 | 111 → 86 | 107 → **95 (−11%)** | **0.022** |
+| echo / ping p99 | 102 / 103 → 94 / 98 | 99 / 109 → 106 / 106 | 101 / 104 → 96 / 100 | 0.17 / 0.37 |
+| crowd / call / game p50 | 80 / 97 / 90 → 77 / 78 / 78 | 83 / 97 / 88 → 77 / 77 / 76 | 81 / 97 / 89 → **77 / 78 / 77** | **<0.001** (all three) |
+| edge caps per run | 0 → 1.8 | 0 → 1.7 | 0 → 1.8 | |
+
+| d8 | lab 1 (7/8) | lab 3 (5/5) | pooled (12/13) | pooled p |
+|---|---|---|---|---|
+| heavy | 2003 → 1837 (−8%) | 1995 → 2006 (+1%) | 2000 → 1902 (−4.9%) | 0.17 |
+| crowd / call / game p99 | 101 / 95 / 94 → 103 / 108 / 89 | 109 / 97 / 94 → 94 / 86 / 81 | 104 / 96 / 94 → 100 / 99 / 86 | 0.10 / 1.0 / 0.21 |
+| caps (edge / exit) | 0 / 0 | 0 / 0 | 0 / 0 | |
+
+| light load, pooled | T | Q | p |
+|---|---|---|---|
+| u1 (8/8; lab 1 6, lab 3 2): heavy | 970 | 955 (−2%) | 0.92 |
+| u1 crowd / call / game p99 | 92 / 85 / 78 | 89 / 80 / 86 | 0.83 / 0.46 / 0.14 |
+| d1 (12/12; lab 1 3, lab 3 9): heavy | 1505 | 1482 (−2%) | 0.77 |
+| d1 crowd / call / game p99 | 99 / 92 / 92 | 101 / 91 / 87 | 0.64 / 0.91 / 0.64 |
+| idle (7/7): crowd / call / game / ping p99 | 76.3 / 75.9 / 75.9 / 75.0 | 76.4 / 76.5 / 75.9 / 75.1 | 0.66 / 0.14 / 0.34 / 0.28 |
+
+No probe error, no stuck cap (§11.14) and no lost call/game packet in any
+of the runs. The d1 flag after the first 7/7 (crowd p99 +14%, p=0.035)
+did not hold: 5 more lab-3 pairs gave Q lower in all five, pooled +2%
+p=0.64; Q caps nothing in d1 (0 caps on both sides in all 12), so it was
+run noise. In d8 Q caps nothing either (0/13), so the −4.9% (lab 1 −8%,
+lab 3 +1%) is not the shaper's doing. The only p<0.05 light-load cells
+are sub-ms (u1 game p50 +0.1 ms, p=0.041; lab-3 idle call p99 +0.7 ms,
+p=0.043, pooled p=0.14). u1's game p99 +8.5 ms (p=0.14) is one lab-3 run
+(u1_64Q: 110 ms, one edge cap).
+
+**Mixed versions** (lab 3, 130 s, u1, harness q62/mix63.sh with the
+r54 irM/khM wrappers): qctl61 with the Q key on its own side against r31
+(hs2-31) and rel54 (hs2n), both directions — `mx_qi31k`, `mx_31iqk`,
+`mx_qi54k`, `mx_54iqk`: 150 links, 0 crowd fail, 0 conn fail, 0 call /
+game / echo lost, 0 ping loss; the controller ran on the qctl61 side
+(198 edge / 67 exit debug lines). The controller is local (TCP_INFO +
+a tc shaper on this server's own egress), no wire change.
+
+**Decision: default ON** for reverse l3mtcp (gate met: two light classes
+better at p99 under heavy load with p<0.05 — call −34%, game −11% — plus
+every p50; heavy −2% (u8) / −4.9% (d8, no cap); no regression in u1, d1,
+idle). envdef: `HS2_QUEUE_CTL_UP=1` (edge) and `HS2_QUEUE_CTL=1` (exit);
+the engine now reads both in `loadEnvKeys` and sets `edgeQueue.on` /
+`exitQueue.on` from them (they were package-level `os.Getenv` reads, which
+never see the table). `HS2_QUEUE_CTL_FAST` stays off (§11.15, u8 −6%).
+Off: `Environment=HS2_QUEUE_CTL_UP=0` (Iran), `HS2_QUEUE_CTL=0`
+(kharej), or `HS2_DEFAULTS=legacy`. Nothing was deployed: tunnel 1
+changes only when this build is deployed there (an explicit key in its
+environment still wins over the default).

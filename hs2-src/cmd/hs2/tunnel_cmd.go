@@ -585,6 +585,7 @@ func tunnelJoinCmd(args []string) {
 
 // joinUpdate rebuilds an existing tunnel from a newer code: diff + safe apply.
 func joinUpdate(s tunnelSpec, within time.Duration, yes, dry bool) int {
+	s.Name = canonicalUnit(s.Name)
 	path := configForUnit(s.Name)
 	cur, err := os.ReadFile(path)
 	if err != nil {
@@ -601,6 +602,9 @@ func joinUpdate(s tunnelSpec, within time.Duration, yes, dry bool) int {
 	}
 	if !s.listener() {
 		m["addr"] = net.JoinHostPort(strings.Trim(s.Peer, "[]"), strconv.Itoa(s.Port))
+		if w := peerMoveWarn(fc.Addr, m["addr"].(string), s.LB); w != "" {
+			fmt.Println("WARN: " + w)
+		}
 		if s.Domain != "" {
 			m["sni"] = s.Domain
 		}
@@ -691,7 +695,7 @@ func loadUnit(unit string) (string, fileConfig, []byte) {
 	path := configForUnit(unit)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		die(tr("no tunnel %s (%v)", "تونل %s نیست (%v)"), unit, err)
+		die(tr("no tunnel %s (%v) — tunnels here: %s", "تونل %s نیست (%v) — تونل‌های اینجا: %s"), unit, err, strings.Join(knownTunnels(), ", "))
 	}
 	var fc fileConfig
 	if err := json.Unmarshal(b, &fc); err != nil {
@@ -702,7 +706,7 @@ func loadUnit(unit string) (string, fileConfig, []byte) {
 
 func tunnelCodeCmd(sub string, args []string) {
 	fs := flag.NewFlagSet("tunnel "+sub, flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	pub := fs.String("public-ip", "", "this server's public IP (listener; default: first public IP)")
 	toCode := fs.Bool("to-code", sub == "clone", "clone: print a code that recreates THIS side elsewhere")
 	show := fs.Bool("show", false, "also print the decoded code with secrets masked")
@@ -710,13 +714,14 @@ func tunnelCodeCmd(sub string, args []string) {
 	fs.Parse(args)
 	deepLang = *lang
 	_, fc, _ := loadUnit(*unit)
-	ip := *pub
-	if ip == "" {
-		if ips := localPublicIPs(); len(ips) > 0 {
-			ip = ips[0]
-		}
+	ip := ""
+	if ips := localPublicIPs(); len(ips) > 0 {
+		ip = ips[0]
 	}
 	s := specFromConfig(*unit, fc, ip)
+	if *pub != "" { // the operator's explicit choice wins over the bind
+		s.PublicIP = *pub
+	}
 	c := codeFor(s)
 	if sub == "clone" && *toCode {
 		c.Clone = true
@@ -748,7 +753,7 @@ var editSections = map[string][]string{
 
 func tunnelEditCmd(args []string) {
 	fs := flag.NewFlagSet("tunnel edit", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	sec := fs.String("section", "", "network|transport|security|performance|lb (show it)")
 	var sets multiFlag
 	fs.Var(&sets, "set", "key=value (repeatable; JSON value or plain string)")
@@ -867,7 +872,7 @@ func bestLocalIP(peer string, ips []string, ping func(src, dst string) (float64,
 
 func tunnelRenewCmd(args []string) {
 	fs := flag.NewFlagSet("tunnel renew", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	pick := fs.Bool("pick-ip", false, "choose the best local source IP toward the peer (ping each)")
 	upg := fs.String("upgrade-from", "", "install this hs2 binary first (old one kept as .prev, restored if the tunnel does not come back)")
 	within := fs.Duration("confirm-within", 5*time.Minute, "confirm window")
@@ -928,7 +933,7 @@ func tunnelRenewCmd(args []string) {
 
 func tunnelSvcCmd(op string, args []string) {
 	fs := flag.NewFlagSet("tunnel "+op, flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	yes := fs.Bool("yes", false, "do not ask")
 	lang := langFlag(fs)
 	fs.Parse(args)
@@ -958,7 +963,7 @@ func tunnelSvcCmd(op string, args []string) {
 
 func tunnelLogsCmd(args []string) {
 	fs := flag.NewFlagSet("tunnel logs", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	n := fs.Int("n", 80, "lines")
 	f := fs.Bool("f", false, "follow")
 	fs.Parse(args)
@@ -973,7 +978,7 @@ func tunnelLogsCmd(args []string) {
 
 func tunnelDeleteCmd(args []string) {
 	fs := flag.NewFlagSet("tunnel delete", flag.ExitOnError)
-	unit := fs.String("u", "", "tunnel")
+	unit := unitFlag(fs, "", "tunnel")
 	yes := fs.Bool("yes", false, "step 1 confirmation")
 	name := fs.String("confirm-name", "", "step 2: the tunnel name again")
 	lang := langFlag(fs)
@@ -1279,4 +1284,27 @@ func exeIsBin(exe, bin string) bool {
 	}
 	r, err := filepath.EvalSymlinks(bin)
 	return err == nil && r == exe
+}
+
+// peerMoveWarn (rt80): a join --update that moves the dialer to another peer
+// IP — an older hs2 printed codes with the listener's default public IP
+// instead of its tunnel IP. Fine when intended; loud when not.
+func peerMoveWarn(oldAddr, newAddr string, lb *lbConfig) string {
+	oh, _, _ := net.SplitHostPort(oldAddr)
+	nh, _, _ := net.SplitHostPort(newAddr)
+	if oh == "" || nh == "" || oh == nh {
+		return ""
+	}
+	if lb != nil {
+		for _, l := range [][]lbIP{lb.Iran, lb.Kharej} {
+			for _, e := range l {
+				if net.ParseIP(e.IP).Equal(net.ParseIP(oh)) && !net.ParseIP(oh).Equal(net.ParseIP(nh)) {
+					return fmt.Sprintf(tr("the peer address changes %s -> %s although %s is in the code's lb list — if the other server's tunnel IP is %s, do not confirm (it rolls back by itself)",
+						"آدرس طرف مقابل از %s به %s عوض می‌شود با اینکه %s در فهرست lb کد هست — اگر IP تونل سرور مقابل %s است تأیید نکنید (خودش برمی‌گردد)"), oh, nh, oh, oh)
+				}
+			}
+		}
+	}
+	return fmt.Sprintf(tr("the peer address changes %s -> %s — confirm only if the other server's tunnel really moved",
+		"آدرس طرف مقابل از %s به %s عوض می‌شود — فقط اگر واقعاً IP تونل سرور مقابل عوض شده تأیید کنید"), oh, nh)
 }

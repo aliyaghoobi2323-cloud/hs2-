@@ -12,6 +12,48 @@ build id below).
 - Previous main (rollback target): `9b74b3c` (binary build `2b2e2c8c3f86`,
   Phase W); before it `75c8fc5` (binary build `1b5591f91bee`, Phase V).
 
+## rel67b — what to check on the real servers (current candidate)
+
+The sections after this one are the Q7..CA checklist and stay valid for
+those features. For rel67b (rel66b + fx170, rs169, ul173, mb174; CHANGELOG
+"rel67b"), on both servers:
+
+- **Same build on both ends.** Compare `sha256sum /usr/local/bin/hs2` with the
+  release's hash (a build from a `git archive` has an empty `hs2 version`
+  stamp, so the hash is the identifier). Order: kharej (exit) first, then
+  Iran a few minutes later; there is no wire change, so a mixed pair works
+  while the second side waits.
+- **`hs2 doctor`**: no new FAIL; `tcp_mtu_probing` must not warn (the value
+  must be 1).
+- **Live status file** `/run/hs2/<config>.status.json` (what `hs2 status`
+  reads), counters since start:
+  `mconn_target_rst` (kharej), `mconn_user_rst` (Iran), `stream_rst` — a slow
+  rise that follows path outages is expected (cut connections now end with a
+  reset instead of a silent clean close); a fast rise with no outage is a
+  rollback reason. `obs_smux_stale_upd` counts stale window updates dropped
+  (each one a stream that would have hung before rel66); any value is fine.
+- **Service log** (`journalctl -u <unit> -o cat`):
+  `mconn rescue169:` — `repeat` / `lateans` grow only when rescue retries
+  happen; `mconn rescue:` / `mconn rescue-rec:` — `nocover`, `failed`,
+  `refused` should not grow faster than on rel66b at the same hour;
+  `mconn rescue-rec:` `big X KB of N MB` should stay below the budget N
+  (rel67b sizes it from RAM: the startup line `mconn rescue-rec: big ring
+  budget N MB (source …)`, ~470 MB on a 23 GB exit) and `shrunk` grow over
+  time; `bigno` should stay near 0;
+  `keepstall:` `idle_polls` / `idle_drop` grow, `evicted` / `hard` stay where
+  they were.
+- **Memory**: RSS on both sides flat over hours (KEEPSTALL_IDLE should make
+  the exit's kept bytes smaller, not larger).
+- **Speed and latency**: judge against a baseline taken at the same hour (the
+  production rate swings by time of day). A client's high "loaded ping" in a
+  speedtest is its own access link (see the root README, "Speed test"); ping
+  kharej from the Iran server at the same moment to tell.
+
+Kill switches (per side, `Environment=` then restart), before a full rollback:
+`HS2_MCONN_RESCUE_IDEM=0` (rs169 off, rel66b rescue), `HS2_MCONN_STRIPE_KEEPSTALL_IDLE=0`
+(mb174 idle release off). fx170 and ul173 have no switch: roll the binary
+back to rel66b (sha256 `bf3a642c…`) from the copy kept before the upgrade.
+
 ## Rollback
 
 On each server, reinstall the previous binary pinned to its commit (no change

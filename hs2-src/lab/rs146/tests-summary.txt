@@ -1,0 +1,24 @@
+gofmt: 0 files
+vet rc=0
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	20.293s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/core	0.202s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/encap	36.251s
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	818.951s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/envdef	0.020s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/fec	10.184s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs	0.041s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/reality	1.715s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	59.230s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	1.277s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tune	0.216s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier	145.884s
+FAIL
+--- FAIL: TestDgDialsInFlightCount (5.00s)
+--- FAIL: TestL3DupEndToEndStuckLink (0.57s)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	1034.204s
+FAIL
+rc=1
+idle reruns: engine TestMConnLitePingsDualAndStall TestMeteredConnBlockedTime x3 ok; cmd/hs2 TestCPUMeter x3 ok; -race TestDgDialsInFlightCount TestL3DupEndToEndStuckLink + rescue145/retry x3 ok

@@ -1,0 +1,41 @@
+bh98 — HS2_LB_SILENT: a blackholed path must not be re-admitted while still blackholed (bh95 blocker). Base bh93 27378c77.
+Lab1 only (198.51.100.168), labslot single slots: soak (slot 0) + A/B on 2 workers. Runner d98.sh/seq98.sh/j98.txt, summary sum98.py.
+
+CODE (engine/lb_silent.go, lb_auto.go, lb_auto2.go, lb_spare.go):
+ commit 79fd4fc2 silentHold: once a path has read silent, a reading whose links were measured but got NOT ONE byte acked
+   (noAck; carried across ticks in lb2Acc.sil) is still silent (logged once "still silent: raw loss X% but not one byte
+   acked"). Only bytes acked end the silence ("acks again"). Edge steer readings carry noAck too.
+   Cause confirmed from the lab rule: the blackhole is iptables INPUT on the Iran netns (kharej->Iran dropped only);
+   Iran->kharej data still arrives and the kharej's ACKs are its only segments out => raw loss 0 %, bytes acked 0.
+ commit b261a57f ackOnly: a tick with too few segments for a reading but bytes acked emits an ackOnly reading, kept by the
+   judge only for a path that has read silent (ends the silence at once); dropped for every other path.
+ unit tests (all pass, lab1): TestSilentDrainedBlackholeStaysCut (24 noAck readings = 120 s held, logged once, then
+   recovers 15 s after bytes acked), TestSilentGenuineRecoverySameSpeed, TestSilentNoAckWithoutSilenceIgnored,
+   TestSilentHoldIdleAndLossy (idle tunnel + lossy-alive), TestSilentCarryNoAck, TestSilentAckOnlyRecovers (7 readings
+   with REC_CONFIRM on). go test ./engine -run "Silent|Burst|Spare|Carry" ok.
+
+LAB A/B (runs 190 s; blackhole 25..145 s = 120 s then cleared; r1 = 170 s; N=20 heavy, crowd 3000; S0 key off both,
+S1 HS2_LB_SILENT=1 both; interleaved). Binary: rounds 1-4 bI + r1-r3 bP = silentHold build; r4bP..r6 = +ackOnly
+(sha 7a168c0d...). r6bP still running at report time (bP n=5).
+  sc  arm n  cut med/max   held   re-adm while blackholed   crowd fails [ev,+30) mean   [+30,+120)   silent false
+  bI  S0  6  miss 5/6 (1 pre-cut, flapped: 2 re-adm)  0/6   2     255 [215 696 125 233 118 143]   0           0
+  bI  S1  6  7.0/7.5 (1 pre-cut)   6/6   0                       199 [132 342 359 102 140 117]   0           0
+  bP  S0  5  miss 5/5              0/5   0                       249 [126 1049 0 37 31]          0           0
+  bP  S1  5  12.4/12.5             5/5   0                       136 [48 92 413 28 97]           0           0
+  p(fails ev+30, S0 vs S1): bI 0.73, bP 0.83 (n.s.; failures are the +10 s in-flight spike, as bh95)
+  => THE BLOCKER IS FIXED: every S1 blackhole held for the whole 120 s, 0 re-admissions (bh95: re-admitted ~25 s
+     after the cut). "still silent" hold engaged in 5 runs (others: the path's links died -> no reading at all).
+
+NOT CLEAN — RECOVERY AFTER THE CLEAR NOT SEEN within 45 s in any S1 run (rec = '-' 11/11), with or without ackOnly.
+  r2bIS1: links up again 2 s after the clear, r4bPS1: probe link up +12 s; then NO judge reading / "acks again" /
+  "recovering (probing)" for the rest of the run (30-40 s). Not diagnosed: the quiet probe (lb2Quiet 30 s after the last
+  reading) did not fire either, so something keeps the path's lastRead fresh or the new link gives no measured delta.
+  Next: re-run bI/bP S1 with HS2_LB_REC_DEBUG=1 and T=260 s (115 s after clear), log measure's per-path sil/segs for
+  silent-cut paths; check whether old links stuck in RTO backoff keep producing silent readings after the clear.
+
+QUIET SOAK (S1 both sides, 1800 s, silentHold build, soak scenario as bh95): silent readings 0 kh + 0 ir, silent cuts
+0 + 0, "still silent" 0, crowd fail 1. => 0 false triggers. CLEAN.
+
+VERDICT: default stays OFF (envdef NOT changed): held-cut fixed and soak clean, but genuine recovery after a long
+blackhole clears is not demonstrated (>45 s, cause open). NOT DONE: recovery fix/diagnosis, envdef default +
+table/tests/README/CHANGELOG, full go test ./... and -race ./engine, bin98 build, mixed-version runs.

@@ -1,0 +1,61 @@
+env: edge=5d95d5c7 exit=4a3abdf9 TT=2100 NBG=9 start=2026-11-14T02:04:38Z IRE=HS2_PPROF=127.0.0.1:6060 KHE=HS2_PPROF=127.0.0.1:6060 lab=30
+ir proc (t rssMB gor fds tcp), every ~5 min:
+    0 31 1395 129 126
+    303 459 26022 3225 10035
+    607 429 26424 3259 9942
+    910 579 26502 3247 9807
+    1214 481 26524 3251 10205
+    1518 440 26358 3252 10278
+    1822 454 26484 3255 10138
+    2065 461 26478 3243 10221
+    rss first/max/last 31/618/461 MB; 2nd half min/max 437/513; pids 1
+kh proc (t rssMB gor fds tcp), every ~5 min:
+    0 35 1259 117 120
+    303 824 28584 3200 10224
+    607 743 28894 3239 10045
+    910 900 28984 3225 9904
+    1214 780 29071 3231 10115
+    1518 764 28930 3230 10377
+    1822 779 28908 3232 10202
+    2065 817 28938 3221 9862
+    rss first/max/last 35/900/817 MB; 2nd half min/max 761/896; pids 1
+MISSING lines: 0  alarm: []
+stripe_active samples 210: max 8, mean 2.4, p90 4; >8 in 0 samples, >=12 in 0; refused 0 -> 5442, subs 0 -> 272
+    t    0- 300 stripe_active mean 3.9 max 8
+    t  300- 600 stripe_active mean 2.3 max 3
+    t  600- 900 stripe_active mean 2.6 max 4
+    t  900-1200 stripe_active mean 1.9 max 3
+    t 1200-1500 stripe_active mean 2.0 max 3
+    t 1500-1800 stripe_active mean 2.2 max 4
+    t 1800-2100 stripe_active mean 2.4 max 5
+    t 2100-2400 stripe_active mean 0.0 max 0
+test downloads (t mbit striped bg_conns inWindow per-second):
+    60 39 n 12 - 2 5 8 12 15 19 31 36 51 70 91 117
+    180 30 n 14 W 2 6 9 12 17 14 29 31 35 37 67 99
+    300 30 n 14 W 2 5 7 10 15 18 23 32 40 49 72 76
+    420 418 Y 14 W 52 136 324 336 360 476 506 587 581 477 610 565
+    540 403 Y 16 W 143 199 570 559 441 432 430 464 435 445 370 339
+    660 176 n 15 W 67 151 193 188 178 176 195 179 190 198 199 188
+    780 363 Y 12 W 64 275 338 341 393 450 422 420 445 407 385 415
+    900 121 n 10 W 93 158 155 218 162 178 170 264 46 0 0 0
+    1020 45 n 15 W 4 9 16 19 23 31 36 52 76 65 82 117
+    1140 219 n 16 W 129 285 335 326 274 178 184 141 193 204 186 192
+    1260 54 n 14 W 2 7 15 18 24 36 47 52 76 99 136 133
+    1380 171 n 12 W 141 157 141 158 172 192 176 184 176 188 181 183
+    1500 47 n 16 W 3 7 13 22 25 35 44 45 61 73 104 132
+    1620 52 n 14 W 5 9 9 16 24 30 44 49 78 102 137 117
+    1740 41 n 14 W 2 4 10 17 20 27 22 40 55 67 92 131
+    1860 69 n 14 - 2 14 22 30 37 51 61 84 111 137 92 176
+    1980 163 n 16 W 134 144 143 172 160 187 166 158 180 174 163 170
+tests n=17 ok, 0 ERR: mean 144 median 69 p10 30 min 30; striped 3/17; outside windows mean 54 (n=2)
+bg d: n=111, delivered/target mean 0.96, min 0.29
+bg u: n=49, delivered/target mean 0.93, min 0.14
+bg runs 164, ERR 4
+bg concurrent: mean 7.2 min 3 max 9
+crowd fails total 791, inside windows 787, outside 4: [89, 1889, 1889, 1889]
+crowd p99 per minute: median 128.1 (outside windows 123.9, n=1), max 164.2
+call p99 per minute: median 186.4 max 321.6
+game p99 per minute: median 133.4 max 165.3
+panics ir/kh: ['0'] ['0']
+ir stripe.log: dlfair lines 0 (released 0, past cap 0); 'download stripe at' 4; 'striped over' 263
+result: {"qcaps":0,"qrel":0,"links_end":200,"links_max":216,"mode":"l3mtcp","emu":"kernel","rate":"1000mbit","delay":"45ms","loss":"0","flowrate":"0","bulk":0,"ping_avg_max":"93.202/241.053","ping_loss":"0","ping_n":10468,"ping_p50":92.9,"ping_p90":95.2,"ping_p99":102.0,"ping_max":241.0,"ping_over120_pct":0.34,"link_churn":0,"lb_paths_end":[23, 16, 23, 23, 23, 0, 23, 23, 22, 22],"lb_paths_max":[25, 24, 25, 25, 25, 23, 25, 25, 24, 24],"lb_paths_avg2h":[19.1, 22.0, 22.4, 22.3, 20.7, 12.5, 20.1, 22.2, 22.2, 21.9],"lb_text":"192.168.50.2>192.168.50.1 23/24 w12% loss 0.1% q 10ms, 192.168.50.2>192.168.52.1 

@@ -1,0 +1,17 @@
+m3d8M0 M d8
+m3d8A0 A d8
+m3d8C0 C d8
+m3d8C1 C d8
+m3d8M1 M d8
+m3d8A1 A d8
+m3d8A2 A d8
+m3d8C2 C d8
+m3d8M2 M d8
+m3u1A0 A u1
+m3u1C0 C u1
+m3u1C1 C u1
+m3u1A1 A u1
+m3u1A2 A u1
+m3u1C2 C u1
+m3u1C3 C u1
+m3u1A3 A u1

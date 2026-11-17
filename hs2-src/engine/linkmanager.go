@@ -110,6 +110,10 @@ const (
 )
 
 type LinkManager struct {
+	// steerGen / steerC (lk165, HS2_LM_FASTPICK): steerDrawLocked's cache,
+	// one per steer tick (lm_steercache.go).
+	steerGen atomic.Uint64
+	steerC   atomic.Pointer[steerCache]
 	// peak: the reverse pool's recent peak (HS2_MCONN_STRIPE_REBUILD).
 	peak poolPeak
 	// pathCooled (nil: never) reports whether the balancer cooled a link's
@@ -162,30 +166,31 @@ type LinkManager struct {
 	// targetDropAt is when the target last went down; the reverse edge closes a
 	// retiring link only once the exit has had time to learn the lower target,
 	// so it retires that slot instead of redialing it.
-	targetDropAt   time.Time
-	overCapLog     atomic.Int64 // unix ns of the last "refused reverse links" line
-	overCapN       atomic.Int32 // refusals since that line
-	targetMu       sync.Mutex
-	targetCh       chan struct{} // closed on the next target change (pool-control)
-	stats          atomic.Pointer[PoolStats]
-	exitStats      string
-	dialFailAt     time.Time
-	rwndHintAt     time.Time
-	reclaimLogAt   time.Time
-	reclaimed      atomic.Int64 // idle connections closed on retiring links, not yet logged
-	stalledLogAt   time.Time
-	stuckMassLogAt time.Time
-	lossPathLogAt  time.Time     // the last "most busy links resend" line (loss.go)
-	promptFloor    rttFloor      // the usual time links that answer promptly take (stuck.go)
-	stuckSlowAt    time.Time     // the last tick the path was slow for most links (stuck.go)
-	stuckSlowFor   time.Duration // ... how long that slow spell has been slow, all told
-	stalled        atomic.Int64  // stalled connections closed on degraded links, not yet logged
-	ctlDrain       int           // reverse: draining links whose slot the exit is asked to replace
-	forced         atomic.Int64  // ... of which trickling ones on links retiring retireForce+
-	forcedCut      atomic.Int64  // ... of which on cut-drained links (cutDrainForce+, lb_cutdrain.go)
-	evacuated      atomic.Int64  // light connections moved off cut paths, not yet logged (lb_evac.go)
-	evacTotal      atomic.Int64  // ... since start (status)
-	evacLogAt      time.Time
+	targetDropAt    time.Time
+	overCapLog      atomic.Int64 // unix ns of the last "refused reverse links" line
+	overCapN        atomic.Int32 // refusals since that line
+	targetMu        sync.Mutex
+	targetCh        chan struct{} // closed on the next target change (pool-control)
+	stats           atomic.Pointer[PoolStats]
+	exitStats       string
+	dialFailAt      time.Time
+	rwndHintAt      time.Time
+	reclaimLogAt    time.Time
+	reclaimed       atomic.Int64 // idle connections closed on retiring links, not yet logged
+	retireKeepLogAt time.Time    // HS2_RETIRE_KEEP_IDLE log (retire_keep.go), under mu
+	stalledLogAt    time.Time
+	stuckMassLogAt  time.Time
+	lossPathLogAt   time.Time     // the last "most busy links resend" line (loss.go)
+	promptFloor     rttFloor      // the usual time links that answer promptly take (stuck.go)
+	stuckSlowAt     time.Time     // the last tick the path was slow for most links (stuck.go)
+	stuckSlowFor    time.Duration // ... how long that slow spell has been slow, all told
+	stalled         atomic.Int64  // stalled connections closed on degraded links, not yet logged
+	ctlDrain        int           // reverse: draining links whose slot the exit is asked to replace
+	forced          atomic.Int64  // ... of which trickling ones on links retiring retireForce+
+	forcedCut       atomic.Int64  // ... of which on cut-drained links (cutDrainForce+, lb_cutdrain.go)
+	evacuated       atomic.Int64  // light connections moved off cut paths, not yet logged (lb_evac.go)
+	evacTotal       atomic.Int64  // ... since start (status)
+	evacLogAt       time.Time
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
 	drainIdle atomic.Int64
@@ -226,15 +231,38 @@ type LinkManager struct {
 	hold refillHold
 
 	upLog, downLog, closeLog, replLog *burstLog
+	retireLog                         *retireSum // b271 Q6
 
 	// steer (nil: off): HS2_LB_STEER — new connections follow path quality
 	// (lb_auto2.go). Under mu.
 	steer *lbSteerState
+	// stSteerNoCut: pickStripe holds a cut path's link only, so the shared and
+	// cross-direction picks take paths not cut only (HS2_LB_STRIPE_STEER,
+	// mconn_stripe_steer.go). Under mu.
+	stSteerNoCut bool
+	// stSteerAskAt (sd151): the last steering ask to the pool (deduped)
+	stSteerAskAt time.Time
+	// stSteerWantUntil (ou180): the last steering ask is out until then —
+	// the steering's own dedupe, apart from stripeWant (which every stripe
+	// pick renews, so it never lapsed and the steering never asked).
+	stSteerWantUntil time.Time
+	// stSteerOut (ou180): the steering's link still counted in stripeWant
+	// (0 or 1): a renewed ask does not add another; a set-aside link or the
+	// want's lapse ends it.
+	stSteerOut int
+	// pathSilentNow: paths marked by HS2_LB_PATH_SILENT last tick (lb_pathsilent84.go). Under mu.
+	pathSilentNow map[string]bool
+	// l3Cut (nil: no TUN): this tunnel's cut path set, which the steer judge
+	// publishes into (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go; setL3Cut). Under mu.
+	l3Cut *l3CutSet
 
 	// stripe: links the stripe asked for (HS2_MCONN_STRIPE,
 	// mconn_stripe_pool.go). Under mu.
 	stripeWant      int
 	stripeWantUntil time.Time
+	// stripeOver: links over max_links the stripe may hold now
+	// (HS2_MCONN_STRIPE_HEADROOM, mconn_stripe_headroom.go; set by decideTarget).
+	stripeOver atomic.Int32
 }
 
 // EnableSteer turns on the edge's path steering (HS2_LB_STEER; multipath LB
@@ -265,11 +293,16 @@ type idleReclaimer interface {
 type managedLink struct {
 	link Link
 	id   int
+	// ccr: us200 (HS2_LINK_CC_REFRESH, link_ccrefresh.go); health goroutine only
+	ccr ccRefreshState
 	// stripeRes: when this new link was set aside for a stripe sub (zero:
 	// not); HS2_MCONN_STRIPE, mconn_stripe_pool.go. Under the pool lock.
 	stripeRes time.Time
 	// stShared: shared stripe subs on this link (HS2_MCONN_STRIPE_SHARE)
 	stShared atomic.Int32
+	// stDlHot: shared stripe subs placed on this link as a download's hot
+	// tier (HS2_FX212_DL_PRIM=2, dlp217; mconn_stripe_sharecopy.go)
+	stDlHot atomic.Int32
 	// stUpN / stDnN: stripe subs on this link placed for an upload / a
 	// download (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
 	stUpN, stDnN atomic.Int32
@@ -331,6 +364,8 @@ type managedLink struct {
 	recent       int     // user streams that moved a byte within drainIdle
 	lastByte     time.Time
 	picks        int                 // connections placed since the last sample
+	fpPicks      atomic.Int32        // ... by the fast path under the read lock, not yet folded into picks (lm_fastpick.go)
+	stripeHeldN  atomic.Int32        // stripe subs held on the link: stripeHeld.n[ml] kept by stripeHold, read lock-free by stripeOn under HS2_LM_FASTPICK (lk165)
 	pickHist     [pickWindow - 1]int // ... and in the samples before
 	lastRec      statsRec
 	haveRec      bool
@@ -399,6 +434,7 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 	m.downLog = newBurstLog("mtcp: ", "links down", logp)
 	m.closeLog = newBurstLog("mtcp: ", "retired links closed", logp)
 	m.replLog = newBurstLog("mtcp: ", "replacement links", logp)
+	m.retireLog = newRetireSum(logp)
 	return m
 }
 
@@ -608,6 +644,9 @@ func (m *LinkManager) Run(ctx context.Context) {
 	m.mu.Lock() // AddLink (reverse) reads it under the lock: links may arrive at once
 	m.scaleCtx = ctx
 	m.mu.Unlock()
+	if rescueOn.Load() {
+		go m.rescueWatch(ctx) // er92: HS2_MCONN_RESCUE trigger (mconn_rescue_watch.go)
+	}
 	if m.accept {
 		m.runAccept(ctx)
 		return
@@ -659,8 +698,17 @@ func (m *LinkManager) decideTarget() int {
 		s = apSample{now: m.now(), growable: true}
 	}
 	d := m.ap.decide(s)
+	over := 0
 	if x := m.stripeExtra(); x > 0 { // HS2_MCONN_STRIPE: its links come on top (mconn_stripe_pool.go)
-		d.target = min(d.target+x, m.max)
+		d.target, over = stripeHeadroomTarget(d.target, x, m.max) // HS2_MCONN_STRIPE_HEADROOM (mconn_stripe_headroom.go)
+	}
+	m.stripeOver.Store(int32(over))
+	if over > 0 {
+		stripeHeadroomStat.overTicks.Add(1)
+		if int64(over) > stripeHeadroomStat.peak.Load() {
+			stripeHeadroomStat.peak.Store(int64(over))
+			m.log("stripe headroom: %d stripe-only link(s) over max_links %d (peak)", over, m.max)
+		}
 	}
 	m.setTarget(d.target)
 	m.dec = d
@@ -863,10 +911,12 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 			}
 			return a.lastByte.After(b.lastByte)
 		})
+		m.stripeBackOrderLocked(retiring, now) // HS2_MCONN_STRIPE_ADOPT_BACK (mconn_stripe_adopt.go)
 		for len(serving) < T && len(retiring) > 0 {
 			ml := retiring[0]
 			retiring = retiring[1:]
 			ml.retiring, ml.servingSince, ml.heldLogAt, ml.bornSpare = false, now, time.Time{}, false
+			m.stripeBackAdoptLocked(ml, now) // HS2_MCONN_STRIPE_ADOPT_BACK: set aside for the stripe
 			serving = append(serving, ml)
 			back = append(back, fmt.Sprint(ml.id))
 		}
@@ -922,13 +972,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 	if len(cutOut) > 0 {
 		m.log("%s", cutDrainNote(cutOut))
 	}
-	if len(back) > 0 {
-		m.log("mtcp: link(s) %s back in service (%d up: %d serving, %d retiring)", strings.Join(back, ","), up, S, R)
-	}
-	if len(gone) > 0 {
-		m.log("mtcp: link(s) %s retiring — no new connections; each closes once its connections end (%d up: %d serving, %d retiring)",
-			strings.Join(gone, ","), up, S, R)
-	}
+	m.retireLog.note(time.Now(), back, gone, up, S, R) // b271 Q6: per-minute summary past the first few (retire_summary.go)
 	if m.accept || m.dialer == nil {
 		return
 	}
@@ -1139,7 +1183,29 @@ func (m *LinkManager) drainTick() {
 	}
 	up := m.aliveLocked()
 	S, R := m.countsLocked()
+	var strict map[*managedLink]bool // HS2_RETIRE_KEEP_IDLE: links still on the old rules
+	keepLog := ""
+	if retireKeepIdle {
+		strict = m.retireStrictLocked(reclaim, up)
+		if now.Sub(m.retireKeepLogAt) >= retireKeepLogEvery {
+			heldL, heldC := 0, 0
+			for _, ml := range m.links {
+				if ml.retiring && ml.link.Alive() && ml.open > 0 {
+					heldL++
+					heldC += ml.open
+				}
+			}
+			if heldL > 0 {
+				m.retireKeepLogAt = now
+				keepLog = fmt.Sprintf("mtcp: retire keep: %d retiring link(s) kept for %d open connection(s) (idle ones reclaimed after %s; %d up, max %d, %d on old rules)",
+					heldL, heldC, fmtDur(retireKeepThreshold(drainIdle)), up, m.max, len(strict))
+			}
+		}
+	}
 	m.mu.Unlock()
+	if keepLog != "" {
+		m.log("%s", keepLog)
+	}
 	if ctlChanged {
 		m.notifyCtl() // before the closes: the exit should not redial a cut-drained link's slot
 	}
@@ -1166,13 +1232,17 @@ func (m *LinkManager) drainTick() {
 			continue
 		}
 		force := now.Sub(ml.retireSince) >= retireForce
+		idle := drainIdle
+		if retireKeepIdle && !strict[ml] && !ml.cutDrain {
+			force, idle = false, retireKeepThreshold(drainIdle)
+		}
 		if !force && ml.cutDrain && now.Sub(ml.retireSince) >= cutDrainForce && cutForced < cutDrainForcePerTick {
 			force = true // a few cut-drained links a tick: their users reconnect gradually, not as one burst
 			cutForced++
 			go func(ml *managedLink) { m.forcedCut.Add(m.reclaimIdle(ml, now, drainIdle, true)) }(ml)
 			continue
 		}
-		go m.reclaimIdle(ml, now, drainIdle, force)
+		go m.reclaimIdle(ml, now, idle, force)
 	}
 	for _, h := range held {
 		m.log("mtcp: %s", h)
@@ -1201,7 +1271,11 @@ func (m *LinkManager) drainTick() {
 			m.log("mtcp: closed %d connection(s) on retiring links: %d idle for over %s, %d trickling (not flowing): %s — they reconnect onto serving links",
 				n, n-f, fmtDur(drainIdle), f, strings.Join(parts, ", "))
 		} else {
-			m.log("mtcp: closed %d connection(s) idle for over %s on retiring links", n, fmtDur(drainIdle))
+			if retireKeepIdle { // HS2_RETIRE_KEEP_IDLE: the 5 m rule only above max_links or on cut paths
+				m.log("mtcp: closed %d connection(s) idle on retiring links (retire keep: over %s; over %s above max_links / on cut paths)", n, fmtDur(retireKeepThreshold(drainIdle)), fmtDur(drainIdle))
+			} else {
+				m.log("mtcp: closed %d connection(s) idle for over %s on retiring links", n, fmtDur(drainIdle))
+			}
 		}
 	}
 }
@@ -1475,7 +1549,7 @@ func (m *LinkManager) exitCeilingLocked() int {
 	if pm := m.peerMaxLocked(); pm > 0 && pm < hi {
 		hi = pm
 	}
-	return hi
+	return hi + int(m.stripeOver.Load()) // HS2_MCONN_STRIPE_HEADROOM: the exit with the key follows
 }
 
 // replacingLocked counts the live draining links whose slot is being
@@ -1643,6 +1717,7 @@ func (s *shortLivedLinks) note(life time.Duration) string {
 // client IP did worse at a realistic accuracy (CGNAT) and piled the
 // downloads onto few links.
 type pickKey struct {
+	cutNew  bool // HS2_LB_CUT_NONEW: on a path the dialing side reports cut (steerCutNewLocked)
 	pressed bool
 	path    uint8 // HS2_LB_STEER: steerRankLocked (0 when off)
 	heavy   bool
@@ -1711,6 +1786,9 @@ func parseLane(v string) int {
 }
 
 func (a pickKey) less(b pickKey) bool {
+	if a.cutNew != b.cutNew {
+		return !a.cutNew // fl107: a cut path last, even when every other link is pressed
+	}
 	if a.pressed != b.pressed {
 		return !a.pressed
 	}
@@ -1740,7 +1818,7 @@ func newPickKey(pressed bool, flowing, picks, recentPicks, users, perLink int) p
 const pickWindow = 3
 
 func (ml *managedLink) recentPicks() int {
-	n := ml.picks
+	n := ml.curPicks()
 	for _, p := range ml.pickHist {
 		n += p
 	}
@@ -1790,19 +1868,28 @@ func (m *LinkManager) releaseFor(ml *managedLink) func() {
 // that many open user connections (the refill hold's cap); 0 = no limit.
 // Caller holds m.mu.
 func (m *LinkManager) pickLocked(limit int) *managedLink {
+	ml, _ := m.pickLockedFP(limit)
+	return ml
+}
+
+// pickLockedFP is pickLocked, also returning the chosen link's fast-path
+// placement count as read while ranking it (lm_fastpick.go re-checks it). It
+// only reads the pool, so a caller holding m.mu for reading may call it.
+func (m *LinkManager) pickLockedFP(limit int) (*managedLink, int32) {
 	// HS2_LB_STEER: the path this connection should take (lb_auto2.go).
 	drawn := m.steerDrawLocked(false, func(ml *managedLink) bool {
 		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit) && !stripeOn(ml)
 	})
 	for tier := 0; tier < 3; tier++ {
 		var chosen *managedLink
+		var chosenFP int32
 		var best pickKey
 		ties := 0
 		for _, ml := range m.links {
 			if !ml.link.Alive() || !m.infoReadyLocked(ml) {
 				continue
 			}
-			if limit > 0 && int(ml.users.Load()) >= limit {
+			if limit > 0 && int(ml.users.Load()) >= limit || stripeGuardSkip(ml, limit) { // HS2_MCONN_STRIPE_RES_GUARD
 				continue
 			}
 			switch tier {
@@ -1815,19 +1902,23 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 					continue
 				}
 			}
-			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
+			fp := ml.fpPicks.Load()
+			picks := ml.picks + int(fp)
+			k := newPickKey(ml.pressed, ml.flowing, picks, picks+ml.histPicks(), int(ml.users.Load()), m.perLink)
 			k.heavy = pickClass && (ml.heavy > 0 || stripeOn(ml))
+			k.pressed = k.pressed || stripeGuardPressed(ml) // HS2_MCONN_STRIPE_RES_GUARD (mconn_stripe_resguard.go)
 			k.path = m.steerRankLocked(ml, drawn)
+			k.cutNew = m.steerCutNewLocked(ml)
 			if stripeOn(ml) {
 				k.path = stripeSteerRank // HS2_MCONN_STRIPE: after every path's other links
 			}
 			switch {
 			case chosen == nil || k.less(best):
-				chosen, best, ties = ml, k, 1
+				chosen, chosenFP, best, ties = ml, fp, k, 1
 			case !best.less(k):
 				ties++
-				if rand.IntN(ties) == 0 {
-					chosen = ml
+				if pickTie(ties) {
+					chosen, chosenFP = ml, fp
 				}
 			}
 		}
@@ -1835,10 +1926,10 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 			if stripeLog {
 				stripeNoteLight(chosen)
 			}
-			return chosen
+			return chosen, chosenFP
 		}
 	}
-	return nil
+	return nil, 0
 }
 
 // linkObs is what sampleHealth reads from one link outside the pool lock.
@@ -1906,6 +1997,7 @@ func (m *LinkManager) sampleHealth() {
 		if ml.mtr != nil {
 			o.rd, o.wr, o.blocked = ml.mtr.rdBytes.Load(), ml.mtr.wrBytes.Load(), ml.mtr.wrBlocked.Load()
 			o.ts, o.tsOK = linkTCPStatsOf(ml.link)
+			ccRefreshLink(ml, o.ts, o.tsOK) // us200 (link_ccrefresh.go)
 			o.peerSeen = ml.mtr.peerSeen.Load()
 			o.peerLoss = ml.mtr.peerLoss.Load()
 			o.rec = ml.mtr.peer.Load()
@@ -1976,6 +2068,7 @@ func (m *LinkManager) sampleHealth() {
 		if m.steer != nil {
 			m.steer.note(ml, o)
 		}
+		ml.foldFastPicksLocked() // HS2_LM_FASTPICK (lm_fastpick.go): write lock, no fast picker runs
 		copy(ml.pickHist[1:], ml.pickHist[:len(ml.pickHist)-1])
 		ml.pickHist[0], ml.picks = ml.picks, 0
 		ml.flowing, ml.open, ml.recent, ml.heavy = o.fs.flowing, o.fs.open, o.fs.recent, o.fs.heavy
@@ -2218,6 +2311,7 @@ func (m *LinkManager) sampleHealth() {
 		s.flowing += ml.flowing
 		s.links = append(s.links, ml.apLink())
 	}
+	logs = m.pathSilentMark(now, logs) // HS2_LB_PATH_SILENT (lb_pathsilent84.go); nothing when off
 	// The path is slow when two or more links wait (stuckWait+, moving
 	// little) and they outnumber the busy links that answer promptly: the
 	// path or the other server, slow or down for most — moving users between
@@ -2523,7 +2617,8 @@ func (m *LinkManager) dialRoomLocked() int {
 			slotted++
 		}
 	}
-	return min(m.max-slotted, m.max+drainHeadroom(m.max)-len(m.links))
+	c := m.ceilLocked() // HS2_MCONN_STRIPE_HEADROOM (mconn_stripe_headroom.go)
+	return min(c-slotted, c+drainHeadroom(m.max)-len(m.links))
 }
 
 // Target is the number of serving links the autopilot currently wants; the

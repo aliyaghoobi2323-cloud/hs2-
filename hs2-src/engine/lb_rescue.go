@@ -45,7 +45,7 @@ import (
 // (all-tls 498 -> 320), p95 312 -> 180, after the cut 526 -> 283 ms; ~250-300
 // copy subs moved off B a run (the budget part did not bind there); 0 crowd
 // failures in 12 runs, heavy unchanged; equal paths unchanged by median.
-var lbRescue bool // loadEnvKeys: HS2_LB_RESCUE
+var lbRescue atomic.Bool // loadEnvKeys: HS2_LB_RESCUE
 
 // lbRescueRaw (HS2_LB_RESCUE_RAW=1, edge, default off, with HS2_LB_RESCUE):
 // the single-sub rescue also for a connection whose first sub is still raw
@@ -118,7 +118,7 @@ func rescueAllow(now time.Time) bool {
 // its window, not a call), has its one sub on a lowered path. Caller holds
 // m.mu, on the Iran side in lite.
 func (m *mConn) rescueWantLocked(live *msub) bool {
-	if !lbRescue || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight {
+	if !lbRescue.Load() || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight {
 		return false
 	}
 	return rescueLowKey(live.key)
@@ -133,7 +133,7 @@ func (m *mConn) rescueWantLocked(live *msub) bool {
 // upgrade (rescueWantLocked), away from the lowered path. Returns the sub to
 // close, or nil. Caller holds m.mu, Iran side, lite.
 func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
-	if !lbRescue || !mconnCloseHS.Load() || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight || p == nil || m.handshaking {
+	if !lbRescue.Load() || !mconnCloseHS.Load() || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight || p == nil || m.handshaking {
 		return nil
 	}
 	var c *msub
@@ -145,7 +145,7 @@ func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
 			c = s
 		}
 	}
-	if c == nil || !rescueAllow(now) {
+	if c == nil || !rescueTake(c.key, now) { // HS2_LB_RESCUE_CUT: the cut bound (lb_rescue_cut.go)
 		return nil
 	}
 	rescueDual.Add(1)
@@ -157,21 +157,21 @@ func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
 // less (or cut) per the dialing side's fresh report. Caller holds m.mu.
 func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	st := m.steer
-	if lbCallRescue && lbCallStuck || lbCallLate { // HS2_LB_CALL_STUCK, HS2_LB_CALL_LATE (lb_call_late.go)
+	if lbCallRescue && lbCallStuck.Load() || lbCallLate { // HS2_LB_CALL_STUCK, HS2_LB_CALL_LATE (lb_call_late.go)
 		st.callPaths = callPathMark(st.callPaths, byPath)
 		if o := callStuckOpened.Load(); o != st.stuckLogged {
 			st.stuckLogged = o
-			st.logs = append(st.logs, fmt.Sprintf("lb call stuck: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d", o, callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load()))
+			st.logs = append(st.logs, fmt.Sprintf("lb call stuck: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d; weak gaps %d (strict %v), old path first %d", o, callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load(), callStuckGapWeak.Load(), lbCallStuckGapStrict, callStuckOldFirst.Load()))
 		}
 		if o := callLateOpened.Load(); o != st.lateLogged {
 			st.lateLogged = o
 			st.logs = append(st.logs, fmt.Sprintf("lb call late: fresh subs %d, late subs given up %d", o, callLateMoved.Load()))
 		}
 	}
-	if !lbRescue {
+	if !lbRescue.Load() {
 		return
 	}
-	var low []any
+	var low, cut []any
 	good := false // some live path is not lowered: there is somewhere to go
 	if st.active {
 		for p, ls := range byPath {
@@ -185,15 +185,32 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 			}
 			for _, ml := range ls {
 				low = append(low, ml.link)
+				if st.repCut[p] {
+					cut = append(cut, ml.link)
+				}
 			}
 		}
 	}
 	if !good {
-		low = nil
+		low, cut = nil, nil
 	}
 	if t := rescueTotal.Load(); len(low) > 0 && (len(st.rescued) == 0 || t != st.rescueLogged) {
 		st.rescueLogged = t
 		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d, placed off call links %d; calls: fresh subs %d, lowered subs given up %d; stuck calls: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load(), rescueCallFreeN.Load(), callRescueOpened.Load(), callRescueMoved.Load(), callStuckOpened.Load(), callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load()))
 	}
 	st.rescued = rescueMark(st.rescued, low)
+	if lbRescueCut || len(st.rescuedCut) > 0 {
+		if !lbRescueCut {
+			cut = nil
+		}
+		st.rescuedCut = rescueCutMark(st.rescuedCut, cut)
+	}
+	if d := rescueDiagRawCapped.Load() + rescueDiagRawUp.Load() + rescueCutRefused.Load(); len(low) > 0 && d != st.rescueCutLogged {
+		st.rescueCutLogged = d
+		st.logs = append(st.logs, fmt.Sprintf("lb rescue cut: %d of %d marked link(s) on cut paths; light raw conn checks on marked links: budget-capped %d (on cut paths %d), upgraded with the budget %d; cut copies raw %d, other %d, bad subs given up %d (refused by the cut bound %d)", len(cut), len(low), rescueDiagRawCapped.Load(), rescueDiagRawCappedCut.Load(), rescueDiagRawUp.Load(), rescueCutRaw.Load(), rescueCutOther.Load(), rescueCutDrop.Load(), rescueCutRefused.Load()))
+	}
+	if s := time.Now().Unix(); len(low) > 0 && s-censusLogged.Load() >= 10 {
+		censusLogged.Store(s)
+		st.logs = append(st.logs, fmt.Sprintf("lb rescue census: conn-seconds on marked links: raw %d, single %d, dual all-marked %d, dual with a good copy %d", censusRaw.Load(), censusSingle.Load(), censusAllLow.Load(), censusMixed.Load()))
+	}
 }

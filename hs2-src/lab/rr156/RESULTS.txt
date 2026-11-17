@@ -1,0 +1,32 @@
+rr156 lab3 (198.51.100.235), 2026-11-14 13:44-14:01 UTC, run.sh: three arms at once (labslot slots 30/31/32),
+lab/rr155/rep.sh unchanged (TOPO146, 30 byte-verified 2 Mbit calls, CROWD 3000, TT 1000 = 2 cycles, NBG 5).
+R5 = rr155 both sides key on; R6 = rr156 both sides key on; C = cd152 both sides key off (control).
+DIED counts exclude the teardown at el >= 995 (all 30 calls reset when the run stops).
+
+arm  in-run DIED (window, mechanism)                     CORRUPT  crowd fails  ir/kh RSS max MB
+R5   1 flap (a sub died holding the only copy) + 332     0        38927*       723 / 1076
+     at el 917-995: the rr155 EXIT CRASHED (*)
+R6   0                                                   0        129          703 / 1059
+C    9: rst 8 (only-copy 2, reset by peer 4, every sub   0        401          722 / 1059
+     died 1, ? 1), loss_all 1 (reset by peer)
+
+(*) R5 hs2kh SIGSEGV at el ~915: fatal error: fault, addr 0x10000000109, in engine.subTCP (mconn_call.go:431)
+    <- traceSubsTick (mconn_trace_subs.go:101, HS2_MCONN_TRACE=1 lab trace) <- manage of a conn started by
+    upgradeSendExit. Code not touched by rr155/rr156 (same in cd152); R6 and C did not hit it this run.
+    R5 numbers before el 915: 1 DIED, crowd fails ip1 13 rst 166.
+
+rescue-rst counters (end of run)
+R5 ir: asked 250 served 49 acked 164 saved 255 timeout 67 noring 32 nopeer 2 reask 6 resent 310 KB
+R5 kh: asked 257 served 167 acked 49 saved 257 timeout 0 noring 37 resent 377 KB
+R6 ir: asked 261 served 58 acked 250 saved 259 timeout 0 noring 48 nopeer 1 reask 4 resent 1600 KB
+       alldied 5 probe 11 join 7 joinfail 0 nakread 2
+R6 kh: asked 224 served 255 acked 58 saved 1175 timeout 744 noring 53 resent 1166 KB
+       alldied 951 hold 951 joinin 14 naksent 2
+Iran timeouts: R5 67 (rr155 shape: exit had no conn), R6 0 - the role-5 probe/refusal ended those at once
+(naksent 2 = nakread 2, "exit rst join: no conn, RST" -> "RST read while waiting", 50 ms apart).
+Open: the exit held 951 conns whose Iran side had already gone without FIN/RST (no Iran trace for them);
+744 ended after the 3 s hold (errMConnSubsDied, as before but 3 s later). No user effect seen (RSS equal),
+but a follow-up should let Iran tell the exit on such ends, or hold only with bytes unacked.
+
+go test ./engine (lab3, unloaded, after f973ad44): ok 718 s. Under the 3-arm lab load 9 timing tests failed
+(L3Dup, Call*, Lite*, Raw*, RescueCut/Capped) and pass unloaded; TestRescueRst* x10 green.

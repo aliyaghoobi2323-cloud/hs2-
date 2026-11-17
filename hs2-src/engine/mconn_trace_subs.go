@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
@@ -71,8 +72,17 @@ func (m *mConn) traceSubsTick(now time.Time) {
 	m.mu.Lock()
 	subs := append([]*msub(nil), m.subs...)
 	q := make([]int, len(subs))
+	// sg154: s.rw and s.key are read here, under m.mu: releaseRaw1 swaps
+	// them (under m.mu) once the raw first sub is gone, and an unlocked read
+	// of the interface could see the old type with the new data word
+	// (lab cd152 a64: exitCountedStream's type with deadSubRW{}'s data
+	// pointer, &runtime.zerobase; its "c" was the flag bytes after it,
+	// 0x10000000101, and r.c.mtr faulted at 0x10000000109).
+	tcs := make([]*net.TCPConn, len(subs))
+	keys := make([]any, len(subs))
 	for i, s := range subs {
 		q[i] = s.queueLocked()
+		tcs[i], keys[i] = subTCP(s), s.key
 	}
 	m.mu.Unlock()
 	r := &m.r
@@ -98,11 +108,11 @@ func (m *mConn) traceSubsTick(now time.Time) {
 			b.WriteString(" | ")
 		}
 		addr, info := "?", ""
-		if tc := subTCP(s); tc != nil {
+		if tc := tcs[i]; tc != nil {
 			addr = fmt.Sprintf("%v>%v", tc.LocalAddr(), tc.RemoteAddr())
 			info = tcpTraceInfo(tc)
 		}
-		p := callPathOf(s.key)
+		p := callPathOf(keys[i])
 		fmt.Fprintf(&b, "s%d %s path=%s first=%dK dup=%dK lag=%v q=%d %s", s.idx, addr, p,
 			rows[i].f>>10, rows[i].d>>10, rows[i].lag.Round(time.Millisecond), q[i], info)
 	}

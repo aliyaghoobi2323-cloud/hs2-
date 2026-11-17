@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/xtaci/smux"
 )
 
 // Observability counters: process-wide, lock-free, written on the data path
@@ -141,8 +143,10 @@ var obs struct {
 	// heavy by rule (a standing queue, the rate, or a fast start); and the
 	// primary switches of a light connection whose primary sub was stuck.
 	mconnOpen                                  atomic.Int64
+	msubsLive                                  atomic.Int64 // mem66: msubs not yet closed
 	mconnDupBytes, mconnSaved, mconnBulk       atomic.Uint64
 	mconnSubSurvived, mconnMissed, mconnFailed atomic.Uint64
+	mconnRaw1Released                          atomic.Uint64 // mem68: dead raw first subs whose stream was let go
 	mconnDual, mconnSingle, mconnHeavy         atomic.Int64
 	mconnHeavyQueue, mconnHeavyRate            atomic.Uint64
 	mconnHeavyFast, mconnPrimarySwitch         atomic.Uint64
@@ -211,6 +215,7 @@ type ObsSnap struct {
 	L3DupPathOther, L3DupPathSame, MConnPathOther, MConnPathSame uint64
 
 	MConnOpen                                  int64 // a level, not a count (Sub keeps the newer)
+	MSubsLive, SmuxStreams, SmuxSessions       int64 // mem66 levels: open msubs, streams in smux maps, open sessions
 	MConnDupBytes, MConnSaved, MConnBulk       uint64
 	MConnSubSurvived, MConnMissed, MConnFailed uint64
 	MConnDual, MConnSingle, MConnHeavy         int64 // levels
@@ -236,7 +241,8 @@ func Observed() ObsSnap {
 		L3DupSent: obs.l3DupSent.Load(), L3DupDropped: obs.l3DupDropped.Load(), L3DupSaved: obs.l3DupSaved.Load(),
 		L3DupPathOther: obs.l3DupPathOther.Load(), L3DupPathSame: obs.l3DupPathSame.Load(),
 		MConnPathOther: obs.mconnPathOther.Load(), MConnPathSame: obs.mconnPathSame.Load(),
-		MConnOpen: obs.mconnOpen.Load(), MConnDupBytes: obs.mconnDupBytes.Load(), MConnSaved: obs.mconnSaved.Load(),
+		MConnOpen: obs.mconnOpen.Load(), MSubsLive: obs.msubsLive.Load(),
+		SmuxStreams: smux.LiveStreams(), SmuxSessions: smux.LiveSessions(), MConnDupBytes: obs.mconnDupBytes.Load(), MConnSaved: obs.mconnSaved.Load(),
 		MConnBulk: obs.mconnBulk.Load(), MConnSubSurvived: obs.mconnSubSurvived.Load(),
 		MConnMissed: obs.mconnMissed.Load(), MConnFailed: obs.mconnFailed.Load(),
 		MConnDual: obs.mconnDual.Load(), MConnSingle: obs.mconnSingle.Load(), MConnHeavy: obs.mconnHeavy.Load(),
@@ -263,7 +269,7 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		L3DupSent: s.L3DupSent - old.L3DupSent, L3DupDropped: s.L3DupDropped - old.L3DupDropped, L3DupSaved: s.L3DupSaved - old.L3DupSaved,
 		L3DupPathOther: s.L3DupPathOther - old.L3DupPathOther, L3DupPathSame: s.L3DupPathSame - old.L3DupPathSame,
 		MConnPathOther: s.MConnPathOther - old.MConnPathOther, MConnPathSame: s.MConnPathSame - old.MConnPathSame,
-		MConnOpen: s.MConnOpen, MConnDupBytes: s.MConnDupBytes - old.MConnDupBytes, MConnSaved: s.MConnSaved - old.MConnSaved,
+		MConnOpen: s.MConnOpen, MSubsLive: s.MSubsLive, SmuxStreams: s.SmuxStreams, SmuxSessions: s.SmuxSessions, MConnDupBytes: s.MConnDupBytes - old.MConnDupBytes, MConnSaved: s.MConnSaved - old.MConnSaved,
 		MConnBulk: s.MConnBulk - old.MConnBulk, MConnSubSurvived: s.MConnSubSurvived - old.MConnSubSurvived,
 		MConnMissed: s.MConnMissed - old.MConnMissed, MConnFailed: s.MConnFailed - old.MConnFailed,
 		MConnDual: s.MConnDual, MConnSingle: s.MConnSingle, MConnHeavy: s.MConnHeavy,

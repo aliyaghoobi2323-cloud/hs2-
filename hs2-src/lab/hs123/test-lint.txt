@@ -1,0 +1,3 @@
+gofmt:
+vet:
+vet-ok

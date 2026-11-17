@@ -116,6 +116,9 @@ var (
 	lbGraceFreeFails  = 6
 	lbGraceBackoff    = 250 * time.Millisecond
 	lbGraceBackoffMax = 4 * time.Second
+	// lbPrimBackoffMax (ou180): the longest a failing primary is skipped
+	// while other paths hold links (resultLocked); one dial per this at most.
+	lbPrimBackoffMax = 30 * time.Second
 )
 
 // startedLocked reports whether failed dials may cool a path: the peer has
@@ -158,17 +161,33 @@ type LB struct {
 	drainFloor int
 	drainAt    time.Time
 	judgeAt    time.Time // the last fast-auto reading
+	// l3Cut (nil: no TUN): the tunnel's cut path set the judge publishes
+	// into (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go; setL3Cut).
+	l3Cut *l3CutSet
+	// pmtuT: HS2_LB_PMTU_HINT's per-path MTU history (lb_pmtu135.go); under mu.
+	pmtuT *pmtuTrack
 	// spare (lb_spare.go): the pool's spare-dial request (nil: none); spareLog
 	// the last such line (unix ns).
 	spare       func(n int)
 	spareLog    atomic.Int64
 	spareGapLog atomic.Int64
-	acc2        map[string]*lb2Acc // low-traffic paths' counts carried over (lb_spare.go)
+	// spareWant (lb_spare176.go; nil: unknown) is the edge's serving target
+	// (the exit pool's want); gapBack the per-path backoff of spareForGap's
+	// asks; gapSkipLog the last "edge would not take it" line (unix ns).
+	spareWant  func() int
+	gapBack    map[string]*gapBackoff
+	gapSkipLog atomic.Int64
+	acc2       map[string]*lb2Acc // low-traffic paths' counts carried over (lb_spare.go)
 	// peerState reports what the peer's live links say about capLB: known is
 	// false while no live link carries a kindInfo answer (nil = always ok).
 	peerState func() (known, has bool)
 	now       func() time.Time
 	log       func(string, ...any)
+
+	// ou180: the outage rotation's cursor — with no link held and none in
+	// flight, each dial takes the next path of outageOrderLocked (reset by
+	// the first dial that works).
+	outageN int
 }
 
 // NewLB builds a balancer over paths; exactly one must be Primary.
@@ -222,7 +241,7 @@ func (b *LB) refreshPeerLocked() {
 // eligibleLocked reports whether path i may take a normal (non-probe) link.
 func (b *LB) eligibleLocked(i int, now time.Time) bool {
 	if b.paths[i].Primary {
-		return true
+		return i >= len(b.backoff) || !now.Before(b.backoff[i]) // ou180: only a failing primary backs off
 	}
 	return !b.paths[i].Gone && b.until[i].IsZero() && (i >= len(b.backoff) || !now.Before(b.backoff[i]))
 }
@@ -248,6 +267,11 @@ func (b *LB) acquireLocked() (i int, probe bool) {
 			return j, true
 		}
 	}
+	if j := b.outageRotateLocked(); j >= 0 {
+		b.links[j]++
+		b.dials[j]++
+		return j, false
+	}
 	ok := func(j int) bool { return b.eligibleLocked(j, now) }
 	i = -1
 	if b.auto {
@@ -259,6 +283,71 @@ func (b *LB) acquireLocked() (i int, probe bool) {
 	b.links[i]++
 	b.dials[i]++
 	return i, false
+}
+
+// outageRotateLocked (ou180) picks the path for a dial made while no link is
+// held and none is in flight — a full outage, where only the exit pool's one
+// scout dials (or the very first dial): the next path of outageOrderLocked, so
+// successive scout dials walk every path instead of always landing on the
+// heaviest (the primary: 855 of 859 failed dials in a 23-min production
+// outage went to one Iran IP — had that IP been filtered after the edge's
+// restart, the tunnel would have stayed down with 12 other paths working).
+// The dial rate stays the scout's (one at a time, ≤2 s apart). It returns -1
+// when links are held or in flight, or there is only one path.
+func (b *LB) outageRotateLocked() int {
+	if len(b.held) > 0 || len(b.paths) < 2 {
+		return -1
+	}
+	for _, n := range b.links {
+		if n > 0 {
+			return -1
+		}
+	}
+	order := b.outageOrderLocked()
+	if len(order) == 0 {
+		return -1
+	}
+	j := order[b.outageN%len(order)]
+	b.outageN++
+	return j
+}
+
+// outageOrderLocked is the outage rotation's path order: the primary first,
+// then round by round one path per remote address (in first-seen order), so
+// consecutive dials try a different Iran IP before a different local IP of
+// the same one. Removed paths are left out; cooled ones are not (in a full
+// outage an old verdict must not hide a path that may be the one that works).
+func (b *LB) outageOrderLocked() []int {
+	prim := b.primary()
+	var remotes []string
+	groups := map[string][]int{}
+	n := 0
+	add := func(j int) {
+		if b.paths[j].Gone {
+			return
+		}
+		r := b.paths[j].Remote
+		if _, seen := groups[r]; !seen {
+			remotes = append(remotes, r)
+		}
+		groups[r] = append(groups[r], j)
+		n++
+	}
+	add(prim)
+	for j := range b.paths {
+		if j != prim {
+			add(j)
+		}
+	}
+	out := make([]int, 0, n)
+	for k := 0; len(out) < n; k++ {
+		for _, r := range remotes {
+			if g := groups[r]; k < len(g) {
+				out = append(out, g[k])
+			}
+		}
+	}
+	return out
 }
 
 // effWeightsLocked is each path's effective weight: configured × quality
@@ -408,11 +497,27 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 		}
 		if !p.Primary && (probe || b.fails[i] >= lbFailMax && b.startedLocked()) {
 			wasCool := !b.until[i].IsZero()
-			cd := b.cooldownLocked()
+			cd := silentCooldown(b.cooldownLocked(), err) // HS2_LB_SILENT: a dark path is probed every lbSilentProbe (lb_silent.go)
 			b.until[i] = b.now().Add(cd)
 			if !wasCool {
 				b.log("lb: path %s cooled for %s after %d failed dial(s): %v — its share goes to the other paths", p.Name(), fmtDur(cd), b.fails[i], err)
 			}
+		} else if p.Primary && len(b.held) > 0 && b.fails[i] >= lbFailMax && i < len(b.backoff) {
+			// ou180: the primary is never cooled, but while other paths hold
+			// links it must not take every dial: with nothing in flight it is
+			// always furthest below its share, so after a full outage with
+			// its IP filtered every slot's redial landed on it and failed
+			// (the pool stayed at the one link the outage scout found). Back
+			// it off like a grace path; it stays the fallback when nothing
+			// else is eligible (pickLargestRemainder) or held (rotation).
+			// From 1 s, doubling to lbPrimBackoffMax: past the exit slots'
+			// own 8 s retry, or a backed-off slot would find the primary
+			// eligible again on every retry and never reach a working path.
+			d := time.Second << min(b.fails[i]-lbFailMax, 16)
+			if d > lbPrimBackoffMax || d <= 0 {
+				d = lbPrimBackoffMax
+			}
+			b.backoff[i] = b.now().Add(d)
 		} else if !p.Primary && b.fails[i] > lbGraceFreeFails && i < len(b.backoff) && !b.upAt.IsZero() {
 			// rel47: only once the peer has been reachable (a dial worked on
 			// some path). Before that every path refuses alike (the peer is
@@ -429,6 +534,7 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 		b.log("lb: path %s is back (probe link up after %d failed dial(s))", p.Name(), b.fails[i])
 	}
 	b.fails[i] = 0
+	b.outageN = 0 // the next outage's rotation starts at the primary again
 	b.until[i] = time.Time{}
 	if i < len(b.backoff) {
 		b.backoff[i] = time.Time{}

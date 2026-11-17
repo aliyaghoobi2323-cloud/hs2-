@@ -118,6 +118,17 @@ func autoWinOffForStripe(lm *LinkManager, st any) {
 	if smuxAutoWin == nil || !mconnStripeWanted(lm) {
 		return
 	}
+	if stripeHeavyFloor > 0 {
+		// HS2_STRIPE_HEAVY_FLOOR_MB: the floor once the stream proves heavy
+		if o, ok := st.(interface{ SetHeavyFloorGated(int, int) }); ok && stripeHeavyFloorGate > 0 {
+			o.SetHeavyFloorGated(stripeHeavyFloor, stripeHeavyFloorGate)
+			if so, ok := st.(interface{ SetHeavyFloorSoft() }); ok && stripeHeavyFloorSoft {
+				so.SetHeavyFloorSoft()
+			}
+		} else if o, ok := st.(interface{ SetHeavyFloor(int) }); ok {
+			o.SetHeavyFloor(stripeHeavyFloor)
+		}
+	}
 	if stripeAWHeavy > 0 {
 		// HS2_STRIPE_AW_HEAVY: the adaptive window stays on; 1: held to the
 		// base at once while a light user receives on the same link
@@ -188,6 +199,80 @@ func stripeAWHeavyFromEnv(v string) int {
 	}
 	return 0
 }
+
+// stripeHeavyFloor: HS2_STRIPE_HEAVY_FLOOR_MB (Iran; default 4 since dl79,
+// envdef; 0 off, 3-16): every sub Iran opens for a stripe-capable connection (the primary
+// and the stripe subs) is marked with smux SetHeavyFloor — once it receives
+// over 1 MiB in a 250 ms epoch (~34 Mbit/s, a download, never a light user)
+// its window never drops below this many MiB, whatever the queue and
+// light-neighbour rules say; growth above it stays under those rules.
+// dl76 (lab3: reverse l3mtcp, 10 paths of 90 ms with 0.2-2% loss, 3000
+// light users, a call, a game): HS2_DL76_TRACE showed a single download's
+// primary held at the 2 MiB base for 6-8 s — the exit's writer waiting for
+// window 70-85% of every second, its link app-limited (ss: unacked ~1.4 MB
+// under a ~1.8 MB cwnd, rwnd_limited 0, notsent 0) at ~100 Mbit/s — and
+// stripe subs the same at ~100 Mbit/s each.
+//
+// Not a default: interleaved A/B on that lab (12 s, d1 n=7/7, d8 n=5/5),
+// floor 6: one download +60% (385 -> 614 Mbit/s, p=0.003), eight +61%
+// (1119 -> 1801, p<0.001), RSS flat; but light users' p99 rose — crowd
+// +3.0 ms (d1, p=0.04) and +5.5 ms (d8, p=0.002), echo +26 ms (d1, p=0.02).
+// Floor 8: d1 +51%, d8 +96%, crowd p99 +2.8 / +6.7 ms. The operator decides.
+var stripeHeavyFloor int // loadEnvKeys
+
+// stripeHeavyFloorGate: HS2_STRIPE_HEAVY_FLOOR_GATE (dl77, 0 off, 1-8): the
+// floor only while the stream's own loop shows no queue; this many queued
+// probes in a row (over qLow, ~4 ms at 90 ms, or HS2_STRIPE_HEAVY_FLOOR_QUS
+// microseconds) drop it back to the old base, with a 0.5-8 s hold (smux
+// SetHeavyFloorGated). HS2_STRIPE_HEAVY_FLOOR_SOFT: cut a quarter, no hold.
+//
+// dl77, the same lab as dl76 (edge + rel58 exit, interleaved, 12 s, floor 6,
+// arms vs off): gate 1 takes the whole gain (d1 +1%, n=8); gate 2 (n=11/6,
+// two rounds) d1 +53% (p=0.014) crowd p99 +0.7 ms (n.s.), d8 +51%
+// (p<0.001) crowd +2.3 ms (p=0.13), echo +27 ms (p=0.09); soft d1 +49%
+// / d8 +59% but crowd +3.1 / +4.7 ms; soft at 1.5 ms d1 +107% with crowd
+// +2.1 ms (p=0.04). The light users' cost is not in the floored stream's own
+// loop (it rises below the gate's threshold): a share of the path, not one
+// link's queue. Gate 2 is the candidate; not a default (a small light-user
+// p99 cost is the operator's call).
+//
+// dl78 confirmation (same lab, both lab hosts, interleaved, pooled): floor 6
+// gate 2 d8 +59% (1101 -> 1746 Mbit/s, n=24/16, p<0.001) but crowd p99
+// +5.3 ms (p<0.001, every host and round +4.5..+6.3); d1 +42% (n=22/17,
+// p=0.008) crowd +1.0 ms (n.s.); u1 -23% (489 -> 376, n=17/13, p=0.01);
+// u8 +4% (n.s.) echo p99 +24 ms (p=0.023). Fails the light-user bar: stays
+// opt-in. Floor 4 gate 2: d8 +42% (n=24/13, p<0.001) crowd +2.5 ms
+// (p=0.004), echo -16 ms; d1 +63% (n=5) crowd +2.4 ms (p=0.007); u1 -16%
+// (n=4, n.s.), u8 -13% (n=2) — not proven either (lab/dl78/results78.txt).
+//
+// dl79 (3 lab hosts, interleaved, pooled; lab/dl79/results79.txt): the dl78
+// u1 loss was not the floor — aw_floor_subs stayed 0 in all 45 upload runs
+// with the floor on (4-9 in every d8 run): an upload's edge subs receive
+// nothing (HS2_DL76_TRACE rd=0), so the receive-rate trigger never fires and
+// floor and off run identical code; dl78's u1 gap was host/round drift.
+// Floor 4 gate 2 vs off: d8 +34% (1093 -> 1463, n=19/19, p<0.001) crowd p99
+// +2.1 ms (p=0.01); d1 +21% (389 -> 472, n=17/17, p=0.045) crowd +0.7 ms;
+// u1 +5% (n=25/25, n.s.); u8 +4% (n=17/17, n.s.); call/game/echo/ping no
+// significant rise (u1 echo -12 ms). Edge default: 4 MiB, gate 2.
+var stripeHeavyFloorGate int // loadEnvKeys
+
+// stripeHeavyFloorSoft: HS2_STRIPE_HEAVY_FLOOR_SOFT (dl77, with the gate):
+// a queued probe cuts the floor a quarter, quiet epochs take it back up.
+var stripeHeavyFloorSoft bool // loadEnvKeys
+
+func stripeHeavyFloorFromEnv(v string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 2 {
+		return 0
+	}
+	return min(n, 16) << 20
+}
+
+// StripeHeavyFloorN: streams whose base window HS2_STRIPE_HEAVY_FLOOR_MB raised.
+func StripeHeavyFloorN() int64 { return smux.HeavyFloorN() }
+
+// StripeHeavyFloorDrops: floors HS2_STRIPE_HEAVY_FLOOR_GATE dropped.
+func StripeHeavyFloorDrops() int64 { return smux.HeavyFloorDrops() }
 
 // stripeAWHeavyN: streams opened under HS2_STRIPE_AW_HEAVY (status aw_heavy_subs).
 var stripeAWHeavyN atomic.Int64

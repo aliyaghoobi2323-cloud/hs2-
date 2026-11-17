@@ -42,6 +42,22 @@ type Config struct {
 	// AutoWindow (hs2 addition, version 2 only): grow a stream's window past
 	// MaxStreamBuffer while it is window-bound (autowin.go). nil: upstream.
 	AutoWindow *AutoWindow
+
+	// SmallFirst (hs2 addition, HS2_SMUX_SMALL_FIRST): a data frame of at most
+	// this many bytes overtakes up to SmallFirstJump earlier queued data frames
+	// in the session's write scheduler, so an interactive stream's small
+	// frame does not wait a 16 KiB turn of every bulk stream on the link. The
+	// jump is bounded, so a big frame is never starved. 0: upstream FIFO.
+	SmallFirst int
+	// StallTimeout (hs2 mem67, stall.go): evict the streams left unread while
+	// the session buffer is full once no stream has read for StallTimeout/2,
+	// and close the session when one conn write makes no progress for
+	// StallTimeout. 0: off (upstream).
+	StallTimeout time.Duration
+	// SendBatch (hs2 lk179, sendbatch.go): sendLoop writes the frames
+	// already queued, up to this many bytes, with one conn write. 0: one
+	// frame per write (upstream).
+	SendBatch int
 }
 
 // DefaultConfig is used to return a default configuration

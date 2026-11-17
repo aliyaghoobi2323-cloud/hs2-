@@ -1,0 +1,29 @@
+ab111 (2026-11-13, lab2 198.51.100.234, labslot --all)
+
+STEP 1 rel60 soak (rel60soak.service, f72168b6 both sides, 06:39-10:49 UTC, 4.2 h, TT 15000 s): soak60-summary.txt
+  RSS after warm-up: ir 380-516 MB h1, 401-450 h2, 400-457 h3, 408-437 h4; kh 643-741, 663-757, 661-732, 669-695 -> flat.
+  goroutines ir ~26k, kh ~28-31k steady (crowd load); fds max 3224-3276 every hour; tcp max ~10.2-10.6k; 0 missing
+  samples, 1 pid per side (no restart). links 200/200 at the end. alarms (panic-like) 0.
+  Light: crowd p99 median 111-116 ms every hour; fails 5234 total, all inside blackhole/flap/rst windows (0 outside);
+  loss/queue events 0 fails (bhA avg 152, bh_e120 180, flap 136, rst 150, bhB 17 per event).
+  Heavy: 50 steps, ERR 2 (t=7260, t=10860), 0 timeouts. Both ERR steps contain the bhA blackhole (heavy at 60+1800k
+  always overlaps bhA at 90+1800k: 2 of those 9 ERR, 0 of the other 41). Hang dumps: every socket queue 0
+  (iperf3 rc=1, not a tunnel stall with bytes queued). silent-cut lines kh 42 (max 49), ir 5 (max 11).
+  Verdict: memory flat, no leak; heavy ERRs only when a blackhole hits the heavy flow.
+  Compacted: proc/resc/min/st.jsonl gzipped (/opt/hs2lab/rel60soak 1.9 MB + SUMMARY.txt); old /tmp bundles removed (disk 72 %).
+
+STEP 2 rel61 (16d1629d) vs rel60 (f72168b6) download, d60 lab (dl79 prod-like: l3mtcp 10 paths 90 ms RTT, loss 0.2-2 %,
+crowd 3000 + call + game), d111.sh/seq111.sh, arms rotated per round (jobs111.txt), n=10 per arm x mode
+(3 iperf3 segfault runs = missing, made up at the end). A rel60 both, B rel61 both, C rel61 + HS2_LB_CUT_NONEW=0 edge,
+D rel61 + HS2_MCONN_RESCUE=0 both. Table sum111.txt (Welch / exact MWU two-sided).
+  d8: A 1525 mean (1274-1770), B 1444 (-5.3 %, Welch p 0.20, MWU 0.32), C 1472 (-3.5 %, p 0.47), D 1557 (+2.1 %, p 0.67;
+      D vs B p 0.11). Runs < 1300: A 1, B 2, C 1, D 1 -> lab3's low runs also happen on rel60 (A5 1274).
+  d1: A 518 (291-648), B 414 (-20 %, Welch p 0.10, MWU 0.075), C 477 (-8 %, p 0.51), D 453 (-13 %, p 0.36); very noisy,
+      runs < 300 in A 2, B 1 (118), C 1, D 4.
+  Light: crowd p99 169-181 ms in all arms, 0 crowd fails in all 80 runs.
+  Low-run logs (ana111-*.txt, stripe111-*.txt): 0 cut lines, 0 rescue triggers/started, no pattern/retire difference
+  during heavy in any run. d8 Mbit/s tracks how far the 8 stripes grow past 3 subs (r=0.43): mean stripe-sub sum
+  A 26.2, B 25.1, C 27.4, D 30.8 (rescue off grew past 3 in 9/10 runs vs 5/10 for B), but D's gain over B is n.s. (p 0.11).
+  No key or mechanism shown: neither CUT_NONEW nor RESCUE acted (no cut, no trigger) in any heavy window.
+Verdict: no significant download difference rel61 vs rel60 (d8 -5 %, p 0.20; d1 -20 %, p 0.10 borderline in a noisy
+  mode). Not proven equal on d1 at n=10; a d1-only A vs B (and D) rerun n=20 would settle it.

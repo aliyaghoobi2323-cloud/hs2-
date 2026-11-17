@@ -351,6 +351,11 @@ func TestL3LaneLeavesStripeLinkAtOnce(t *testing.T) {
 func TestMConnStripeGatedFromRaw(t *testing.T) {
 	for _, flap := range []bool{false, true} {
 		t.Run(map[bool]string{false: "held", true: "flapping"}[flap], func(t *testing.T) {
+			// production stripes only with the deadline fix (mconn_link.go);
+			// without it a stale wake deadline can kill the first sub after
+			// the raw switch (errMConnLost: the rare -race flake seen in
+			// lk179 and hs117; the test drives no LinkManager, fp185)
+			setDeadlineFix(t, true)
 			setStripeRate(t, 200<<10)
 			old := stripeQTarget.Load()
 			t.Cleanup(func() { stripeQTarget.Store(old) })

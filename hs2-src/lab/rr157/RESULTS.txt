@@ -1,0 +1,34 @@
+rr157 lab3 (198.51.100.235), 2026-11-14 15:09-15:26 UTC, run.sh: two arms at once (labslot slots 30 and 32; slot 31
+held empty by unit rr157-hold), rr157/rep.sh = lab/rr155/rep.sh with HS2_MCONN_TRACE OFF (TOPO146, 30 byte-verified
+2 Mbit calls, CROWD 3000, TT 1000 = 2 cycles, NBG 5). Analysis: python3 an157.py runs/B runs/N.
+B = rel65 (9d8389a2) both sides, key off;  N = rr157 (7e1cd8c2) both sides, HS2_MCONN_RESCUE_RST=1.
+DIED counts exclude the teardown at el >= 995 (all calls reset when the run stops).
+
+arm  in-run call DIED (window, error)                        CORRUPT  crowd fails (ip1/rst)  ir/kh RSS max MB
+B    11: rst c0 10 (ConnectionReset 'Connection lost' 4,     0        410 (138/272)          567 / 967
+         errno 104 6), rst c1 1 (errno 104)
+N    1: rst c0 el 97.2 EOFError('eof (tunnel FIN)')         0        159 (46/113)           577 / 972
+
+p99 ms       crowd   call    game
+B            304.4   668.9   593.3
+N            299.7   687.5   631.6     (p50 B/N: crowd 107.8/106.3, call 119.4/114.9, game 107.3/105.9)
+
+rescue-rst counters, N (end of run)
+ir: asked 249 served 80 acked 244 saved 248 timeout 0 noring 46 reask 1 resent 601 KB alldied 13 probe 3 join 14
+    nakread 3 | enddue 3503 endsent 3503 endnolink 0 enddrop 0
+kh: asked 377 served 245 acked 80 saved 1291 timeout 33 noring 53 resent 532 KB alldied 914 hold 913 joinin 13
+    naksent 3 | holdexp 32 holdrsc 53 holdend 822 | endin 1769 endnoconn 1651
+Exit holds (the rr157 fix): 913 started -> 822 ended at once by Iran's end notice, 53 rescued (RRST came),
+32 expired after 3 s (rr156: 951 held, 744 expired). Exit timeouts 33 (rr156: 744).
+Notice cost: 3503 header-only streams over the run; 1651 found the conn already gone at the exit (it had seen
+the RST/EOF itself), harmless.
+
+The one N death (call 10, el 97.2, rst window): clean EOF to the caller, not a reset. Mechanism unknown: the
+Iran rescue-trace budget (4000 lines) had been used up by the per-notice trace lines of this build ("iran end
+notice sent"), so there is no Iran trace for it; the exit trace shows no line for a 20 MB conn then. A notice is
+sent only after Iran's own conn ended, so it cannot have caused that end. The per-notice rtrace lines are
+removed in the follow-up commit (counters cover them).
+
+go test -race ./engine -run TestRescueRst -count=3 (lab3, slot-31 cores): ok, 33 PASS, no race.
+go test ./engine -timeout 30m (lab3 idle, after 7e1cd8c2): ok 724 s.
+Follow-up (per-notice rtrace removed): gofmt clean, vet ok, TestRescueRst* -count=2 ok. Not re-run in the lab.

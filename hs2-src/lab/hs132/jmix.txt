@@ -1,0 +1,6 @@
+mxA1 Q hs2-r63d hs2-r63d - HEAVY_CTL=direct,HEAVY_P=8
+mxB1 Q hs2-r63d hs2-r61 - HEAVY_CTL=direct,HEAVY_P=8
+mxC1 Q hs2-r61 hs2-r63d - HEAVY_CTL=direct,HEAVY_P=8
+mxA2 bS hs2-r63d hs2-r63d - HEAVY_CTL=direct
+mxB2 bS hs2-r63d hs2-r61 - HEAVY_CTL=direct
+mxC2 bS hs2-r61 hs2-r63d - HEAVY_CTL=direct

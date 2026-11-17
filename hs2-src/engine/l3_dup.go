@@ -65,6 +65,14 @@ func (l *l3Link) canDup() bool { return l.dupOK != nil && l.dupOK() }
 // one on any path, then another path, then any (dup_paths.go) — a copy behind
 // a download waits in its queue, which costs more than sharing a path.
 func dupSecond(links []*l3Link, h uint32, first *l3Link) *l3Link {
+	if l3CutAvoid { // HS2_LB_RESCUE_CUT_L3 (l3_cutavoid.go)
+		if first.cut.any() {
+			if l := dupSecondWhere(links, h, first, func(l *l3Link) bool { return !l3OnCut(l) }); l != nil {
+				l3CutDupOff.Add(1)
+				return l
+			}
+		}
+	}
 	if dupPathsOn && first.path != "" {
 		other := func(l *l3Link) bool { return l.path != "" && l.path != first.path }
 		light := func(l *l3Link) bool { return !l.isHeavy() }

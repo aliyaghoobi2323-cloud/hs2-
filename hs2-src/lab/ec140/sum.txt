@@ -1,0 +1,101 @@
+d1A1_1     A1  d1  echo n  131 p50   90.6 p99   91.8 max  168.0  game p99  118.1  heavy   532.6
+d1A1_2     A1  d1  echo n  131 p50   90.7 p99  111.9 max  128.7  game p99  106.8  heavy   603.8
+d1A1_3     A1  d1  echo n  132 p50   90.7 p99  144.8 max  162.9  game p99  169.7  heavy   648.5
+d1A1_4     A1  d1  echo n  132 p50   90.6 p99  123.6 max  194.9  game p99  115.6  heavy   283.5
+d1A1_5     A1  d1  echo n  130 p50   90.6 p99  141.7 max  214.9  game p99  153.9  heavy   584.4
+d1A1_6     A1  d1  echo n  130 p50   90.6 p99  157.7 max  172.3  game p99  154.0  heavy   267.7
+d1A1_7     A1  d1  echo n  131 p50   90.6 p99  127.8 max  175.5  game p99  135.3  heavy   590.1
+d1A1_8     A1  d1  echo n  131 p50   90.6 p99  134.4 max  156.0  game p99  151.9  heavy   507.0
+d1A2_1     A2  d1  echo n  131 p50   90.8 p99   97.6 max   99.7  game p99  115.9  heavy  1141.3
+d1A2_2     A2  d1  echo n  132 p50   90.8 p99  152.2 max  191.2  game p99  144.3  heavy  1027.7
+d1A2_3     A2  d1  echo n  132 p50   90.7 p99  126.5 max  153.4  game p99  171.8  heavy   435.1
+d1A2_4     A2  d1  echo n  131 p50   90.7 p99  158.2 max  185.8  game p99  154.8  heavy   897.5
+d1A2_5     A2  d1  echo n  131 p50   90.6 p99  106.1 max  181.5  game p99  172.0  heavy   857.5
+d1A2_6     A2  d1  echo n  129 p50   90.7 p99  129.4 max  248.8  game p99  160.5  heavy   816.3
+d1A2_7     A2  d1  echo n  131 p50   90.6 p99  115.7 max  141.9  game p99  144.0  heavy  1213.2
+d1A2_8     A2  d1  echo n  131 p50   90.7 p99  125.9 max  166.3  game p99  107.9  heavy  1246.2
+d1A_1      A   d1  echo n  131 p50   90.7 p99   92.9 max  154.5  game p99  172.1  heavy   646.6
+d1A_2      A   d1  echo n  131 p50   90.8 p99   98.5 max  118.4  game p99  133.1  heavy  1163.4
+d1A_3      A   d1  echo n  131 p50   90.8 p99   94.1 max  112.0  game p99  107.3  heavy  1312.5
+d1A_4      A   d1  echo n  132 p50   90.7 p99  157.7 max  187.7  game p99  160.6  heavy   496.2
+d1A_5      A   d1  echo n  134 p50   90.8 p99  141.2 max  192.0  game p99  108.4  heavy  1307.5
+d1A_6      A   d1  echo n  131 p50   90.6 p99  125.7 max  161.7  game p99  156.1  heavy   786.7
+d1A_7      A   d1  echo n  131 p50   90.6 p99   94.1 max  163.6  game p99  119.6  heavy   994.3
+d1A_8      A   d1  echo n  129 p50   90.6 p99   92.4 max  303.2  game p99  185.0  heavy   821.3
+d1H_1      H   d1  echo n  130 p50   90.7 p99  135.1 max  177.1  game p99  139.0  heavy   437.8
+d1H_2      H   d1  echo n  132 p50   90.7 p99  179.5 max  182.0  game p99  166.6  heavy   592.2
+d1H_3      H   d1  echo n  131 p50   90.7 p99   93.8 max  164.4  game p99  113.9  heavy   364.0
+d1H_4      H   d1  echo n  131 p50   90.7 p99  106.8 max  126.7  game p99  123.5  heavy   366.5
+d1H_5      H   d1  echo n  130 p50   90.6 p99  161.5 max  166.2  game p99  157.1  heavy   614.4
+d1H_6      H   d1  echo n  132 p50   90.6 p99  113.1 max  127.1  game p99  116.6  heavy   528.6
+d1H_7      H   d1  echo n  132 p50   90.6 p99  154.3 max  187.4  game p99  120.1  heavy   295.4
+d1H_8      H   d1  echo n  131 p50   90.6 p99  128.5 max  187.9  game p99  117.0  heavy   675.8
+qA1_1      A1  q   echo n  125 p50   90.7 p99  186.4 max  263.7  game p99   95.4  heavy     0.0
+qA1_2      A1  q   echo n  131 p50   90.7 p99  171.1 max  180.8  game p99  109.5  heavy     0.0
+qA1_3      A1  q   echo n  131 p50   90.6 p99  106.1 max  130.5  game p99  135.3  heavy     0.0
+qA1_4      A1  q   echo n  131 p50   90.6 p99  128.4 max  151.4  game p99   93.3  heavy     0.0
+qA2_1      A2  q   echo n  131 p50   90.6 p99  121.4 max  180.8  game p99  131.4  heavy     0.0
+qA2_2      A2  q   echo n  131 p50   90.7 p99   93.5 max  186.6  game p99  180.9  heavy     0.0
+qA2_3      A2  q   echo n  131 p50   90.7 p99  122.9 max  171.8  game p99  107.3  heavy     0.0
+qA2_4      A2  q   echo n  131 p50   90.6 p99  145.1 max  155.5  game p99  146.0  heavy     0.0
+qA_1       A   q   echo n  131 p50   90.7 p99   96.1 max  111.3  game p99   92.6  heavy     0.0
+qA_2       A   q   echo n  131 p50   90.6 p99   92.2 max  150.7  game p99  142.3  heavy     0.0
+qA_3       A   q   echo n  130 p50   90.6 p99  165.4 max  182.3  game p99  133.6  heavy     0.0
+qA_4       A   q   echo n  131 p50   90.6 p99   96.3 max  114.2  game p99  118.2  heavy     0.0
+qH_1       H   q   echo n  131 p50   90.7 p99  146.1 max  162.0  game p99   93.1  heavy     0.0
+qH_2       H   q   echo n  131 p50   90.6 p99  120.8 max  174.2  game p99  129.2  heavy     0.0
+qH_3       H   q   echo n  129 p50   90.7 p99  175.4 max  188.3  game p99   92.8  heavy     0.0
+qH_4       H   q   echo n  128 p50   90.7 p99  181.0 max  188.3  game p99  132.6  heavy     0.0
+u1A1_1     A1  u1  echo n  131 p50   90.6 p99  101.7 max  127.9  game p99  176.1  heavy   443.3
+u1A1_2     A1  u1  echo n  132 p50   90.7 p99  106.6 max  168.6  game p99  112.0  heavy   502.2
+u1A1_3     A1  u1  echo n  132 p50   90.7 p99   92.8 max  109.8  game p99  147.2  heavy   425.2
+u1A1_4     A1  u1  echo n  131 p50   90.7 p99  134.5 max  163.6  game p99  109.1  heavy   324.1
+u1A1_5     A1  u1  echo n  131 p50   90.7 p99  121.2 max  153.6  game p99  107.5  heavy   414.6
+u1A1_6     A1  u1  echo n  131 p50   90.6 p99  145.9 max  161.2  game p99  140.5  heavy   362.4
+u1A1_7     A1  u1  echo n  129 p50   90.8 p99  173.7 max  199.9  game p99   96.2  heavy   415.1
+u1A1_8     A1  u1  echo n  131 p50   90.7 p99  147.2 max  191.4  game p99  121.3  heavy   625.8
+u1A2_1     A2  u1  echo n  129 p50   90.7 p99  134.2 max  186.9  game p99  164.4  heavy   466.0
+u1A2_2     A2  u1  echo n  132 p50   90.7 p99  113.1 max  161.2  game p99  137.2  heavy   495.7
+u1A2_3     A2  u1  echo n  130 p50   90.7 p99  116.3 max  217.2  game p99  177.5  heavy   437.2
+u1A2_4     A2  u1  echo n  130 p50   90.7 p99  116.7 max  300.1  game p99  143.5  heavy   675.2
+u1A2_5     A2  u1  echo n  131 p50   90.7 p99   94.5 max  115.2  game p99  151.1  heavy   401.3
+u1A2_6     A2  u1  echo n  132 p50   90.6 p99   98.4 max  120.0  game p99  105.7  heavy   573.2
+u1A2_7     A2  u1  echo n  131 p50   90.7 p99   94.7 max   96.8  game p99  221.1  heavy   249.3
+u1A2_8     A2  u1  echo n  131 p50   90.7 p99  122.0 max  159.4  game p99  144.8  heavy   480.4
+u1A_1      A   u1  echo n  134 p50   90.7 p99   96.3 max  140.1  game p99  157.0  heavy   343.8
+u1A_2      A   u1  echo n  131 p50   90.7 p99  113.5 max  120.5  game p99  153.5  heavy   412.3
+u1A_3      A   u1  echo n  130 p50   90.7 p99  162.8 max  181.2  game p99  133.9  heavy   404.2
+u1A_4      A   u1  echo n  130 p50   90.7 p99  118.5 max  150.0  game p99   96.8  heavy   454.2
+u1A_5      A   u1  echo n  131 p50   90.7 p99  108.3 max  124.6  game p99  128.0  heavy   379.9
+u1A_6      A   u1  echo n  135 p50   90.6 p99  101.8 max  118.8  game p99   93.6  heavy   381.4
+u1A_7      A   u1  echo n  132 p50   90.7 p99  113.3 max  123.5  game p99   95.2  heavy   257.8
+u1A_8      A   u1  echo n  131 p50   90.6 p99   91.0 max   96.4  game p99   92.2  heavy   222.6
+u1H_1      H   u1  echo n  132 p50   90.7 p99   94.1 max  180.8  game p99  203.0  heavy   300.1
+u1H_2      H   u1  echo n  132 p50   90.7 p99  102.1 max  108.4  game p99  157.0  heavy   733.6
+u1H_3      H   u1  echo n  131 p50   90.7 p99  120.3 max  157.8  game p99  145.2  heavy   507.5
+u1H_4      H   u1  echo n  131 p50   90.7 p99   93.7 max   95.5  game p99  139.2  heavy   529.4
+u1H_5      H   u1  echo n  130 p50   90.7 p99  135.1 max  171.1  game p99   99.4  heavy   300.6
+u1H_6      H   u1  echo n  131 p50   90.7 p99   98.6 max  102.2  game p99   97.6  heavy   338.9
+u1H_7      H   u1  echo n  131 p50   90.6 p99  143.3 max  177.3  game p99  114.4  heavy   274.3
+u1H_8      H   u1  echo n  131 p50   90.7 p99  133.9 max  164.5  game p99  124.6  heavy   468.0
+d1  A   n= 8 echo p50 med   90.7  p99 med   96.3 mean  112.1  max med  162.6  [93 99 94 158 141 126 94 92]
+d1  A1  n= 8 echo p50 med   90.6  p99 med  131.1 mean  129.2  max med  170.2  [92 112 145 124 142 158 128 134]
+d1  A2  n= 8 echo p50 med   90.7  p99 med  126.2 mean  126.4  max med  173.9  [98 152 127 158 106 129 116 126]
+d1  H   n= 8 echo p50 med   90.7  p99 med  131.8 mean  134.1  max med  171.7  [135 180 94 107 162 113 154 128]
+q   A   n= 4 echo p50 med   90.6  p99 med   96.2 mean  112.5  max med  132.4  [96 92 165 96]
+q   A1  n= 4 echo p50 med   90.6  p99 med  149.7 mean  148.0  max med  166.1  [186 171 106 128]
+q   A2  n= 4 echo p50 med   90.6  p99 med  122.1 mean  120.7  max med  176.3  [121 94 123 145]
+q   H   n= 4 echo p50 med   90.7  p99 med  160.8 mean  155.8  max med  181.2  [146 121 175 181]
+u1  A   n= 8 echo p50 med   90.7  p99 med  110.8 mean  113.2  max med  124.1  [96 113 163 119 108 102 113 91]
+u1  A1  n= 8 echo p50 med   90.7  p99 med  127.9 mean  127.9  max med  162.4  [102 107 93 134 121 146 174 147]
+u1  A2  n= 8 echo p50 med   90.7  p99 med  114.7 mean  111.2  max med  160.3  [134 113 116 117 95 98 95 122]
+u1  H   n= 8 echo p50 med   90.7  p99 med  111.2 mean  115.1  max med  161.2  [94 102 120 94 135 99 143 134]
+d1  A   vs H: echo p99 mean  112.1 vs  134.1 p=0.13  p95 mean  100.1 vs  107.8 p=0.39  hs0-ping p99  129.9 vs  128.8
+d1  A1  vs H: echo p99 mean  129.2 vs  134.1 p=0.70  p95 mean   94.9 vs  107.8 p=0.11  hs0-ping p99  117.0 vs  128.8
+d1  A2  vs H: echo p99 mean  126.4 vs  134.1 p=0.55  p95 mean   98.7 vs  107.8 p=0.34  hs0-ping p99  120.9 vs  128.8
+q   A   vs H: echo p99 mean  112.5 vs  155.8 p=0.09  p95 mean   91.1 vs  119.0 p=0.03  hs0-ping p99  142.1 vs  135.6
+q   A1  vs H: echo p99 mean  148.0 vs  155.8 p=0.74  p95 mean  122.1 vs  119.0 p=1.00  hs0-ping p99  109.9 vs  135.6
+q   A2  vs H: echo p99 mean  120.7 vs  155.8 p=0.14  p95 mean   91.6 vs  119.0 p=0.06  hs0-ping p99  128.3 vs  135.6
+u1  A   vs H: echo p99 mean  113.2 vs  115.1 p=0.86  p95 mean   94.5 vs   92.8 p=0.39  hs0-ping p99  123.3 vs  103.5
+u1  A1  vs H: echo p99 mean  127.9 vs  115.1 p=0.30  p95 mean  102.6 vs   92.8 p=0.10  hs0-ping p99  132.2 vs  103.5
+u1  A2  vs H: echo p99 mean  111.2 vs  115.1 p=0.65  p95 mean   95.2 vs   92.8 p=0.56  hs0-ping p99  115.7 vs  103.5

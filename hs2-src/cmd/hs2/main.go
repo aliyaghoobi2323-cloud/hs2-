@@ -380,12 +380,34 @@ func setMemoryLimit() {
 	log.Printf("memory: Go soft limit %d MB (half of %d MB RAM; set GOMEMLIMIT to override)", lim>>20, ramMB)
 }
 
+// setGCPercentST244 (HS2_ST244_GOGC=N, default off; GOGC set wins): the
+// collector's target growth N% instead of Go's 100%. st244 (lab1 runtime
+// trace, 4x storm): the 6000 opens' allocations start a GC mark phase ~1.4 s
+// into the storm; its dedicated workers and assists on an already busy
+// process grow the runnable queue from ~250 to 1500-2200 goroutines for
+// ~1 s, and every established light request waits in it (crowd p50 x3 in
+// that second). A larger N makes cycles rarer (a storm's garbage fits in
+// the headroom); the soft memory limit (setMemoryLimit) still bounds the
+// heap, the collector runs more often only near it.
+func setGCPercentST244() {
+	if _, ok := os.LookupEnv("GOGC"); ok {
+		return
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("HS2_ST244_GOGC")))
+	if err != nil || n <= 100 || n > 1000 {
+		return
+	}
+	debug.SetGCPercent(n)
+	log.Printf("memory: GC target %d%% (HS2_ST244_GOGC)", n)
+}
+
 func runCmd(args []string) {
 	// Whatever path runCmd leaves by, no icmp reply rule outlives the daemon
 	// (the listeners release theirs on close; this catches the rest).
 	defer encap.ReleaseAllEchoGuards()
 	applyTuning()
 	setMemoryLimit()
+	setGCPercentST244()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	fs.Parse(args)
@@ -410,6 +432,7 @@ func runCmd(args []string) {
 		log.Fatalf("config: %v", err)
 	}
 	applyDefaults(fc)
+	log.Print(engine.RescueRecBudgetLine()) // rel67b: the records rings' big budget and its source
 
 	// Apply RAM/CPU-aware kernel tuning at every start, so it always matches the
 	// current hardware and config (a resized VPS is picked up on restart). The

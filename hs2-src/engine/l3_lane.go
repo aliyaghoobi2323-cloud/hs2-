@@ -174,11 +174,23 @@ func (ln *l3Lane) pick(links []*l3Link, pkt []byte, h uint32) (*l3Link, bool) {
 	now := ln.now()
 	// a stripe link (HS2_MCONN_STRIPE) is left at once: it is a download
 	// spread to fill the link, taken while the flow was there
+	if cur != nil && l3OnCut(cur) { // HS2_LB_RESCUE_CUT_L3 (l3_cutavoid.go)
+		l3CutMoved.Add(1)
+		cur = nil
+	}
 	if cur != nil && cur.Alive() && (!cur.isHeavy() || now-e.moved < int64(l3LaneMoveGap) && !cur.onStripe()) {
 		cur.stampLane(now)
 		return cur, true
 	}
-	best := rendezvous(links, h, true)
+	var best *l3Link
+	if l3CutAvoid {
+		if best = rendezvousOffCut(links, h, true); best == nil {
+			best = rendezvousOffCut(links, h, false)
+		}
+	}
+	if best == nil {
+		best = rendezvous(links, h, true)
+	}
 	if best == nil {
 		best = rendezvous(links, h, false) // no light link: as before
 	}

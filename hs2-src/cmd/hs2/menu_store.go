@@ -47,16 +47,24 @@ func (v cfgVersion) dropinPath() string {
 }
 
 // configForUnit is the inverse of unitForConfig: hs2 -> /etc/hs2/config.json,
-// hs2-<n> -> /etc/hs2/<n>.json (and a trailing ".service" is ignored).
+// hs2-<n> -> /etc/hs2/<n>.json (and a trailing ".service" is ignored). The
+// config the unit really runs (ExecStart … -c PATH, drop-ins included) wins
+// when it exists; then the first existing of <n>.json and hs2-<n>.json (a
+// classic install names unit hs2-out with /etc/hs2/hs2-out.json — rt80).
 func configForUnit(unit string) string {
-	unit = strings.TrimSuffix(unit, ".service")
-	if unit == "hs2" || unit == "" {
-		return filepath.Join(hs2CfgDir, "config.json")
+	unit = cleanUnit(strings.TrimSpace(unit))
+	if p := unitExecConfig(unit); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
-	if n, ok := strings.CutPrefix(unit, "hs2-"); ok {
-		return filepath.Join(hs2CfgDir, n+".json")
+	cands := configCandidates(unit)
+	for _, c := range cands {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
 	}
-	return filepath.Join(hs2CfgDir, unit+".json")
+	return cands[0]
 }
 
 func cleanUnit(u string) string { return strings.TrimSuffix(u, ".service") }

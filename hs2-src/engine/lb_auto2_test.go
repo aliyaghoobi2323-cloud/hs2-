@@ -224,11 +224,11 @@ func TestLB2RebalanceRetiresSeveral(t *testing.T) {
 }
 
 func TestReportRoundTripAndOldPeers(t *testing.T) {
-	r := LBReport{Auto: true, Auto2: true, Verdicts: []string{"Iran IP 37.32.47.180 lossy on every kharej IP"},
+	r := LBReport{Auto: true, Auto2: true, Verdicts: []string{"Iran IP 203.0.113.10 lossy on every kharej IP"},
 		Paths: []LBPeerPath{
-			{Local: "91.107.167.67", Remote: "37.32.47.180", EffPct: 4.2, Target: 4, Links: 5, Factor: 0.1, LossPct: 7.04, RawPct: 6.5, raw: true, Cut: true, Reason: "cut: loss 7.0%"},
-			{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2", EffPct: 12.5, Target: 13, Links: 13, Factor: 1, LossPct: 0.2, Reason: "ok"},
-			{Local: "", Remote: "5.57.38.162", EffPct: 12, Target: 12, Links: 12, Factor: 1},
+			{Local: "203.0.113.67", Remote: "203.0.113.10", EffPct: 4.2, Target: 4, Links: 5, Factor: 0.1, LossPct: 7.04, RawPct: 6.5, raw: true, Cut: true, Reason: "cut: loss 7.0%"},
+			{Local: "2001:db8:1::1", Remote: "2001:db8:5::94d2", EffPct: 12.5, Target: 13, Links: 13, Factor: 1, LossPct: 0.2, Reason: "ok"},
+			{Local: "", Remote: "203.0.113.30", EffPct: 12, Target: 12, Links: 12, Factor: 1},
 		}}
 	adv := encodeAdvert(nil)
 	wire := append(append([]byte(nil), adv...), encodeReport(r)...)
@@ -242,11 +242,11 @@ func TestReportRoundTripAndOldPeers(t *testing.T) {
 		t.Fatalf("report: ok=%v %+v", ok, got)
 	}
 	p := got.Paths[0]
-	if p.Local != "91.107.167.67" || p.Remote != "37.32.47.180" || p.EffPct != 4.2 || p.Target != 4 ||
+	if p.Local != "203.0.113.67" || p.Remote != "203.0.113.10" || p.EffPct != 4.2 || p.Target != 4 ||
 		p.Factor != 0.1 || p.LossPct != 7.04 || p.RawPct != 6.5 || !p.Cut || p.Reason != "cut: loss 7.0%" {
 		t.Fatalf("path 0: %+v", p)
 	}
-	if got.Paths[1].Remote != "2a05:9080:0:603:216:3eff:fefe:94d2" || got.Paths[1].RawPct != -1 {
+	if got.Paths[1].Remote != "2001:db8:5::94d2" || got.Paths[1].RawPct != -1 {
 		t.Fatalf("path 1: %+v", got.Paths[1])
 	}
 	if got.Paths[2].Local != "" {
@@ -317,6 +317,7 @@ func TestSteerPicksAvoidCutPath(t *testing.T) {
 		m.mu.Lock()
 		for _, ml := range m.links { // keep the burst cap out of the way
 			ml.picks, ml.pickHist = 0, [pickWindow - 1]int{}
+			ml.fpPicks.Store(0) // HS2_LM_FASTPICK: placements on the fast path count here (curPicks)
 		}
 		m.mu.Unlock()
 	}
@@ -363,6 +364,7 @@ func TestSteerLightBestPath(t *testing.T) {
 			m.mu.Lock()
 			for _, ml := range m.links {
 				ml.picks, ml.pickHist = 0, [pickWindow - 1]int{}
+				ml.fpPicks.Store(0) // HS2_LM_FASTPICK: placements on the fast path count here (curPicks)
 			}
 			m.mu.Unlock()
 			if linkIndex(ls, l) < 2 {

@@ -1,0 +1,45 @@
+rs146 (2026-11-14, lab1 --all, bin145 620c4f01 for A/J/S/R/B, rs146 silent-retry bin 56de21f2 for X/Y, bin146 71b1f003 for M)
+Topology (run.sh TOPO146=1, run-topo146.patch): production layout, 6 Iran IPv4 (10.60.1-6.1) x 2 kharej IPv4
+(10.70.1-2.2) = 12 v4 paths + the IPv6 pair = 13 paths; Iran IP i rides lab paths k(2i-2),k(2i-1), so a whole-IP
+outage darkens 2 paths at once (checked: t40 the exit's LB_SILENT marked exactly 10.70.1.2>10.60.1.1 and
+10.70.2.2>10.60.1.1, t42 exactly the four 10.60.5.1 / 10.60.6.1 paths).
+Scenario rs146.sh (TT 150): crowd 6000 (life 40 s), call 2 mbit, game, heavy down -P4 t20-60, up -P2 t80-120;
+  ev1 t40 Iran IP1 dark; t42 cascade Iran IP5+IP6 dark (the RETRY test: the fresh other-IP links the t41.5 rescue
+  joins go to die right after the join); all back t80. ev2 t95 Iran IPs 2,3,4 dark (6 paths) to t135.
+Arms (all HS2_MCONN_RESCUE=1, keys on both sides): A base, J +JOINPICK, S +SCALE, R +RETRY, B all three;
+  X = R and Y = B on the rs146 binary (silent-join retry). Interleaved pairs, two runs at once (LAB_ID 30 cores 0-9,
+  LAB_ID 31 cores 10-19, slots alternate): (A1 J1)(S1 R1)(B1 A2)(J2 S2)(R2 B2)(A3 J3)(S3 R3)(B3)(X1 Y1)(X2 Y2)(X3 Y3)(M1 M2).
+  CAVEAT: load average 30-45 on 20 cores (two runs + go test on 17-19): quiet crowd p99 250-370 ms (rs145 alone:
+  138), crowd fails/event and p99 are CPU-dominated and too noisy to rank arms. The rescue counters are not.
+
+Means n=3 (acked = raw+records rescues acked / started):
+  arm  acked  raw_lost  rec_lost  exit_NAK  retry(silent)  pick fresh/sameIP/old  RSS ir / kh MB
+  A    0.869  19.7      297       95        0              -                      1210 / 1600
+  J    0.934   7.0       68       143       0              3670 / 0 / 0           1070 / 1560
+  S    0.907  17.7      285       2.3       0              -                      1140 / 1740
+  R    0.866  22.0      294       131       0.3            -                      1150 / 1590
+  B    0.966  17.0      106       6.3       1.3            4220 / 0 / 0           1130 / 1740
+  X    0.847  27.7       80       121       270 (270)      -                       966 / 1590
+  Y    0.977  15.3       23       4.3       52 (52)        4040 / 0 / 0           1040 / 1740
+Per key:
+  JOINPICK: records lostjoin 297 -> 68 (-77 %), raw 19.7 -> 7; acked +6.5 pt. Always found a fresh link on another
+    Iran IP (freshsameip 0, old 0) — the different-IP preference is exercised (whole-IP outages here).
+  SCALE: exit NAK 95 -> 2.3; records ring budget 48 -> ~136 MB on the exit; acked +3.8 pt; kharej RSS max +140 MB.
+  RETRY (rs145 code): fires 0.3/run — every lostjoin is an endwait: a join on a blackholed path is noticed only
+    when its link closes (health timeout), after the user/app gave up. rs146 fix (rescueRetrySilentLocked): a join
+    whose link is in the rescue watch's silent set is replaced at once: X 270 retries/run, retryfail 0, records
+    lostjoin 294 -> 80; alone no ack gain (the replacement RREC starts fail to open without JOINPICK: records
+    'failed' ~360 -> ~500). With JOINPICK+SCALE (Y vs B): records lostjoin 106 -> 23, acked 0.966 -> 0.977.
+  Crowd fails per event (ip1 / ip2 windows) A 1240/3590, J 1440/3740, S 1150/3800, R 1230/4130, B 1070/3400,
+    Y 1140/3790: no arm separable from the CPU noise. Light p99 likewise (no arm consistently worse).
+Mixed (default env, envdef on: new side has JOINPICK edge + SCALE both):
+  M1 new edge 71b1f003 + rel63c exit f0d48eae: acked 0.946, JOINPICK picks 3916 fresh/0/0, exit NAK 124 (old exit
+    has no SCALE), exit refused 0 — works, like arm J.
+  M2 rel63c edge + new exit: acked 0.900, exit NAK 4 (SCALE on the exit alone does it), refused 0 — like arm S.
+Verdict: JOINPICK default on (Edge), SCALE default on (Both) — set in envdef (bin146). RETRY stays opt-in: the
+  rs145 version is inert on a dark path; the rs146 silent version works (n=3, +1.1 pt over B) but is new today —
+  recommend enabling it on the edge after a soak / production canary (HS2_MCONN_RESCUE_RETRY=1, Iran only).
+  SCALE cost bound: 4 % MemTotal per pool = ~0.9 GB (kharej 23 GB) / ~0.7 GB (Iran 17 GB) per ring pool, measured
+  +140 MB here at crowd 6000 (rs145: +270 MB). 
+
+Per-run rows and arm means: an-all.txt (an146.py runs).

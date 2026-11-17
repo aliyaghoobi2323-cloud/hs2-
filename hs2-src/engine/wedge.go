@@ -301,7 +301,29 @@ func guardOf(st io.ReadWriteCloser) *sessGuard {
 // local direction is watched by the link's guard g (nil: unguarded), and when
 // the stream's session dies the relay ends after relayDieGrace even if the
 // local app neither reads nor writes.
-func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
+//
+// fx170: when the stream ended abnormally before its peer's whole data
+// reached local — a read error other than io.EOF (a reset, every sub died, a
+// dead link), or the stream dead before its EOF was relayed — local is closed
+// with an RST (SetLinger(0)), not a FIN: a cut download (edge) or upload
+// (exit) is never handed to the app as a complete one. reset reports it. And
+// when local ends with an error (it was reset), a stream that can (an mConn)
+// is aborted, so the far side resets its end too rather than taking a FIN.
+func relayStream(local, st io.ReadWriteCloser, g *sessGuard) (reset bool) {
+	return relayStreamHC(local, st, g, hcOff)
+}
+
+// relayStreamHC is relayStream; hc (hc183, halfclose.go): the peer announced
+// half-close, so an EOF on one direction ends only that direction (a
+// CloseWrite on the other end) and the relay goes on until the other
+// direction ends too (or halfCloseIdle without progress: a reset).
+func relayStreamHC(local, st io.ReadWriteCloser, g *sessGuard, mode hcMode) (reset bool) {
+	hc := mode != hcOff && halfCloseOn.Load()
+	if hc {
+		if h, ok := st.(halfOpener); ok {
+			h.SetHalfOpen(true) // smux: writes outlive the peer's FIN
+		}
+	}
 	var dst io.Writer = local
 	if g != nil {
 		rw := &relayWatch{kill: func() {
@@ -321,34 +343,187 @@ func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
 	if d, ok := st.(interface{ GetDieCh() <-chan struct{} }); ok {
 		die = d.GetDieCh()
 	}
+	down := &relayEnd{r: st}
+	up := &relayEnd{r: local}
 	done := make(chan struct{}, 2)
-	cp := func(dst io.Writer, src io.Reader) {
-		bp := copyBufs.Get().(*[]byte)
-		io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, *bp)
-		copyBufs.Put(bp)
+	downDone := make(chan struct{})
+	// hc183: set (before done) when a direction ended with EOF and its
+	// CloseWrite took: the relay then waits for the other direction
+	var downHalf, upHalf atomic.Bool
+	go func() {
+		relayCopy(dst, down)
+		if hc && down.state.Load() == relayEndEOF && halfGoneNow(st) {
+			// hc213: the peer dropped the stream (closed it without a
+			// CloseWrite: its user reset, its relay cut): the EOF is a cut,
+			// not a FIN — local is reset below, not half-closed
+			down.state.Store(relayEndErr)
+			halfCloseAborts.Add(1)
+		}
+		if hc && down.state.Load() == relayEndEOF {
+			if cw, ok := local.(closeWriter); ok && cw.CloseWrite() == nil {
+				downHalf.Store(true)
+			}
+		}
+		close(downDone)
 		done <- struct{}{}
-	}
-	go cp(dst, st)
-	go cp(st, local)
+	}()
+	go func() {
+		relayCopy(st, up)
+		if hc && up.state.Load() == relayEndEOF {
+			if cw, ok := st.(closeWriter); ok && cw.CloseWrite() == nil {
+				upHalf.Store(true)
+			}
+		}
+		done <- struct{}{}
+	}()
 	got := 0
 	select {
 	case <-done:
 		got = 1
 	case <-die:
+	}
+	half, idle := false, false
+	if got == 1 && (downHalf.Load() || upHalf.Load()) && halfOpenAdmit() {
+		// hc183: one direction is over and half-closed; wait for the other
+		// one, the stream's death, or halfCloseIdle without progress (over
+		// halfCloseMax: the plain close at once, as before hc183)
+		half = true
+		halfCloses.Add(1)
+		limit := mode.idle()
+		t := time.NewTicker(time.Duration(halfClosePoll.Load()))
+		last, quiet := down.n.Load()+up.n.Load(), time.Now()
+		var gone <-chan struct{}
+		if downHalf.Load() {
+			// hc183b: the peer's FIN was read; only this side writes on.
+			// The peer dropping the stream ends it (no reader is left)
+			gone = halfGone(st)
+		}
+	wait:
+		for {
+			select {
+			case <-done:
+				got = 2
+				break wait
+			case <-die:
+				break wait
+			case <-gone:
+				if v, ok := st.(interface{ goneValid() bool }); ok && !v.goneValid() {
+					gone = nil // records carry it now: their own end counts
+					continue
+				}
+				select {
+				case <-done: // ended on its own meanwhile
+					got = 2
+				default:
+					halfCloseGone.Add(1)
+				}
+				break wait
+			case now := <-t.C:
+				if n := down.n.Load() + up.n.Load(); n != last {
+					last, quiet = n, now
+				} else if now.Sub(quiet) >= limit {
+					idle = true
+					halfCloseIdles.Add(1)
+					break wait
+				}
+			}
+		}
+		t.Stop()
+		halfOpenNow.Add(-1)
+	}
+	dead := false
+	if die != nil {
+		select {
+		case <-die:
+			dead = true
+		default:
+		}
+	}
+	if dead && down.state.Load() == relayEndNone {
 		// The stream ended under us (its link died, or it was closed). The
-		// stream→local copier still drains what the stream holds; give it a
-		// moment, then close whatever is left.
+		// stream→local copier still drains what the stream holds (on a
+		// stream closed here it ends at once); give it a moment, then close
+		// whatever is left. fx170: wait for that copier itself — the other
+		// one ends at once on a dead stream, and its end said nothing about
+		// whether the download was all relayed.
 		t := time.NewTimer(time.Duration(relayDieGrace.Load()))
 		select {
-		case <-done:
-			got = 1
+		case <-downDone:
 		case <-t.C:
 		}
 		t.Stop()
+	}
+	cut := down.state.Load() == relayEndErr || down.state.Load() == relayEndNone && dead
+	if c, ok := st.(interface{ ClosedHere() bool }); ok && cut && c.ClosedHere() {
+		// closed on purpose on this side (an idle connection reclaimed
+		// from a retiring link, an evacuation): a FIN, as before
+		cut = false
+	}
+	closedHere := false
+	if c, ok := st.(interface{ ClosedHere() bool }); ok {
+		closedHere = c.ClosedHere()
+	}
+	// hc183: half-closed, the remaining direction did not end with EOF (cut,
+	// a failed write, the stream's death, halfCloseIdle): the side still
+	// waiting is reset, and so is the far end
+	halfCut := half && !closedHere && (idle || down.state.Load() != relayEndEOF || up.state.Load() != relayEndEOF)
+	if cut || halfCut {
+		if lc, ok := local.(interface{ SetLinger(int) error }); ok {
+			lc.SetLinger(0)
+		}
+		reset = true
+	}
+	if up.state.Load() == relayEndErr || halfCut {
+		if a, ok := st.(interface{ abort() }); ok {
+			a.abort()
+		}
 	}
 	local.Close()
 	st.Close()
 	for ; got < 2; got++ {
 		<-done
 	}
+	return reset
 }
+
+// relayEnd states: how a relay direction's reads ended so far.
+const (
+	relayEndNone = iota // still reading (or it ended on a write)
+	relayEndEOF         // io.EOF: the peer's whole data was read and written
+	relayEndErr         // any other read error: the data was cut
+)
+
+// relayEnd is a relay direction's reader; it records how the reads ended.
+// io.EOF with bytes is split (the bytes now, the EOF on the next read), so
+// relayEndEOF means every byte was also written on.
+type relayEnd struct {
+	r     io.Reader
+	state atomic.Int32
+	n     atomic.Int64 // hc183: bytes read (the half-closed relay's progress)
+}
+
+func (e *relayEnd) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if n > 0 {
+		e.n.Add(int64(n))
+	}
+	switch {
+	case err == nil:
+	case err == io.EOF:
+		if n > 0 {
+			return n, nil // the EOF again on the next read
+		}
+		e.state.Store(relayEndEOF)
+	default:
+		e.state.Store(relayEndErr)
+	}
+	return n, err
+}
+
+// fx170 counters: user connections (edge) reset by relayStream because the
+// download ended abnormally — mConn and one-stream paths — and targets (exit,
+// one-stream path) reset because the upload did.
+var (
+	mconnUserRst   atomic.Uint64
+	streamLocalRst atomic.Uint64
+)

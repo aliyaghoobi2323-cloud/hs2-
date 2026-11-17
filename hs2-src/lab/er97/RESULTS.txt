@@ -1,0 +1,75 @@
+er97 — RESEND early rescue, phase 4: records-mode rescue (branch er91, commits 22e77101, ad442d28 + this file),
+2026-11-13, lab3 only (198.51.100.235). Scripts: lab/er92/er92.sh + lab/er97/q97.sh (q96 with hs2X), lab/er97/an97.py
+(an92 + crowd p99 outside event windows + rescue-rec counters). Same scenario as er92/er94: 4 paths rtt ~90 ms, crowd
+1500, BH plan = path b 100 % loss 40-80 s, path c 100 % loss 160-200 s (2 events/run), 250 s runs.
+
+== Change (engine/mconn_rescue_rec.go, HS2_MCONN_RESCUE_REC, on whenever HS2_MCONN_RESCUE=1 unless =0)
+  Records 0x10 RREC(Bi=sendOff, Ri=recv next) Iran→exit, 0x11 ACK(Bk, Rk), 0x12 NAK(Bk, Rk); capExt bit9.
+  - Both sides of a role-3 conn keep, once in records mode, a ring of the DATA bytes they wrote, by offset
+    (rescueRing with rec=true: 32 KB/conn HS2_MCONN_RESCUE_REC_KB, own budget 48 MB HS2_MCONN_RESCUE_REC_MB,
+    separate from the raw rings' 64 MB). Idle 10 s: freed (restarts empty at its end offset); kept while a
+    rescue waits; freed at conn end. Over budget: restarts empty (counted gap), never stops for good.
+  - Iran (same silent-set trigger and per-second bound as RESCUE): a conn whose EVERY live sub sits on the
+    silent set opens a join off the silent path, retires+removes the old subs (rrAband: their death ends
+    nothing, their queues are released), snapshots its ring below Bi, sends RREC first on the join.
+  - Exit: ring holds [Ri, Bk) -> retires every other sub, ACK + resend [Ri, Bk) (+FIN if sent); else NAK,
+    keeps its subs, the join becomes primary (conn NOT ended). Iran resends [Rk, Bi) from the snapshot on
+    ACK or NAK (+FIN); snapshot short of Rk -> conn ends (nocover = old outcome). Reassembly dedupes by offset.
+  - Only toward an exit announcing bit9 (Iran checks at the role-3 open); a peer without it never sees 0x10-12.
+  Unit tests (mconn_rescue_rec_test.go): LostOnlySub (both dirs blackholed, req+resp in flight, delivered
+  once, conn goes on, rings freed+unregistered at close), DualOneDeadNoRescue, NakKeepsConn, LiveNoDuplicate,
+  MixedCapability. TestRescue* -count=3 ok, TestRescueRec -race -count=5 ok.
+
+== Lab fixes found on the way (binaries: v1 72857b97, v2 1212670e, v3 1247e20e = bin97)
+  v1 (128 KB rings in the shared 64 MB): B97_1 exit records rings filled the budget (61 MB, gap 1048) and
+     starved the RAW rings (rescue overcap 1096); exit RSS max 513. -> own budget, 32 KB, restart on over.
+  v2: unit test showed the ring rolling past [Rk, Bi) while Iran waited for the ACK (30 KB written in the
+     meantime > 32 KB ring) -> nocover, conn reset. -> Iran snapshots the ring at RREC (v3).
+
+== Blackhole A/B (idle lab, 3 parallel slots, no go test during runs except ~10 s of TestRescue on core 19
+   at 05:30 during B97_3 (slot 2))
+  run    bin  fB   fC  fail/ev  c99   c99ev c99out  echo  call  game  ping  RSS ir med/max  kh med/max  RREC ir s/acked/nakd | kh served/nak
+  A97_1  off  215  377  296.0  135.2  152.2  126.0  101.2 178.0 102.0 117    180/217    221/399   -
+  A97_2  off  277  507  392.0  134.0  142.8  131.2  129.2 166.2 108.4 106    211/269    231/402   -
+  A97_3  off  269  439  354.0  164.9  163.2  165.4  104.1 156.9 171.2 103    228/254    253/375   -
+  B97_1  v1   127  164  145.5  147.7  182.5  129.3  110.6 144.8 121.2 107    231/294    354/513   303/282/13 nc1 | 290/13
+  B97_2  v2    92   81   86.5  161.2  175.7  155.2  111.0 163.6 128.4 142    252/264    311/457   248/247/0  nc1 | 248/0
+  B97_3  v2    72   92   82.0  148.1  171.5  127.6  101.4 150.6 116.8 101    233/280    323/451   267/266/0  nc0 | 267/0
+  B97_4  v3    76  107   91.5  155.0  180.7  140.6  149.8 164.2 127.7 148    195/247    283/482   231/226/0  nc0 | 231/0
+  B97_5  v3    88  123  105.5  176.6  183.5  171.0  124.9 275.8 175.2 110    281/365    326/467   258/252/0  nc0 | 258/0
+  B97_6  v3    52   99   75.5  147.9  170.3  130.1  121.8 153.8 116.1 107    246/322    297/476   212/204/0  nc0 | 212/0
+  (raw RESCUE ran alongside in every B run: 214-282 started, 100 % acked, as er94.)
+  OFF (A97, n=6 events): 347.3 fails/event (er94 A94: 352.0).
+  ON v3 (B97_4..6, n=6 events): 90.8 fails/event = -73.9 %.  v2+v3 (n=10): 88.2 = -74.6 %.  TARGET >= 50 %: MET.
+  er94 RESCUE-only (B96): 208.3 -> records rescue removes ~56 % of what was left.
+  answered (v3): RREC started 701, answered 682 (97.3 %, 0 NAK, 0 nocover); the 19 unanswered = join died /
+    conn ended before the answer (lostjoin 18, endwait 19: the crowd closing them meanwhile). Exit refused 0.
+  Crowd p99 in event windows: OFF 152.7 avg -> ON v3 178.2 (+25 ms: rescued requests now finish ~1.5-3 s late
+    instead of failing; same effect as er94, +24 ms). Outside windows: OFF 140.9 -> ON 147.2 (B97_5 was a noisy
+    run: call 275, game 175, c99out 171; B97_4/B97_6 130-141, inside OFF's 126-165 range).
+  RSS: edge max OFF 217-269 -> ON v3 247-365; exit max OFF 375-402 -> ON v3 467-482 (+~80 MB): records rings
+    (budget 48 MB) on top of raw rings (64 MB) on the exit. Bounded, but not flat.
+
+== Lossy-alive (L97_1, v3 key on, 3 % / 10 % / 0.8 % loss, no blackhole): crowd fails 0, triggers 0,
+   RREC started 0, RESCUE started 0: false rescues 0. No panic.
+== Mixed (M97_1, edge v3 key on + exit rel58 5d87000d, BH plan): 589 fails = 294.5/event (as off), no
+   "mconn rescue" line on either side (no role 3, no RREC sent), 0 panics: silent fallback PASS.
+== panics: 0 in every er97 run log (ir/kh).
+
+== Checks: see the end of this file (tests run after the A/B, unit er97-tests on lab3,
+   /root/er97/test-all.txt (./..., cores 10-19) and /root/er97/race.txt (-race ./engine, cores 0-9)).
+   bin97: C:\h2w\bin97\hs2-linux-amd64 sha256 1247e20e8bc4a2207cbbf1dce64c1b1b2a1831fdf08e0bccf1e7c3998da918e6
+   (= ad442d28 code, CGO_ENABLED=0 -trimpath -ldflags="-s -w", Go on lab3).
+
+== Tests (idle lab3 after the A/B, unit er97-tests, 05:41-05:56 IST)
+  go test ./... -timeout 30m (cores 10-19): ALL ok (engine 705 s), EXIT 0.
+  go test -race ./engine (cores 0-9): ok (815 s), 0 "DATA RACE", EXIT 0.  (er94's full -race run: now DONE.)
+  gofmt clean, go vet ./engine ok. go clean -cache done (disk 89 % -> see final df).
+
+== Verdict: the records rescue meets the target (-74 % fails/event, >= 50 %), 0 false rescues on lossy paths,
+  rel58 fallback silent, full tests + race clean. Ready for default ON (both sides) on failure-count grounds,
+  with two known costs for the owner to accept or tune first:
+  1. exit RSS max +~80 MB (467-482 vs 375-402 off) and edge +~30-100 MB: rings (records 48 MB + raw 64 MB
+     budgets). Lower HS2_MCONN_RESCUE_REC_MB / _KB and re-measure if that matters.
+  2. crowd p99 inside event windows +25 ms (rescued requests complete late instead of failing).
+  Not measured: production-scale user counts; a long soak (ring memory over hours).

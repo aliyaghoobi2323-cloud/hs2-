@@ -66,9 +66,10 @@ func stripeDirN(ml *managedLink, up, hinted bool) *atomic.Int32 {
 func (m *LinkManager) pickStripeXDirLocked(avoid []any, pool *peerInfo, up bool) *managedLink {
 	var best *managedLink
 	var bestN int32
+	bestCut := false                    // HS2_LB_STRIPE_STEER
 	var nOn, nUser, nSame, nPressed int // diagnostics (HS2_MCONN_STRIPE_LOG)
 	for _, ml := range m.links {
-		if !ml.serving() {
+		if !ml.serving() || stripeEvacSkip(ml.link) { // HS2_MCONN_STRIPE_EVAC
 			continue
 		}
 		if m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() || !linkMConn(ml, pool) {
@@ -96,8 +97,12 @@ func (m *LinkManager) pickStripeXDirLocked(avoid []any, pool *peerInfo, up bool)
 		if avoided(ml.link, avoid) {
 			continue
 		}
-		if best == nil || other < bestN || other == bestN && ml.recent < best.recent {
-			best, bestN = ml, other
+		cut := m.stripeCutLocked(ml) // HS2_LB_STRIPE_STEER (mconn_stripe_steer.go)
+		if cut && m.stSteerNoCut {
+			continue
+		}
+		if best == nil || !cut && bestCut || cut == bestCut && (other < bestN || other == bestN && ml.recent < best.recent) {
+			best, bestN, bestCut = ml, other, cut
 		}
 	}
 	if best != nil {

@@ -126,11 +126,15 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	lb := cfg.RevLB
 	if lb != nil {
 		lb.setPeerState(func() (bool, bool) { return cfg.peers.capState(capLB) })
+		if l3 != nil {
+			lb.setL3Cut(&l3.cut) // HS2_LB_RESCUE_CUT_L3: this tunnel's cut paths (l3_cutavoid.go)
+		}
 		dial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, false) }
 	}
 	pool := newExitPool(ctx, min, max, dial, logf)
 	if lb != nil {
 		lb.setSpare(func(n int) { pool.addSpares(n) }) // HS2_LB_AUTO2 spare dials (lb_spare.go)
+		lb.setSpareWant(pool.target)                   // HS2_LB_SPARE_EDGE (lb_spare176.go)
 		go lb.Run(ctx)
 	}
 	if lb != nil && cfg.Advert != nil { // the path report after each advert answer (lb_report.go)
@@ -155,6 +159,7 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 		stats := pool.stats
 		if lb != nil {
 			view := newPathView(true)
+			view.logf = logf
 			stats = func() PoolStats {
 				st := pool.stats()
 				st.LB = lb.Stats()
@@ -198,7 +203,8 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 			},
 		})
 	}
-	defer exitQueue.track(car)()
+	defer exitQueue.track(car, false)()  // reverse: the exit dialed it (m4f251)
+	defer ccExit.track(tcpConnOf(car))() // cc203 (link_ccrefresh.go)
 	defer cfg.peers.remove(mtr)
 	defer stripeTrack(mtr)() // HS2_MCONN_STRIPE's gate (mconn_stripe_scav.go)
 	// Close the session when ctx ends, so AcceptStream unblocks and this returns

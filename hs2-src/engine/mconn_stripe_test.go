@@ -120,6 +120,7 @@ func TestMConnStripeOffStaysSingle(t *testing.T) {
 // both ways.
 func TestMConnStripeFromRaw(t *testing.T) {
 	before := runtime.NumGoroutine()
+	setDeadlineFix(t, true) // production stripes only with it (mconn_link.go)
 	setStripeRate(t, 200<<10)
 	n, iran, exit := newRawPair(t)
 	n.hook = func(l *tLink) { l.exit.rate.Store(1 << 20) }
@@ -203,8 +204,19 @@ func TestMConnStripeSlots(t *testing.T) {
 		t.Fatal("a striping download holds no stripe slot")
 	}
 	closeAndWait(t, iran, n.exit)
-	if holds(iran) {
-		t.Fatal("slot not given back")
+	// end() closes the die channel before stripeEnded gives the slot back
+	// (sl122: under -race and CPU load the check right after die lost that
+	// window once). A slot is only granted while !m.ended, so once given
+	// back it stays back: poll with a deadline, a real leak still fails.
+	t0 := time.Now()
+	for holds(iran) {
+		if time.Since(t0) > 2*time.Second {
+			t.Fatal("slot not given back")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if d := time.Since(t0); d > time.Millisecond {
+		t.Logf("slot given back %v after die", d)
 	}
 }
 

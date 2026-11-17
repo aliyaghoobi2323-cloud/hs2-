@@ -35,19 +35,19 @@ func TestQUpLog(t *testing.T) {
 // Off (the default), a runner counts no link — the edge's included.
 func TestQRunnerOffTracksNothing(t *testing.T) {
 	r := &qRunner{links: map[*tlscarrier.Carrier]qPrev{}, byDev: true}
-	r.track(&tlscarrier.Carrier{})()
-	r.track(&tlscarrier.Carrier{})
+	r.track(&tlscarrier.Carrier{}, false)()
+	r.track(&tlscarrier.Carrier{}, false)
 	if len(r.links) != 0 {
 		t.Fatalf("an off runner tracked %d links", len(r.links))
 	}
 	if !queueCtlUpOn {
-		trackEdgeLink(context.Background(), &mtcpLink{})
+		trackEdgeLink(context.Background(), &mtcpLink{}, false)
 		if len(edgeQueue.links) != 0 {
 			t.Fatal("HS2_QUEUE_CTL_UP off, yet an edge link was tracked")
 		}
 	}
 	on := &qRunner{links: map[*tlscarrier.Carrier]qPrev{}, on: true}
-	forget := on.track(&tlscarrier.Carrier{})
+	forget := on.track(&tlscarrier.Carrier{}, true)
 	if len(on.links) != 1 {
 		t.Fatal("an on runner did not track the link")
 	}

@@ -48,6 +48,16 @@ var (
 	lbFlapHealthy  = 0.6
 )
 
+// fl106/fl107: HS2_LB_CUT_NONEW=1 (edge; loadEnvKeys) — a path the dialing
+// side reports cut gets no share of the steering draw (steerDrawLocked), so
+// new connections go to a path that is not cut; the cut path keeps its probe
+// links and what is already on them, and is drawn again the moment the
+// dialing side reports it uncut. With every path cut nothing is drawn (no
+// steering, as before). Measured in fl106: a cut (dark or flapping) path's
+// floor links still took ~0.75 new crowd conns/s, 13-30 of them dying per
+// later dark phase of a flap.
+var lbCutNoNew bool
+
 func envIntMin(k string, def, lo int) int {
 	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n >= lo {
 		return n
@@ -212,4 +222,15 @@ func (j *q2Judge) flapRelease(now time.Time) {
 		}
 	}
 	j.log("lb auto2: flap penalties lifted: %s", s)
+}
+
+// steerCutNewLocked (HS2_LB_CUT_NONEW): link ml is on a path the dialing
+// side's fresh report has cut. pickKey orders such links after every other
+// one, before pressure: in fl106 the cut path's few probe links were the only
+// unpressed links under a crowd's churn and took ~16 new connections per dark
+// phase of a flapping path even with the draw at 0. With every path cut all
+// links compare equal here (the usual order). Caller holds m.mu.
+func (m *LinkManager) steerCutNewLocked(ml *managedLink) bool {
+	st := m.steer
+	return lbCutNoNew && st != nil && st.active && st.repCut[mlPath(ml)]
 }

@@ -95,6 +95,7 @@ type StripeSnap struct {
 	FastChained, FastEarly, FastRetry   uint64 // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 	FastReserved                        int64  // up56: HS2_MCONN_STRIPE_FAST_RESERVE idle links
 	FastRefills, FastHsKicks, FastBumps uint64 // up56
+	DlEarly, DlTicks, DlChained, DlSolo uint64 // dr116: HS2_MCONN_STRIPE_DL_FAST
 	// بازهٔ گذشته (از خواندن قبلی)
 	Decisions          uint64
 	WAvg, LiveAvg      float64
@@ -120,6 +121,7 @@ func StripeObserved() StripeSnap {
 		GrowUnused: d.growUnused.Load(), GrowRate: d.growRate.Load(), PickNone: d.pickNone.Load(),
 		FastChained: stripeFastStat.chained.Load(), FastEarly: stripeFastStat.early.Load(), FastRetry: stripeFastStat.retries.Load(),
 		FastReserved: stripeFastStat.reserved.Load(), FastRefills: stripeFastStat.refills.Load(), FastHsKicks: stripeFastStat.hsKicks.Load(), FastBumps: stripeFastStat.bumps.Load(),
+		DlEarly: stripeDlStat.early.Load(), DlTicks: stripeDlStat.ticks.Load(), DlChained: stripeDlStat.chained.Load(), DlSolo: stripeDlStat.soloHeld.Load(),
 		QRawUs: d.lastQRaw.Load(), QUs: d.lastQ.Load(), BaseUs: d.lastBase.Load(), BusyLinks: d.lastBusy.Load(),
 	}
 	stripePathQ.mu.Lock()

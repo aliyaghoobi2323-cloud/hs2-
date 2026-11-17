@@ -1,12 +1,38 @@
 # Building hs2 from source
 
-Requires Go 1.27+.
+Requires the **Go 1.27 toolchain** (`go.mod` says `go 1.27`; the release
+binaries since rel62k2 were built with go1.27.x). Two dependencies are forks
+kept in the tree and wired in with `replace` in `go.mod`:
+`third_party/smux` (window/autowin, ownership and reset fixes; its own
+`go.mod`, `go 1.24`) and `third_party/utls`.
 
+Release build (run in `hs2-src/`; rel60..rel69i were built with the first
+line; since rel69j-pre the release name is stamped with `-X main.buildTag`):
 ```bash
-go mod tidy      # fetches deps from the Go proxy
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -ldflags="-s -w" -o hs2-linux-amd64 ./cmd/hs2
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" ./cmd/hs2
+# writes ./hs2; add -o hs2-linux-amd64 for the published name
+# rel69j and later (from a git archive, so the stamp comes from the tag):
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.buildTag=rel69j" -o hs2-linux-amd64 ./cmd/hs2
 ```
+Build release binaries from a clean tree (e.g. a `git archive` of the release
+commit unpacked elsewhere, as rel65..rel69j were) so the result does not depend
+on local edits. Make the archive with LF line endings (`git -c core.autocrlf=false
+archive …`, or on Linux): an archive made on Windows with autocrlf has CRLF
+sources — Go ignores the CR, so the binary is the same, but `gofmt -l` then lists
+every file.
+
+**Offline build (no Go proxy).** The lab and the release hosts build without
+network access, from the module cache:
+```bash
+export GOPROXY=off GOFLAGS=-mod=mod
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" ./cmd/hs2
+```
+`GOPROXY=off` makes a missing module a hard error instead of a download;
+`-mod=mod` lets the go command use `go.mod`/`go.sum` as they are (and the
+`replace` forks) without a vendor directory. Fill the cache once on a host
+with network (`go mod download` in `hs2-src/` and in `third_party/smux/`)
+and copy `$(go env GOMODCACHE)` if needed. `go mod tidy` needs the network
+and should not be run for a release.
 
 **`CGO_ENABLED=0` is required, not optional.** The published `hs2-linux-amd64`
 is one static binary that must run on every target server — old-glibc CentOS 7,
@@ -31,17 +57,40 @@ the binary's embedded Git metadata (`vcs.revision` / `vcs.time` / `vcs.modified`
 — Go records these automatically when building inside the checkout, and
 `-trimpath` keeps them), so **no extra build flag is needed** to carry it. Build
 from a clean, committed tree for a clean stamp; a dirty tree is marked with a
-trailing `+`. An optional human label can be added with
+trailing `+`. A build from a `git archive` tarball has no Git metadata, so its
+stamp is empty unless `-X main.buildTag=…` is set (rel69j: `[build rel69j]`);
+identify such a binary by its sha256 (CHANGELOG lists each release's). An optional human label can be added with
 `-ldflags "-X main.buildTag=v3.1"`. The stamp is metadata only: two binaries
 with different stamps are fully wire-compatible, so it never gates a connection —
 it only lets an operator confirm both ends of a tunnel (and the server vs. the
 published build) run the same code.
 
-Run tests (the race detector is worth the extra time; it needs cgo, so run it
-with the default `CGO_ENABLED=1` rather than the release flag above):
+### Tests
+
+Run from `hs2-src/` (offline: with `GOPROXY=off GOFLAGS=-mod=mod` as above).
+The race detector needs cgo, so run it with the default `CGO_ENABLED=1`, not
+the release flag. The release checklist (`lab/rel67/tests67.sh`, same as
+rel66b's plus the rescue/truncation race runs):
 ```bash
-go test -race ./...
+gofmt -l .                       # must print nothing
+go vet ./...
+go test ./... -timeout 30m       # full suite
+go test -race ./engine -timeout 40m
+# the smux fork is its own module: test it in place
+(cd third_party/smux && gofmt -l . && go vet ./... && go test ./... -count=1)
+(cd third_party/smux && go test -race -run 'AutoWin|UPD|Stale|Deadline' -count=3 ./...)
+# close / truncation paths (fn164, fx168, fx170, ul173) and rescue (rs169)
+go test ./engine -run 'CloseRightAfterTail|CloseSlowTail' -count=5 -v -timeout 10m
+go test -race -run 'Rescue|RS169|Close|SlowTail|Trunc|Download' -count=3 ./engine -timeout 30m
+# installer and release files
+bash install/tests/release_files_test.sh       # before every push of the root
+for t in install/tests/*_test.sh; do bash "$t" || echo "FAIL $t"; done
 ```
+Opt-in stress: `HS2_RC134_STRESS=1 go test ./engine -run 'RawSwitchChecksumStress|RawReaderNeverReadsPastLimit|SmuxWriteGiveUp' -count=10`
+(smux buffer ownership and raw boundary, rel61h2). A few timing tests
+(`TestCPUMeter`, `TestMeteredConnBlockedTime`, `TestDgDialsInFlightCount`, …)
+can fail on a loaded host; rerun them alone on an idle one before calling a
+failure real.
 
 ## Layout
 - `core/`       — crypto core (Noise IKpsk2 handshake, frame format, replay window)

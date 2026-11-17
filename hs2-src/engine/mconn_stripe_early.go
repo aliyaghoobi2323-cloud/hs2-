@@ -45,7 +45,7 @@ func stripeEarlyOn() time.Duration {
 
 // stripeEarlyFirst: a raw connection's first tick.
 func stripeEarlyFirst() time.Duration {
-	if e := stripeEarlyOn(); e > 0 {
+	if e := max(stripeEarlyOn(), stripeEarlyDl()); e > 0 {
 		return e
 	}
 	return mLitePoll

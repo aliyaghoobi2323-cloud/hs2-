@@ -86,6 +86,12 @@ type exitPool struct {
 	live    int // slots whose link is currently up (for the log)
 	parent  context.Context
 
+	// pk236: "exit pool target" lines at most once per exitTargetLogGap; the
+	// changes in between are counted (with their range) into the next line.
+	tgtLogAt     time.Time
+	tgtQuiet     int
+	tgtLo, tgtHi int
+
 	// Outage: while no link is up and dials fail, only the scout slot dials
 	// (with its backoff); the others wait on upCh until a link is up again,
 	// then come back through the gate — not every slot hammering a dead edge.
@@ -163,7 +169,9 @@ func (p *exitPool) bounds() (lo, hi int) {
 			lo = hi
 		}
 	}
-	return lo, hi
+	// HS2_MCONN_STRIPE_HEADROOM (mconn_stripe_headroom.go): the edge asks
+	// above the ceiling only for its stripe's temporary links.
+	return lo, exitHeadroomHi(hi)
 }
 
 // setTarget sets the pool's target to n (clamped to bounds). Growing starts
@@ -194,8 +202,37 @@ func (p *exitPool) setTarget(n int) {
 	case prev == 0:
 		p.log("mtcp: exit pool starting %d links (the edge sets the count once it is connected)", n)
 	case n != prev:
+		p.logTargetLocked(n, prev, time.Now())
+	}
+}
+
+// exitTargetLogGap: the shortest gap between two "exit pool target" lines.
+// pk236: the edge's target is its autopilot's count plus the links its
+// stripes hold (stripeExtra, no hold by design), so it moves by one as
+// stripes come and go - prod rel69c logged 16 lines a minute during path
+// cuts. A change costs nothing here (shrinking only lowers want; a slot left
+// from a shrink covers the next grow without a dial), so the lines are
+// folded: the first change after a quiet gap is logged at once, the rest
+// within the gap are counted into the next line.
+const exitTargetLogGap = 30 * time.Second
+
+// logTargetLocked: the target line for a change prev -> n. Caller holds p.mu.
+func (p *exitPool) logTargetLocked(n, prev int, now time.Time) {
+	if p.tgtQuiet == 0 {
+		p.tgtLo, p.tgtHi = prev, prev
+	}
+	p.tgtLo, p.tgtHi = min(p.tgtLo, n), max(p.tgtHi, n)
+	if !p.tgtLogAt.IsZero() && now.Sub(p.tgtLogAt) < exitTargetLogGap {
+		p.tgtQuiet++
+		return
+	}
+	if p.tgtQuiet > 0 {
+		p.log("mtcp: exit pool target %d links (edge asked; was %d, %d up; %d more change(s) in the last %s, within %d-%d)",
+			n, prev, p.live, p.tgtQuiet, fmtDur(now.Sub(p.tgtLogAt)), p.tgtLo, p.tgtHi)
+	} else {
 		p.log("mtcp: exit pool target %d links (edge asked; was %d, %d up)", n, prev, p.live)
 	}
+	p.tgtLogAt, p.tgtQuiet = now, 0
 }
 
 // retireIfOver removes slot s when the pool holds more slots than the target,
@@ -625,4 +662,12 @@ func (p *exitPool) addSpares(n int) int {
 		started++
 	}
 	return started
+}
+
+// target is the pool's current target: the edge's serving count, as it last
+// asked (HS2_LB_SPARE_EDGE, lb_spare176.go).
+func (p *exitPool) target() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.want
 }

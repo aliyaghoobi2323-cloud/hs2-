@@ -32,6 +32,12 @@ type statsExit func(ctx context.Context, srv *smux.Session, st *smux.Stream, mtr
 func newStatsPair(t *testing.T, ctx context.Context, wrapEdge func(net.Conn) net.Conn, exit statsExit) *statsPair {
 	t.Helper()
 	a, b := net.Pipe()
+	return newStatsPairOn(t, ctx, a, b, wrapEdge, exit)
+}
+
+// newStatsPairOn: newStatsPair over the given ends (a: the edge's, b: the exit's).
+func newStatsPairOn(t *testing.T, ctx context.Context, a, b net.Conn, wrapEdge func(net.Conn) net.Conn, exit statsExit) *statsPair {
+	t.Helper()
 	var ec net.Conn = a
 	if wrapEdge != nil {
 		ec = wrapEdge(a)
@@ -159,6 +165,35 @@ func TestStatsFallbackPreviousExit(t *testing.T) {
 	}
 }
 
+// plainConn hides the *net.TCPConn under it: a socket's buffering without
+// its TCP_INFO (the records' flags stay 0, as over a pipe).
+type plainConn struct{ net.Conn }
+
+// loopbackPair: two ends of one loopback TCP connection.
+func loopbackPair(t *testing.T) (net.Conn, net.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	acc := make(chan net.Conn, 1)
+	go func() {
+		c, _ := ln.Accept()
+		acc <- c
+	}()
+	a, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := <-acc
+	if b == nil {
+		a.Close()
+		t.Fatal("loopback accept failed")
+	}
+	return plainConn{a}, plainConn{b}
+}
+
 // pacedPanel serves every connection a download of chunk bytes every gap.
 func pacedPanel(t *testing.T, chunk int, gap time.Duration) string {
 	t.Helper()
@@ -209,6 +244,13 @@ func (c *slowReadConn) Read(p []byte) (int, error) {
 // records measure the exit writer's blocked share. Behind a slow path into the
 // edge it reads > 60% blocked (download pressure); with a reader that keeps up
 // it reads < 10%, though the link moves megabytes.
+//
+// race147: the fast case runs over a loopback socket, not net.Pipe. A pipe
+// has no buffer: every write waits until the edge's smux reader is scheduled,
+// so under a loaded -race run those waits (> blockedMin each) added up to 14%
+// "blocked" with a reader that keeps up. A socket's buffer absorbs scheduling
+// gaps as a real link's does; the slow case keeps the pipe (its reader is the
+// limit either way).
 func TestStatsRoundTripSlowVsFastReader(t *testing.T) {
 	measure := func(t *testing.T, slow bool) (blk float64, r1, r2 statsRec, exit *linkMeter) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -218,7 +260,13 @@ func TestStatsRoundTripSlowVsFastReader(t *testing.T) {
 		if slow { // ~400 KB/s path
 			wrap = func(c net.Conn) net.Conn { return &slowReadConn{Conn: c, max: 4 << 10, pause: 10 * time.Millisecond} }
 		}
-		p := newStatsPair(t, ctx, wrap, currentExit(panel))
+		var p *statsPair
+		if slow {
+			p = newStatsPair(t, ctx, wrap, currentExit(panel))
+		} else {
+			a, b := loopbackPair(t)
+			p = newStatsPairOn(t, ctx, a, b, nil, currentExit(panel))
+		}
 		p.startStats(t, ctx, nil)
 		waitStatsState(t, p.edge.m, statsOK, statsHandshakeTimeout)
 		st, err := p.edge.OpenRawStream()

@@ -1,0 +1,77 @@
+# hs117 lab1 (198.51.100.168 only) — final acceptance of HS2_MCONN_STRIPE_KEEPSTALL (k115c rule)
+# A/B interleaved, both sides same binary (hs2-k115c = bin115), key off vs on (=1 both sides).
+# Q = quiet 150 s (2.5 % loss on one path), bS = path 49.2->53.1 dark one way 30..90 s.
+# game99/crowd99 only in hs117 runs (-: pooled hs115 lines lack them). per-run lines: ana-all.txt (ana117.py). hs115 runs pooled where noted (hs115/ana-all.txt).
+
+## harness fixes (lab only)
+- d115.sh exported HEAVY_P=1 unconditionally: every hs115 "d8/u8" run (p*, o*, q*, r*) was really ONE stream.
+  d117.sh: HEAVY_P=${HEAVY_P:-1}. hs115 p/o are pooled below as quiet d1, q/r as quiet u1.
+- "Address already in use": iperf3 --cport 41000 fixed -> run117.sh takes HEAVY_CPORT (random 41000+64k per run,
+  DNAT range follows). Still 1 harness fail (e3) + 1 no heavy output (u5) in 34 runs; both excluded.
+
+## dark (bS)
+dark DOWN key ON : hs117 s7 FAIL (118 s at 0 + gapCheck RST), s8 FAIL (119 s + RST); hs115 s6 FAIL (119 s + RST, missed
+                   in hs115 notes); s1 s2 s3 s5 OK -> 4/7 survive. Off baseline 7/7 freeze (hs113/hs115).
+                   n1 (k117 both, key via build) OK 0 s 604 Mbit/s.
+  failure mode (s7, s8 traced): the ack-stall rule fires (subs on the dark path closed in 0.8-2.4 s, tcp=rto) and the
+  chunk at the hole is resent at the front of a live sub's LOCAL queue — but that sub already has up to its smux window
+  in flight ahead of the resend. Iran's reorder buffer (96 MiB) + gap room (32 MiB) is filled within ~1-2 s by the
+  OTHER subs (each accepted chunk frees their window, the exit sends more), so every reader blocks; the target sub's
+  queued data is never read, the resent chunk never reached (Iran rx next frozen, oooB ~120 MB). ~10 s later the
+  blocked subs die (EOF), resends cascade onto subs that die too, gapCheck RST at +30 s.
+  -> NOT fixable by tuning the stall timing; needs a receiver or target change (see next steps).
+dark UP key off  : k1 FREEZE (115 s at 0 + RST), k2 OK -> uploads DO freeze without the key (hs113 "does not freeze" wrong).
+dark UP key ON   : hs115 t1 0 s, t2 0 s (2/2).
+mixed (k117 = key on by build, one side old), dark down:
+  m1 edge dl79 + exit k117 : FREEZE 119 s + RST (exit closed 3 subs, tcp=rto)
+  m2 edge r60  + exit k117 : FREEZE 119 s + RST (hs115 m2 had survived) -> exit side alone does not save a download
+  m3 edge k117 + exit r60  : FREEZE (old sender, as expected). Nothing worse than old+old (always freezes).
+
+## quiet A/B (median, light p99 in ms)
+class        arm  n  Mbit/s  ping99 echo99 call99 game99 crowd99   closes per run
+d1 (pooled)  ON   9   875     222    194    259     -      -       d1 1, d2 2, d3 0, p1-4 0/1/0/0, g1 0, z1 0
+             off  7   758     258    231    284     -      -       0
+u1 (pooled)  ON   7   528     206    192    263     -      -       u1 1, w1-3 0/0/2, q1 2, q3 0, z3 1
+             off  6   510     190    178    242     -      -       0
+u8 (real 8)  ON   3   677     336    312    431    338    379      0/0/0   (u2 1046 | u3 677 | u4 659)
+             off  4   993     254    260    367    278    309      0       (v2 963 | v3 998 | v4 988 | v5 1279)
+d8 (real 8)  ON   2  1508/1228 283/478 ...                          p5 1, z2 0
+             off  1  1094     391    358    571    348    440      0
+- d1: no cost (ON >= off on throughput and p99).
+- u1: throughput equal; ON ping99 +16 ms, call99 +21 ms (within run-to-run spread, not proven).
+- u8: ON lower in 2 of 3 same-batch pairs (677/659 vs 998/988 Mbit/s) and light p99 +70-80 ms; u2 vs v2 the other way.
+  0 closes in those runs, so not the stall rule — suspect the ack-held keep (Iran keeps every unacked chunk of 8
+  striped uploads: bookkeeping under m.mu / global 320 MiB trim). n=3 vs 4: a COST SIGNAL, not settled.
+- d8: n=2 vs 1 only (NOT DONE to n>=2+2).
+false closes: 11 in 21 quiet ON runs (~0.5/run, target 0). Reason only on k117 (new log): z3 Iran "tcp=frozen
+  frozen=403ms srtt=100ms unacked=3" — just over the 4 x srtt = 400 ms floor; n1 similar 415 ms. The frozen path at
+  4 x srtt is borderline on a 2.5 % loss path (one tail loss -> RTO ~ that long). Dark closes are tcp=rto.
+  Candidate tune (not tested): frozen path needs max(1 s, 8 x srtt), rto path unchanged.
+
+## tests (final source = 77dcc697 + ack-stall log detail)
+gofmt clean, go vet ./engine ./envdef ./cmd/... clean.
+go test ./... -p 1 (niced, under 3 lab slots): engine FAIL 5 (TestMConnRescueCappedRaw, TestMeteredConnBlockedTime,
+  TestShapeBulkFullRecords, TestDgReadLoopBatchesTunWrites, TestUDPFlowDoesNotHoldUpThePort) -> all pass alone x3;
+  udpcarrier FAIL 3 (TestLabBursty26, TestLabAdaptiveStep, TestWildcardListenerRepliesFromTargetedIP) -> pass alone x2;
+  every other package ok.
+-race: whole ./engine on an IDLE host NOT RUN (lab never idle in the budget). hs115's -race ./engine (old src, under
+  load): 1 DATA RACE, test-only (withRescue global written by TestMConnRescueDualAllLowered while a leftover mConn of
+  TestMConnRescueSparesOthers reads it in rescueCensusLocked) + 10 load failures. hs117 -race -run
+  'KeepStall|AckStall|Stripe' (under load): 0 DATA RACE; TestMConnStripeGatedFromRaw / TestMConnStripeFromRaw failed
+  once ("a sub died holding the only copy"), pass 4/4 alone under -race (same on hs115 src).
+
+## binary
+C:\h2w\bin117\hs2-linux-amd64  sha256 ba862ecb9c58b0613c779d8860f44da15a45ecd768484521e4ae4d2a83f2ece4
+  = 77dcc697 + ack-stall log detail (tcp=rto|frozen|nosock, frozen, srtt, unacked, gap). KEEPSTALL default OFF.
+  (lab hs2-k117 = same + envdef row ON, used for n1/m1-m3/z1-z3; that envdef change is NOT committed.)
+
+## verdict
+NOT accepted as a default: the key stays OFF (lab key).
+- dark download with the key: 4/7 (+n1) survive vs 0/7 off — a big gain but not a fix; the 3 failures are one
+  deterministic-looking deadlock (resend queued behind a full window while Iran's reorder room is full).
+- one side new does not help a download (m1/m2 froze): the receiver must be new too.
+- quiet u8 shows a possible throughput/p99 cost (n=3/4), and false closes are ~0.5/run, not 0.
+Next (in order): (1) receiver: let the sub carrying the resend be read past the room — e.g. per-sub room equal to the
+  sub's smux window while a hole is old, or the exit resends the hole chunk on a FRESH sub (nothing queued ahead); or
+  sender: stop striping new chunks while a stall-resend is unacked. (2) frozen path to max(1 s, 8 x srtt).
+  (3) u8 A/B n>=6 with CPU per side. (4) idle -race ./engine.

@@ -1,0 +1,89 @@
+lb84 — A/B of the lbv81 keys + new HS2_LB_PATH_SILENT, lab2 only (3 slots in parallel, labslot.sh),
+branch lb84 from lbv81 ced3b9af. Build for the A/B: hs2N 55668b39 (= lbv81 tree, batch 1) and hs2P
+c6db4f16 (= lb84 tree, batches 2-3), same binary both sides. Scripts: lb84.sh (one 330 s run, 4 paths
+rtt ~90 ms, base loss a..d 0.1/0.2/0.3/0.8 %, crowd 1500, 2 Mbit call, game, heavy down x4 30 s),
+q84.sh (arm sequence per slot), an84.sh / rev84.py (F1+F3), anc84.sh (PATH_SILENT).
+Judge at production speed (HS2_LB_FAST=0; the auto2 judge here reads every 5 s).
+
+== (a) F3 HS2_LB_SLOW_SKIP_COPY=1 (arm B = DEAD_HYST=8 + SLOW_SKIP_COPY=1, attribution by
+   mechanism-specific counters: copy-sub force closes vs path-d verdicts)
+Scenario that forces it: path a 10 % loss t=30..300 -> lowered, cut (+10 s), cut-drained; crowd conns
+live 200 s (crowdlife) so mconn copy subs stay on the cut-drained links past cutDrainForce (60 s).
+(batch 1 with crowdlife 40 s never reached the force close: 0 closes in all 6 runs.)
+  run  "trickling" force closes on cut-drained links   crowd fail  call   crowd p99  game p99
+  A7   1                                                0           ok     133.2      117.1
+  A8   0                                                0           ok     134.6      120.1
+  A9   7 (2 + 5)                                        0           ok     123.3      120.9
+  B7   0                                                0           ok     121.7      116.1
+  B8   0                                                0           ok     122.0      106.0
+Off: every force close in this scenario hit a copy sub (with the key on the count is 0, and the
+primaries' close path is unchanged); no user conn or call died in either arm here, because the crowd's
+primary sub sat on a good path. The lbv81 call death needs the closed copy to be the sub the call
+depended on (random placement). Gain = removes a wrong close; user-visible kill count 0 vs 0 here.
+n = 3 off / 2 on runs (B9 lost to a full disk, see notes) — below the n>=6 asked.
+
+== (b) F1 HS2_LB_DEAD_HYST=8 — path d steady 0.8 % among 0.1-0.3 %
+  path d verdict reversals (lower<->ok) per 330 s run (rev84.py):
+  off A1 0, A3 0, A5 2, A7 0, A8 0, A9 0
+  on  B1 1, B3 1, B5 4, B7 0, B8 0
+  heavy down Mbit/s (batch 1): off 679 / 776 / 971   on 893 / 829 / 989
+  crowd p99 (batch 1):         off 131.6 / 129.2 / 131.8   on 134.9 / 132.6 / 138.1
+The lbv81 flipping (30+ in 30 min on 10 paths) is NOT reproduced on 4 paths in 330 s: the off arm
+reverses 0-2 times. With the key on, path d, once lowered, stays lowered (weight ~0.55-0.64 instead of
+returning to 1.00) — B5 still reversed 4 times (ratio above lb2Dead+8 % in two windows). No gain shown;
+crowd p99 +3 ms on (noise level, not significant).
+
+== (c) Crowd failures on blackhole / RST / flap — analysis (lbv81 s1-lab2 samples.txt, F lines by 2 s
+   bin from event start)
+  blackhole e (600 s): +8:45 +10:52 +12:29 +14:21 +16:5 +18:9 +20:3 (164) — nothing before +8 s.
+  RST g (1110 s):       +0:34 +2:22 +4:20 +6:20 +8:1 +10:11 +12:37 — RSTs kill raw/single conns at once.
+  flap f (810-1050 s):  +8:66 +10:61 +12:31 +14:4 ... same shape repeated every blackhole half-cycle.
+The probe's crowd request timeout is ~8 s: the +8..+12 s bins are requests ALREADY IN FLIGHT on the
+dead path at t=0 on conns without a good copy (raw / single subs: lbv81 census "raw 5541, single 120,
+dual all-marked 124" conn-seconds); the +12..+22 s tail is conns PLACED on the dead path's links after
+the blackhole, until the per-link suspect check (suspectAfter 12 s, tick 2 s) stops new placement.
+So a faster placement stop can only save the tail; the in-flight bulk needs a copy on another path
+before ~8 s (MCONN for those conns), not a faster judge.
+
+New key HS2_LB_PATH_SILENT=MS (engine/lb_pathsilent84.go, off): after each health tick, a path with
+>=3 counted links (alive, measured, rxSeen, not HS2_QUIET_IDLE-lenient) of which >=80 % heard nothing
+for MS, while another path's >=3 links are hearing (<=20 % silent), gets its silent links marked suspect
+(no new conns; nothing closed; clears when anything arrives). Unit test TestPathSilentPaths.
+A/B (MS=4500, edge+exit hs2P): blackhole b t=40-80 and c t=160-200 per run, 3 runs per arm = n=6
+events per arm.
+  run  fails b  fails c  all   crowd p99 all  crowd p99 in event windows  call p99  game p99  heavy
+  O1   260      369      629   140.0          149.5                        162.5     147.8     660
+  O2   251      353      604   144.5          152.8                        209.9     114.9     801
+  O3   263      386      649   141.0          157.7                        178.4     170.9     841
+  C1   272      369      641   158.1          160.8                        215.6     110.0     699
+  C2   242      306      548   148.3          154.8                        203.5     120.2     740
+  C3   193      327      520   142.0          157.4                        166.0     134.7     694
+  fails per event: off 313.7, on 284.8 (-9 %, per-event spread ~60 -> not significant)
+  crowd p99: off 141.8, on 149.5 (+7.7 ms, worse)
+  marks: on arm marked exactly the blackholed path every time at +6.5..+8.2 s (off: per-link suspect
+  at +14 s); 0 marks on any other path (the 0.8 % path d and the rest) -> 0 false positives in 6 runs.
+  fail histogram: the +14..+20 s tail (off 30-65 per event) is gone with the key on; the +8..+12 s
+  bulk (in-flight requests) is the same.
+Verdict: correct and safe detector, but the gain is small and p99 not better -> keep OFF.
+
+== Verdicts (all keys stay default OFF; envdef unchanged; production binaries unchanged in behaviour)
+  HS2_LB_SLOW_SKIP_COPY=1  mechanism proven (off: 8 copy closes in 2 of 3 runs (1, 0, 7), on: 0 in 2 runs), no user-visible
+                           kill in either arm in this lab -> keep off for now; low-risk candidate.
+  HS2_LB_DEAD_HYST=8       flipping not reproduced; no gain -> keep off.
+  HS2_LB_SELFQ             not re-tested (lbv81: not reproduced) -> keep off.
+  HS2_LB_PATH_SILENT=4500  -9 % blackhole fails (n.s.), crowd p99 +7.7 ms -> keep off.
+
+== Checks
+  gofmt -l: only third_party/utls (pre-existing); go vet ./... rc=0; go test ./... -p 2 -timeout 30m
+  -count=1 rc=0 (12 packages ok, 0 FAIL); go test -race ./engine -run "LB|Lb|Steer|Cut|Path|Dead|Slow|
+  Rescue|Mconn|Suspect" rc=0 (72.6 s).
+  bin84: C:\h2w\bin84\hs2-linux-amd64 sha256 9c42d44bcadb3a3db3da4974d3a8f1196659758fc1b5a886f4b753f951fb4410
+  (-trimpath -ldflags='-s -w', tree 52ab9068 = this branch's code).
+  Mixed run M1 (edge bin84 9c42d44b + exit rel58 5d87000d, lb84.sh scenario, no keys): crowd p50/p99 94.9/131.8 ms, 0 fails of 1500 conns, call p99 167 ms ok, game p99 111.7, heavy down 800 Mbit/s, path a lowered+cut at +10 s as with hs2P, 0 panics, links 132 (lb_paths_end 16/39/39/38) -> PASS.
+
+== Notes
+  lab2 root disk hit 100 % at 22:49 UTC (19 GB; ~1.1 GB were this job's /tmp/lb84-* workdirs, the rest
+  older lab data): runs B7, A8, B9 and the first mixed run wrote nothing. Workdirs removed, B7/A8/M1
+  rerun; B9 not rerun (time). Root keeps ~0.7 GB reserved free after the cleanup.
+  The go test run shared lab2 with the A/B runs (nice 19, GOMAXPROCS 4) — both arms ran at the same time
+  in different slots, so the load hit both.

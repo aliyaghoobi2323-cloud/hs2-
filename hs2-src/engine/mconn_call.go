@@ -82,6 +82,7 @@ type callState struct {
 	// Iran's upgrade sampler (liteWantDualLocked)
 	upStreak int
 	upPrev   float64
+	upLo     float64 // st246: the last sample's quieter direction, bytes/s (st246Interactive)
 	// the send window (noteWriteLocked)
 	txStreak int
 	txPrev   float64
@@ -94,6 +95,8 @@ type callState struct {
 	stuckSince    time.Time // every sub busy since
 	callStuckAt   time.Time // no trigger before
 	stuckOpenedAt time.Time // the last trigger
+	stuckWeakAt   time.Time // prod73: the last weak gap counted (callStuckGapWeak)
+	stuckJudged   bool      // prod73: the last trigger's outcome counted (callStuckOldFirst)
 	stuckKeys     []any     // the subs' keys at it (nil: none pending)
 
 	// HS2_LB_CALL_LATE (lb_call_late.go)
@@ -222,6 +225,9 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 		m.callLikeAt = now
 	}
 	was := m.callOn
+	if !like && m.dc254CopyHoldLocked(now, w, sent, was) {
+		like = true // dc254: a stall does not drop a copying call to one copy
+	}
 	m.callOn = like && dupOff && !m.callCopyOff() && m.liveSubsLocked() >= 2 && !callCapped(now.Unix())
 	if m.callOn != was {
 		m.tr.ev("call: copy %v (sent=%d got=%d in %v)", m.callOn, sent, got, w.Round(time.Millisecond))
@@ -275,8 +281,8 @@ func callLog(now time.Time) {
 	if up == pu && dup == pd {
 		return
 	}
-	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget) · %d call subs placed away from other copies",
-		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load(), callStat.avoided.Load())
+	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget) · %d call subs placed away from other copies · cs225 offpath %d samepath %d",
+		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load(), callStat.avoided.Load(), cs225Stat.off.Load(), cs225Stat.same.Load())
 }
 
 // ---- paired copies over more subs (HS2_MCONN_CALL_SUBS=3..6) ------------
@@ -346,15 +352,13 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 	if mconnCallPick {
 		pick, k = m.callPickLocked(cand, n, c.n)
 	} else {
-		for i := 0; i < n && k < 2; i++ {
-			if s := cand[(m.callPairAt+i)%n]; s.fits(c.n) {
-				pick[k] = s
-				k++
-			}
-		}
+		pick, k = callPairPick(cand, n, m.callPairAt, c.n) // cs221: not both on one path
 	}
 	if k == 0 {
 		return false, true
+	}
+	if pick, k = b262PairLocked(pick, k, all, c.n); k == 0 {
+		return false, true // b262: only dark subs had room; wait for a live one
 	}
 	m.callPairAt++
 	c.setOff(m.sendOff)
@@ -363,6 +367,11 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 	for _, s := range pick[:k] {
 		s.push(c)
 		s.lastPush = now
+	}
+	for _, s := range all { // cs221: every sub not picked lacks c
+		if s != pick[0] && (k < 2 || s != pick[1]) {
+			s.noteMiss(m.sendOff)
+		}
 	}
 	if k < 2 {
 		for _, s := range all {
@@ -394,9 +403,9 @@ func (m *mConn) callMoreSubsLocked(live []*msub) time.Duration {
 	m.lightOpening = true
 	avoid := make([]any, 0, len(live)+len(m.deadKeys))
 	for _, s := range live {
-		avoid = append(avoid, s.key)
+		avoid = append(avoid, avoidKey(s.key))
 	}
-	avoid = m.callAvoidLocked(append(avoid, m.deadKeys...))
+	avoid = m.callAvoidLocked(append(avoid, m.deadAvoidLocked()...))
 	m.tr.ev("call: open pair sub %d", len(live)+1)
 	go m.openLight(avoid)
 	return 200 * time.Millisecond
@@ -418,7 +427,9 @@ const (
 	mCallPickEvery = 5 * time.Millisecond
 )
 
-// subTCP: the kernel socket of the link s rides (nil: unknown).
+// subTCP: the kernel socket of the link s rides (nil: unknown). Under m.mu
+// (sg154): releaseRaw1 replaces a released raw first sub's rw under m.mu, and
+// an interface read racing that write can be torn (old type, new data).
 func subTCP(s *msub) *net.TCPConn {
 	switch r := s.rw.(type) {
 	case *mconnSub:
@@ -444,6 +455,7 @@ func (m *mConn) callScoresLocked(live []*msub) {
 		return
 	}
 	m.scoreAt, m.scoreN = now, len(live)
+	clear(m.scoreSub[len(live):]) // mem68: no stale slot pins a gone sub
 	for i, s := range live {
 		m.scoreSub[i] = s
 		m.score[i] = 0
@@ -521,6 +533,17 @@ func (m *mConn) callAvoidLocked(avoid []any) []any {
 
 // pickPlaneCall is pickPlane, or with the mark the call placement.
 func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) {
+	avoid, jmk := takeRescueJoinMark(avoid) // rs145 (mconn_rescue145.go)
+	if jmk != nil && p == planeLight {
+		pool := m.exitInfo.Load()
+		m.mu.Lock()
+		if ml := m.pickRescueJoinLocked(avoid, pool, jmk); ml != nil {
+			m.placeLocked(ml)
+			m.mu.Unlock()
+			return ml.link, m.releaseFor(ml), true
+		}
+		m.mu.Unlock()
+	}
 	avoid, stuckPath, stuck := takeCallStuckMark(avoid) // HS2_LB_CALL_STUCK (lb_call_stuck.go)
 	avoid, cresc := takeCallRescueMark(avoid)           // HS2_LB_CALL_RESCUE (lb_call_rescue.go)
 	if stuck && p == planeLight {
@@ -570,9 +593,41 @@ func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) 
 	}
 	pool := m.exitInfo.Load()
 	m.mu.Lock()
-	ml := m.pickPlaneTiers(p, avoid, pool, func(ml *managedLink) bool {
+	light := func(ml *managedLink) bool {
 		return ml.heavy == 0 && !stripeOn(ml) && !ml.degraded && !ml.draining && !ml.suspect && linkCopies(ml.link) == 0
-	})
+	}
+	if cs229MinPlace() { // cs229 (mconn_cs229.go): replaces cs225's placement
+		if ml := m.pickPlaneTiers(p, avoid, pool, light); ml != nil {
+			ml = m.cs229CallLocked(p, avoid, pool, ml, light)
+			callStat.avoided.Add(1)
+			m.placeLocked(ml)
+			m.mu.Unlock()
+			return ml.link, m.releaseFor(ml), true
+		}
+		m.mu.Unlock()
+		return m.pickPlane(p, avoid)
+	}
+	// cs225 (mconn_cs225.go): a healthy path none of the other subs ride
+	// first — a light link there, then any usable link there.
+	if off := m.cs225OffPathLocked(avoid, light); off != nil {
+		ml := m.pickPlaneTiers(p, avoid, pool, off)
+		if ml == nil {
+			ml = m.pickPlaneTiers(p, avoid, pool, m.cs225OffPathLocked(avoid, func(ml *managedLink) bool {
+				return !ml.degraded && !ml.draining && !ml.suspect
+			}))
+		}
+		if ml != nil {
+			callStat.avoided.Add(1)
+			cs225Stat.off.Add(1)
+			m.placeLocked(ml)
+			m.mu.Unlock()
+			return ml.link, m.releaseFor(ml), true
+		}
+	}
+	if cs225CallPath.Load() {
+		cs225Stat.same.Add(1)
+	}
+	ml := m.pickPlaneTiers(p, avoid, pool, light)
 	if ml != nil {
 		callStat.avoided.Add(1)
 		m.placeLocked(ml)

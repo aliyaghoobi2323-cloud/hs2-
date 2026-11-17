@@ -110,14 +110,38 @@ func parseStripe(v string) int {
 }
 
 // infoExt: the extended caps this server announces in kindInfo (0 with
-// every key off: the message's bytes stay as before).
+// every key off: the message's bytes stay as before; hc183's capExtHalfClose
+// is on by default, HS2_HALF_CLOSE=0 clears it).
 func infoExt() uint32 {
 	var e uint32
+	if mconnOn.Load() && mconnLite.Load() && rescueOn.Load() {
+		e |= capExtMConnRescue // HS2_MCONN_RESCUE (mconn_rescue.go)
+		if rescueRecOn.Load() {
+			e |= capExtMConnRescueRec // er97 (mconn_rescue_rec.go)
+			if rescueRstOn.Load() {
+				e |= capExtMConnRescueRst // rr155 (mconn_rescue_rst.go)
+				e |= capExtMConnRstEnd    // rr157: reads the role-6 end notice
+			}
+		}
+	}
 	if mconnOn.Load() && mconnLite.Load() && stripeK.Load() > 0 {
 		e |= capExtMConnStripe
 		if stripeUp.Load() {
 			e |= capExtMConnStripeUp // mconn_stripe_up.go
 		}
+		e |= capExtMConnOverlap // mconn_stripe_overlap.go
+		if stripeResend.Load() {
+			e |= capExtMConnResend // mconn_stripe_evac.go
+		}
+		if keepStallOn.Load() {
+			e |= capExtMConnKeepStall // hs133 (mconn_stripe_keepstall.go)
+		}
+	}
+	if mconnOn.Load() && mconnLite.Load() && xs261On.Load() {
+		e |= capExtMConnXS // xs261 (mconn_xs261.go)
+	}
+	if halfCloseOn.Load() {
+		e |= capExtHalfClose // hc183 (halfclose.go)
 	}
 	return e
 }
@@ -143,19 +167,29 @@ type stripeState struct {
 	stActive  bool      // Iran: holds a stripe slot
 	stOpening bool      // Iran: a stripe sub is being opened
 	stRetryAt time.Time // Iran: no open before this (after a failed one)
-	stSample  time.Time // Iran: the rate sample
-	stSent    uint64
-	stRecvd   uint64
-	stRR      int  // sender: round-robin start among equal queues
-	stLogged  int  // Iran: the largest stripe logged
-	stN       int  // subs ever marked stripe (0: the stripe rule is never looked at)
-	stHot     int  // Iran: consecutive samples at the growth rate
-	stUp      bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
-	stGrowUp  bool // Iran: the last growth was for an upload (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
+	// stSteerHeldN (sd151): stripe opens the steering refused in a row (a cut
+	// path's link only, a healthy sub): the next try waits longer
+	stSteerHeldN int
+
+	stSample time.Time // Iran: the rate sample
+	stSent   uint64
+	stRecvd  uint64
+	stRR     int  // sender: round-robin start among equal queues
+	stLogged int  // Iran: the largest stripe logged
+	stN      int  // subs ever marked stripe (0: the stripe rule is never looked at)
+	stHot    int  // Iran: consecutive samples at the growth rate
+	stUp     bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
+	stGrowUp bool // Iran: the last growth was for an upload (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
 
 	stUpCnt    bool          // Iran: counted in stripeUpActive (HS2_MCONN_STRIPE_FAST_SOLO, mconn_stripe_fast.go)
 	stFastMore int           // Iran: subs still to open in the doubling chain (HS2_MCONN_STRIPE_FAST, mconn_stripe_fast.go)
 	stFastRate float64       // Iran: the rate that started the chain
+	stDlHot    int           // Iran: early download samples in a row at stripeDlFastRate (HS2_MCONN_STRIPE_DL_FAST, mconn_stripe_dlfast.go)
+	stDlCnt    bool          // Iran: counted in stripeDlActive (HS2_MCONN_STRIPE_DL_FAST)
+	stDlT      time.Time     // Iran: the download sampler's last sample (HS2_MCONN_STRIPE_DL_FAST)
+	stDlS      uint64        // Iran: sent at stDlT
+	stDlR      uint64        // Iran: received at stDlT
+	stDlAt     time.Time     // Iran: when it took the download fast slot (HS2_MCONN_STRIPE_DL_FAIR, mconn_stripe_dlfair.go)
 	stEarlyW   time.Duration // Iran: this tick's sample window is an early one (HS2_MCONN_STRIPE_FAST_EARLY_MS, mconn_stripe_early.go)
 
 	stWarmUntil time.Time // Iran: its stripe subs are kept until then (HS2_MCONN_STRIPE_SHARE, mconn_stripe_share.go)
@@ -167,6 +201,12 @@ type stripeState struct {
 	stripeGate // sender: the scavenger's width (mconn_stripe_scav.go)
 
 	stPool *poolPeak // Iran: the pool's rebuild window (HS2_MCONN_STRIPE_REBUILD; nil: none)
+
+	stTrace stTr      // dl184 diagnostics (mconn_stripe_dltrace.go)
+	stBorn  time.Time // ul197: the first stripe tick (HS2_MCONN_STRIPE_LOG only)
+
+	stEvacAt time.Time // Iran: no stripe evacuation before this (HS2_MCONN_STRIPE_EVAC, mconn_stripe_evac.go)
+	stUpNow  bool      // Iran: the last rate sample's faster direction was the upload (HS2_MCONN_STRIPE_EVAC)
 }
 
 // stripeN: some sub was ever marked stripe (cheap gate for the send path).
@@ -196,19 +236,25 @@ func (m *mConn) liveStripeLocked() int {
 // and recvd are both directions' offsets now. true: open one more stripe sub
 // now (stOpening was set).
 func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
+	if stripeLog && m.stBorn.IsZero() {
+		m.stBorn = now // ul197 (mconn_stripe_dltrace.go)
+	}
 	m.stripeAutoWinLocked(now) // HS2_SMUX_AUTOWIN (smux_autowin.go)
 	m.stripeWarmLocked(now)    // HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go)
+	m.stripeDlLeaseLocked(now) // HS2_MCONN_STRIPE_DL_FAIR (mconn_stripe_dlfair.go)
 	if m.stK < 2 || m.ended || m.closing || m.peerFin || m.wclosed {
 		if stripeLog && m.stN > 0 && !m.ended {
 			log.Printf("stripe %x: tick off (closing=%v peerFin=%v wclosed=%v)", m.id&0xffffff, m.closing, m.peerFin, m.wclosed)
 		}
+		m.trLocked(trOff)
 		return false
 	}
-	if m.stFastMore > 0 && !m.handshaking && !m.stOpening && !m.rawW.Load() && m.mode == planeLight && m.stripeFastNextLocked() {
+	if m.stFastMore > 0 && m.stripeOverlapLocked() && !m.stOpening && !m.rawW.Load() && m.mode == planeLight && m.stripeFastNextLocked() {
 		return true // HS2_MCONN_STRIPE_FAST: the doubling chain after a raw upgrade (mconn_stripe_fast.go)
 	}
 	if m.stSample.IsZero() {
 		m.stSample, m.stSent, m.stRecvd = now, sent, recvd
+		m.ul257SampleStartLocked(now)
 		return false
 	}
 	w := now.Sub(m.stSample)
@@ -216,13 +262,26 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	if m.stEarlyW > 0 {
 		minW = m.stEarlyW * 9 / 10 // HS2_MCONN_STRIPE_FAST_EARLY_MS (mconn_stripe_early.go)
 	}
-	if w < minW {
+	dlGo, dlRate := m.stripeDlSampleLocked(now, sent, recvd) // HS2_MCONN_STRIPE_DL_FAST (mconn_stripe_dlfast.go)
+	if w < minW && !dlGo {
+		m.trLocked(trWin)
 		return false
 	}
 	moved := max(sent-m.stSent, recvd-m.stRecvd)
 	up := sent-m.stSent > recvd-m.stRecvd // the upload is the faster direction
-	if m.stEarlyW > 0 && !stripeEarlyHotLocked(up, float64(moved)/w.Seconds()) {
+	if dlGo {
+		up = false
+	}
+	m.stUpNow = up // HS2_MCONN_STRIPE_EVAC (mconn_stripe_evac.go)
+	stuck := false
+	if m.rawW.Load() {
+		// ul257: a raw upload the user waits on while its first sub's link
+		// is stuck grows now (mconn_ul257.go)
+		stuck = m.ul257StuckLocked(ul257Up(sent-m.stSent, recvd-m.stRecvd, dlGo), 1+m.liveStripeLocked(), float64(moved)/w.Seconds(), w, m.rawBlockedLocked(now))
+	}
+	if m.stEarlyW > 0 && !dlGo && !stuck && !m.stripeEarlyHotAnyLocked(up, float64(moved)/w.Seconds()) {
 		m.stSample, m.stSent, m.stRecvd = now, sent, recvd
+		m.trLocked(trEarly)
 		return false // an early sample grows only a fast upload
 	}
 	m.stSample, m.stSent, m.stRecvd = now, sent, recvd
@@ -230,27 +289,61 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		if stripeLog && m.stN > 0 {
 			log.Printf("stripe %x: tick held (opening=%v hs=%v light=%v retry=%v call=%v/%v)", m.id&0xffffff, m.stOpening, m.handshaking, m.lightOpening, now.Before(m.stRetryAt), m.callOn, m.callUp)
 		}
+		switch {
+		case m.callOn || m.callUp:
+			m.trLocked(trHeldCall)
+		case m.handshaking:
+			m.trLocked(trHeldHs)
+		case now.Before(m.stRetryAt):
+			m.trLocked(trHeldRetry)
+		default:
+			m.trLocked(trHeldOpen)
+		}
 		return false // a call (HS2_MCONN_CALL) is copied, never striped
 	}
 	n := 1 + m.liveStripeLocked()
 	rate := float64(moved) / w.Seconds()
+	if dlGo {
+		rate = dlRate
+	}
 	m.stripeNoteRateLocked(now, rate) // HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go)
+	if !up {
+		m.trRateLocked(rate)
+	} else if stripeLog && rate > m.stTrace.upMax {
+		m.stTrace.upMax = rate // ul197
+	}
 	if !m.stripeKCapLocked(n, rate) { // n >= stK (past it only with HS2_MCONN_STRIPE_UP)
+		m.trLocked(trKCap)
 		return false
 	}
-	if rate < float64(n)*float64(stripeSubRate.Load()) {
+	low := rate < float64(n)*float64(stripeSubRate.Load()) && !stuck
+	evRaw := low && m.stripeEvacRawGrowLocked(n, rate, now) // HS2_MCONN_STRIPE_EVAC_RAW (mconn_stripe_evac.go)
+	if stuck {
+		nU := ul257Stat.Add(1)
+		m.tr.ev("stripe: ul257 stuck raw upload (%.1f Mbit/s), grow now", rate*8/1e6)
+		// once per raw upload, but at 4x scale on a congested Iran uplink
+		// every tunnel-bound upload > 1 MB can qualify: rate-limited (b264),
+		// #n is the running total so dropped lines still show in the count
+		if ul257Log.ok(now) {
+			log.Printf("mconn %x: ul257 stuck raw upload #%d (%.1f Mbit/s over %v, %d KB raw), grow now", m.id&0xffffff, nU, rate*8/1e6, w.Round(time.Millisecond), m.rawSent.Load()>>10)
+		}
+	}
+	if low && !evRaw {
 		if stripeLog && m.stN > 0 && rate > 1e6 {
 			log.Printf("stripe %x: under the growth rate (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
 		}
 		m.stHot = 0
+		m.trLocked(trLow)
 		if m.stN > 0 && rate > 1e6 {
 			stripeDiag.growRate.Add(1) // a stripe that slowed (not every idle connection)
 		}
 		return false
 	}
-	if m.stHot++; n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) && !m.stripeFastOnLocked(up) {
+	if m.stHot++; !evRaw && !stuck && n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) && !m.stripeFastOnLocked(up) &&
+		!dlGo && !m.stripeDlHotOKLocked(up, rate) { // HS2_MCONN_STRIPE_DL_FAST (mconn_stripe_dlfast.go)
 		// only a long download stripes: a reel or a page's burst is over in
 		// a second or two, and each would take (and the pool dial) links
+		m.trLocked(trNotHot)
 		return false
 	}
 	used := m.stripeAllUsedLocked
@@ -261,6 +354,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		if stripeLog {
 			log.Printf("stripe %x: no growth, upload path queue %v (%.1f Mbit/s over %d)", m.id&0xffffff, m.stQ, rate*8/1e6, n)
 		}
+		m.trLocked(trUpRoom)
 		return false // mconn_stripe_up.go: a sub more only while the gate would widen
 	}
 	if stripeQTarget.Load() > 0 && !used(now) {
@@ -268,14 +362,16 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 			log.Printf("stripe %x: no growth, a sub unused (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
 		}
 		stripeDiag.growUnused.Add(1)
+		m.trLocked(trUnused)
 		// the sender's scavenger gate leaves a sub unused (the path has a
 		// queue): one more would only hold a link light users could take
 		return false
 	}
 	if !m.stActive {
-		if stripeStat.active.Add(1) > stripeMaxConns {
+		if c := stripeStat.active.Add(1); c > stripeMaxConns && !m.stripeDlFairExtraLocked(c, up, rate) && !m.dl241SlowSlotLocked(c, up, rate, now) { // HS2_MCONN_STRIPE_DL_FAIR: a fast download past the cap (mconn_stripe_dlfair.go)
 			stripeStat.active.Add(-1)
 			stripeStat.refused.Add(1)
+			m.trLocked(trSlot)
 			return false
 		}
 		m.stActive = true
@@ -292,8 +388,17 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		stripeFastStat.early.Add(1)
 	}
 	m.stFastMore = m.stripeFastPlanLocked(n, rate, up) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+	if up {
+		m.stripeDlCountLocked(false)
+	} else if stripeDlFast.Load() {
+		m.stFastMore = m.stripeDlPlanLocked(n, rate, up) // HS2_MCONN_STRIPE_DL_FAST (mconn_stripe_dlfast.go)
+	}
 	m.stFastRate = rate
 	m.tr.ev("stripe: grow %d -> %d (%.1f Mbit/s)", n, n+1, rate*8/1e6)
+	m.trLocked(trGrow)
+	if dlGo {
+		log.Printf("mconn %x: download stripe at %v (%.0f Mbit/s, chain %d)", m.id&0xffffff, now.Sub(m.rawBorn).Round(time.Millisecond), rate*8/1e6, m.stFastMore) // HS2_MCONN_STRIPE_DL_FAST
+	}
 	return true
 }
 
@@ -315,17 +420,19 @@ func (m *mConn) stripeAvoidLocked() []any {
 	avoid := make([]any, 0, len(m.subs)+len(m.deadKeys))
 	for _, s := range m.subs {
 		if s.key != nil {
-			avoid = append(avoid, s.key)
+			avoid = append(avoid, avoidKey(s.key))
 		}
 	}
-	avoid = append(avoid, m.deadKeys...)
+	avoid = append(avoid, m.deadAvoidLocked()...)
 	if stripeXDir {
 		avoid = append(avoid, stripeDirHint{up: m.stGrowUp}) // HS2_MCONN_STRIPE_XDIR (mconn_stripe_xdir.go)
 	}
-	if m.stFastMore > 0 && m.stripeFastOnLocked(m.stGrowUp) {
+	if m.stFastMore > 0 && m.stripeChainHintLocked() {
 		avoid = append(avoid, stripeWantHint{n: 1 + m.stFastMore}) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 	}
 	avoid = m.stripeNoShareHintLocked(avoid) // HS2_MCONN_STRIPE_UP_NOSHARE (mconn_stripe_noshare.go)
+	avoid = m.stripeCopyUpHintLocked(avoid)  // HS2_MCONN_STRIPE_SHARE_COPIES: uploads only (mconn_stripe_sharecopy.go)
+	avoid = m.stripeDlShareHintLocked(avoid) // HS2_MCONN_STRIPE_DL_SHARE (mconn_stripe_dlshare.go)
 	return avoid
 }
 
@@ -336,6 +443,7 @@ func (m *mConn) stripeIdleLocked() {
 		m.stActive = false
 		stripeStat.active.Add(-1)
 		m.stripeUpCountLocked(false)
+		m.stripeDlCountLocked(false)
 		r := &m.r
 		r.mu.Lock()
 		r.releaseOOOLocked(0)
@@ -347,11 +455,13 @@ func (m *mConn) stripeIdleLocked() {
 // stripeEnded (end): give the slot back.
 func (m *mConn) stripeEnded() {
 	m.mu.Lock()
+	m.stripeTraceEndLocked() // dl184 (mconn_stripe_dltrace.go)
 	if m.stActive {
 		m.stActive = false
 		stripeStat.active.Add(-1)
 	}
 	m.stripeUpCountLocked(false)
+	m.stripeDlCountLocked(false)
 	m.mu.Unlock()
 }
 
@@ -359,28 +469,63 @@ func (m *mConn) stripeEnded() {
 // connection is upgraded with it (mconn_raw.go).
 func (m *mConn) openStripe(avoid []any, raw bool) {
 	if raw {
-		m.upgradeRawPlane(planeStripe, avoid)
-		for try := 0; m.stripeFastRawRetry(try); try++ {
-			m.upgradeRawPlane(planeStripe, avoid) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+		err := m.upgradeRawPlane(planeStripe, avoid)
+		for try := 0; err != errStripeSteerHeld && m.stripeFastRawRetry(try); try++ {
+			err = m.upgradeRawPlane(planeStripe, avoid) // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
 		}
 		m.mu.Lock()
 		m.stOpening = false
-		if m.rawW.Load() { // the open failed: still raw
+		switch {
+		case m.rawW.Load() && err == errStripeSteerHeld:
+			// sd151: the steering refused a cut path's link (the raw link is
+			// on a path not cut): no fast retries, a growing wait
+			m.stRetryAt = m.stripeSteerHoldLocked(time.Now())
+			m.stFastMore = 0
+			m.stripeIdleLocked()
+			m.trLocked(trSteerHeld)
+		case m.rawW.Load(): // the open failed: still raw
+			m.trLocked(trOpenFail)
 			m.stRetryAt = m.stripeRetryLocked(time.Now())
 			stripeStat.refused.Add(1)
 			m.stripeIdleLocked()
+		case err == nil:
+			m.stSteerHeldN = 0
 		}
 		// HS2_MCONN_STRIPE_FAST: a chain left (stFastMore) goes on from the
-		// manager's tick once the upgrade's handshake is over
+		// manager's tick once the upgrade's handshake is over — or at once
+		// with HS2_MCONN_STRIPE_OVERLAP (mconn_stripe_overlap.go)
+		var av []any
+		next := false
+		if m.stFastMore > 0 && m.handshaking && m.mode == planeLight && m.stripeOverlapLocked() && m.stripeFastNextLocked() {
+			next = true
+			stripeOverlapStat.Add(1)
+			av = m.stripeAvoidLocked()
+		}
 		m.mu.Unlock()
+		if next {
+			m.openStripe(av, false) // the chain goes on from there
+		}
 		return
 	}
 	sub, key, err := m.open(planeStripe, avoid)
-	for try := 0; err != nil && m.stripeFastRetry(try); try++ {
+	for try := 0; err != nil && err != errStripeSteerHeld && m.stripeFastRetry(try); try++ {
 		sub, key, err = m.open(planeStripe, avoid) // HS2_MCONN_STRIPE_FAST: the pool's set-aside link, soon
 	}
 	m.mu.Lock()
 	m.stOpening = false
+	if err == errStripeSteerHeld {
+		// sd151: the steering refused a cut path's link (the connection has
+		// a healthy sub): no fast retries, a growing wait before the next
+		// try (the pool was asked once; mconn_stripe_steer.go)
+		m.stRetryAt = m.stripeSteerHoldLocked(time.Now())
+		m.stFastMore = 0
+		m.stripeIdleLocked()
+		m.mu.Unlock()
+		return
+	}
+	if err == nil {
+		m.stSteerHeldN = 0
+	}
 	if err != nil {
 		m.stRetryAt = m.stripeRetryLocked(time.Now())
 		stripeStat.refused.Add(1)
@@ -432,6 +577,8 @@ func (m *mConn) onStripe(s *msub) {
 	m.mu.Lock()
 	if !m.ended && !s.stripe {
 		s.stripe = true
+		s.stJoinAt = time.Now() // HS2_DL240_YOUNG (mconn_dl240.go)
+		m.dl242ArmLocked(s)     // HS2_DL242_RESCUE (mconn_dl242.go)
 		m.stN++
 		if mtr := subMeter(s); mtr != nil && stripeAlone {
 			// the exit's TUN lane: heavy now and while the sub lives, used
@@ -474,8 +621,8 @@ func (m *mConn) stripeRankLocked(s, p *msub) int {
 		if x == s {
 			return r
 		}
-		if x.stripe && x != p && !x.retired && !x.dead {
-			r++
+		if x.stripe && x != p && !x.retired && !x.dead && !m.stripeSubCutLocked(x) && !m.dl259SubCutLocked(x) {
+			r++ // HS2_LB_STRIPE_STEER: a cut path's sub takes no slot of the width
 		}
 	}
 	return r
@@ -498,6 +645,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	var cold time.Time
 	var best *msub
 	bestQ, striped := 0, false
+	var bestCut *msub // HS2_LB_STRIPE_STEER: the best sub on a cut path
+	var young *msub   // HS2_DL240_YOUNG: a young sub at its probation budget (mconn_dl240.go)
+	bestCutQ, healthy := 0, false
 	nsubs := len(m.subs)
 	// the scavenger's width (mconn_stripe_scav.go): only the first w stripe
 	// subs (in the order they joined) may take chunks; -1: all
@@ -509,6 +659,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 		if c := m.stPool.rebuildCap(time.Now()); c >= 0 && (w < 0 || w > c) {
 			w = c // HS2_MCONN_STRIPE_REBUILD: this pool is rebuilding after a mass loss
 		}
+	}
+	if w >= 0 && p != nil && m.stripeSubCutLocked(p) {
+		w++ // HS2_LB_STRIPE_STEER: a cut primary takes no slot of the width either (st150)
 	}
 	for i := range nsubs {
 		s := m.subs[(m.stRR+i)%nsubs]
@@ -532,8 +685,34 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 				if s.coldLocked(cold) {
 					continue
 				}
+				if m.dl259SubCutLocked(s) {
+					continue // HS2_DL259_PATHQ: its path's queue is over the target (mconn_dl259.go)
+				}
+				if dlp217ShareQ > 0 && m.dlp217HoldLocked(s, time.Now()) {
+					continue // HS2_FX212_DL_SHAREQ_MS: its shared link's queue is over the bound (mconn_dlp217.go)
+				}
+				if s.dl242.hold && m.dl242HoldLocked(s, time.Now()) {
+					continue // HS2_DL242_RESCUE: rescued, nothing delivered yet (mconn_dl242.go)
+				}
+				if dl240Young.Load() && m.dl240HoldLocked(s, time.Now()) {
+					if young == nil && s.fits(c.n) {
+						young = s // HS2_DL240_YOUNG: only when no other sub can take it (mconn_dl240.go)
+					}
+					continue
+				}
 			}
 		}
+		if m.stripeSubCutLocked(s) {
+			// HS2_LB_STRIPE_STEER (mconn_stripe_steer.go): a cut path's sub
+			// only when no sub on a path not cut is in the stripe
+			if s.fits(c.n) {
+				if q := s.queueLocked(); bestCut == nil || q < bestCutQ {
+					bestCut, bestCutQ = s, q
+				}
+			}
+			continue
+		}
+		healthy = true
 		if !s.fits(c.n) {
 			continue
 		}
@@ -544,6 +723,16 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	if !striped {
 		return stripeNone
 	}
+	if best == nil && young != nil {
+		best = young // HS2_DL240_YOUNG: never a wait for the probation alone
+		dl240Stat.fallback.Add(1)
+	}
+	if best == nil && !healthy && bestCut != nil {
+		best = bestCut
+		stripeSteerStat.sendCut.Add(1)
+	} else if bestCut != nil && best != nil {
+		stripeSteerStat.sendOff.Add(1)
+	}
 	if best == nil {
 		return stripeWait
 	}
@@ -551,16 +740,24 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	c.setOff(m.sendOff)
 	m.sendOff += uint64(c.n)
 	best.push(c)
+	m.missLost = true // cs221
 	if best != p {
 		stripeDiag.subB.Add(uint64(c.n))
 	}
 	now := time.Now()
+	if dlp217ShareQ > 0 && !m.iran {
+		if best != p && dlp217Shared(m.subMeterOf(best)) {
+			dlp217Stat.sent.Add(1)
+		}
+		dlp217Log(now)
+	}
 	for _, s := range m.subs {
 		if s != best && !s.retired {
 			s.lastHole = now
 		}
 	}
 	best.lastPush = now
+	m.stripeUpNotePushLocked(best, now) // hl222 (mconn_stripe_upqctl.go)
 	best.stPushed = now
 	liteBud.add(now.Unix(), c.n, 0)
 	stripeStat.bytes.Add(uint64(c.n))
@@ -585,6 +782,10 @@ func stripeHold(ml *managedLink, d int) {
 	if stripeHeld.n[ml] += d; stripeHeld.n[ml] <= 0 {
 		delete(stripeHeld.n, ml)
 	}
+	// lk165: the same count, readable without stripeHeld.mu (stripeOn under
+	// HS2_LM_FASTPICK). Written only here, under stripeHeld.mu, so it always
+	// equals the map entry (clamped at 0 the way the delete clamps it).
+	ml.stripeHeldN.Store(int32(max(stripeHeld.n[ml], 0)))
 	if ml.mtr != nil {
 		ml.mtr.stripeN.Add(int32(d)) // the TUN lane leaves the link at once (l3_lane.go)
 	}
@@ -595,6 +796,11 @@ func stripeHold(ml *managedLink, d int) {
 func stripeOn(ml *managedLink) bool {
 	if stripeK.Load() == 0 {
 		return false
+	}
+	if lmFastPick.Load() {
+		// lk165: lock-free (98.8% of the edge's mutex wait in the sc161
+		// storm was this lock, taken once per link per pick scan)
+		return ml.stripeHeldN.Load() > 0
 	}
 	stripeHeld.mu.Lock()
 	n := stripeHeld.n[ml]
@@ -613,13 +819,21 @@ func stripeFree(ml *managedLink) bool {
 // links; none: it asks the pool for a link of its own. Without stripeAlone
 // (the first version): a free link, the fewest users first.
 func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
+	l, rel, ok, _ := m.pickStripeWhy(avoid)
+	return l, rel, ok
+}
+
+// pickStripeWhy is pickStripe; held (sd151): no link because the steering
+// refused a cut path's link while the connection has a healthy sub (the
+// caller backs off instead of trying again at once: mconn_stripe_steer.go).
+func (m *LinkManager) pickStripeWhy(avoid []any) (Link, func(), bool, bool) {
 	pool := m.exitInfo.Load()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	free := 0
+	free, empty := 0, 0 // empty (diag60): free links no user rides — the only ones stripeAlone takes
 	var chosen *managedLink
 	var bestUsers, bestRecent int
-	bestRes := false
+	bestRes, bestCut := false, false // bestCut: HS2_LB_STRIPE_STEER (mconn_stripe_steer.go)
 	ties := 0
 	for _, ml := range m.links {
 		if m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() || !linkMConn(ml, pool) {
@@ -636,20 +850,25 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 		} else {
 			free++
 		}
-		if avoided(ml.link, avoid) {
+		if avoided(ml.link, avoid) || stripeEvacSkip(ml.link) { // HS2_MCONN_STRIPE_EVAC (mconn_stripe_evac.go)
 			continue
 		}
 		u, r := int(ml.users.Load()), ml.recent
+		if u == 0 {
+			empty++
+		}
 		if stripeAlone && u > 0 {
 			// a light user's sub on a stripe link waits behind the stripe's
 			// loss recovery (TCP is one byte stream): every loss on the link
 			// holds the game's packet a round trip. Empty links only.
 			continue
 		}
+		cut := m.stripeCutLocked(ml)
 		switch {
-		case bestRes && !res:
-		case chosen == nil || res && !bestRes || u < bestUsers || u == bestUsers && r < bestRecent:
-			chosen, bestUsers, bestRecent, bestRes, ties = ml, u, r, res, 1
+		case chosen != nil && cut && !bestCut: // a path not cut first
+		case chosen != nil && cut == bestCut && bestRes && !res:
+		case chosen == nil || !cut && bestCut || res && !bestRes || u < bestUsers || u == bestUsers && r < bestRecent:
+			chosen, bestUsers, bestRecent, bestRes, bestCut, ties = ml, u, r, res, cut, 1
 		case u == bestUsers && r == bestRecent:
 			ties++
 			if rand.IntN(ties) == 0 {
@@ -659,33 +878,131 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	}
 	hint, hinted := stripeDirOf(avoid)
 	shared, xdir := false, false
-	if (chosen == nil || !bestRes && free-1 < stripeKeepFree) && hinted {
+	dlHot := false // dlp217: shared on a download's hot tier (HS2_FX212_DL_PRIM=2)
+	// HS2_LB_STRIPE_STEER: only a cut path's link here — the cross-direction
+	// pick (a link only stripes ride) may find one on a path not cut, and the
+	// shared pick when the keep-free rule sends it there anyway; else it goes
+	// on the cut one below (never a stall)
+	origNeed := chosen == nil || !bestRes && free-1 < stripeKeepFree
+	cutChosen := chosen != nil && bestCut
+	need := origNeed || cutChosen
+	m.stSteerNoCut = cutChosen // the shared / cross-direction picks: paths not cut only
+	defer func() { m.stSteerNoCut = false }()
+	upg := stripeUpgOf(avoid) // HS2_MCONN_STRIPE_UPG_IDLE (mconn_stripe_upgidle.go)
+	idleUpg := false
+	if upg && need && chosen != nil && !cutChosen {
+		// an upload's raw upgrade takes an idle link even past the
+		// keep-free rule (one link, asked again from the pool below): its
+		// handshake must not wait behind a shared link's queue
+		need, idleUpg = false, true
+		stripeUpgStat.idle.Add(1)
+	}
+	if need && hinted && upg {
+		stripeUpgStat.deferred.Add(1)
+	}
+	if need && hinted && !upg {
 		// HS2_MCONN_STRIPE_XDIR (mconn_stripe_xdir.go): a link only the other
 		// direction's stripes ride, before a light user's link
 		if ml := m.pickStripeXDirLocked(avoid, pool, hint.up); ml != nil {
-			chosen, bestRes, xdir = ml, false, true
+			chosen, bestRes, xdir, need = ml, false, true, false
 			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
 		}
 	}
-	if !xdir && (chosen == nil || !bestRes && free-1 < stripeKeepFree) && stripeShare && !stripeUpNoShare(avoid) {
+	shareWhy := "share=off"
+	if need && stripeShare && stripeUpNoShare(avoid) {
+		shareWhy = "share=refused-upload-noshare"
+	}
+	if need && stripeShare && !stripeUpNoShare(avoid) && origNeed {
 		// HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go): a busy pool has no
-		// link without a user — a lightly loaded one instead
-		if ml := m.pickStripeSharedLocked(avoid, pool); ml != nil {
-			chosen, bestRes, shared = ml, false, true
+		// link without a user — a lightly loaded one instead (never only to
+		// leave a cut path's free link: a light user's link is worse)
+		ml, why := m.pickStripeSharedWhyLocked(avoid, pool)
+		shareWhy = "share: " + why.String()
+		if ml != nil {
+			chosen, bestRes, shared, need = ml, false, true, false
+			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
+			dlHot = why.tier == 2
+		}
+	}
+	if need && hinted && upg {
+		// the upgrade's last resort: a cross-direction link still beats none
+		if ml := m.pickStripeXDirLocked(avoid, pool, hint.up); ml != nil {
+			chosen, bestRes, xdir, need = ml, false, true, false
+			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
+			stripeUpgStat.lastXdir.Add(1)
+		}
+	}
+	switch {
+	case need && cutChosen && stripeAlone && m.stripeHasHealthyLocked(avoid):
+		// st150: the connection already has a sub on a path not cut, so a
+		// cut path's sub would take nothing (the sender keeps off it): a
+		// fresh link from the pool instead (the exit dials it on a path its
+		// balancer weighs); the stripe runs on what it has meanwhile
+		m.stSteerNoCut = false
+		m.stripeSteerAskLocked(m.now(), stripeWantOf(avoid)) // sd151: deduped
+		return nil, nil, false, true
+	case need && cutChosen:
+		// HS2_LB_STRIPE_STEER: no link on a path not cut — the cut one, by
+		// the rules it had without the key (never a stall for the steering);
+		// and a fresh link asked from the pool for the next pick (st150)
+		need = origNeed
+		if upg && need {
+			need, idleUpg = false, true
+			stripeUpgStat.idle.Add(1)
+		}
+		m.stSteerNoCut = false
+		if need && hinted {
+			if ml := m.pickStripeXDirLocked(avoid, pool, hint.up); ml != nil {
+				chosen, bestRes, xdir, need = ml, false, true, false
+				bestUsers, bestRecent = int(ml.users.Load()), ml.recent
+			}
+		}
+		if need && stripeShare && !stripeUpNoShare(avoid) {
+			// the shared pick as without the key (a cut path's link too)
+			if ml, why := m.pickStripeSharedWhyLocked(avoid, pool); ml != nil {
+				chosen, bestRes, shared, need = ml, false, true, false
+				bestUsers, bestRecent = int(ml.users.Load()), ml.recent
+				dlHot = why.tier == 2
+			}
+		}
+		if !need {
+			stripeSteerStat.fallback.Add(1)
+			if stripeAlone && m.stripeCutLocked(chosen) {
+				m.stripeAskLocked(m.now(), stripeWantOf(avoid)) // st150 (none taken: asked below)
+			}
+		}
+	case cutChosen: // a shared or cross-direction link on a path not cut
+		stripeSteerStat.moved.Add(1)
+	case !need && m.stripeCutLocked(chosen):
+		stripeSteerStat.fallback.Add(1)
+	}
+	if need && stripeDlShare.Load() && stripeDlShareOf(avoid) && !(hinted && hint.up) {
+		// HS2_MCONN_STRIPE_DL_SHARE (mconn_stripe_dlshare.go): a download's
+		// first subs share a heavy link rather than stay on one lossy link
+		if ml := m.pickStripeDlShareLocked(avoid, pool); ml != nil {
+			chosen, bestRes, need = ml, false, false
 			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
 		}
 	}
-	if !shared && !xdir && (chosen == nil || !bestRes && free-1 < stripeKeepFree) {
+	if need {
 		stripeDiag.pickNone.Add(1)
 		if stripeAlone {
 			m.stripeAskLocked(m.now(), stripeWantOf(avoid))
 		}
 		if stripeLog {
-			log.Printf("stripe pick: none (free=%d chosen=%v) — asked the pool for a link", free, chosen != nil)
+			// free: links with no download and nothing flowing; empty: those
+			// of them no user rides (diag60: free>0 with empty=0 is a pool
+			// where every link has an idle user)
+			log.Printf("stripe pick: none (free=%d empty=%d chosen=%v up=%v) %s — asked the pool for a link", free, empty, chosen != nil, hinted && hint.up, shareWhy)
+			log.Printf("stripe pickwhy %s", m.stripePickWhyLocked(avoid, pool)) // dl188 (mconn_stripe_pickwhy.go)
 		}
-		return nil, nil, false
+		return nil, nil, false, false
+	}
+	if idleUpg && stripeAlone {
+		m.stripeAskLocked(m.now(), stripeWantOf(avoid)) // the free link it took, again
 	}
 	m.placeLocked(chosen)
+	m.stripeSteerNoteLocked(chosen) // HS2_LB_STRIPE_STEER(_LOG) (mconn_stripe_steer.go)
 	if bestRes {
 		chosen.stripeRes = time.Time{}       // its hold passes to the sub
 		m.stripeReserveRefillLocked(m.now()) // HS2_MCONN_STRIPE_FAST_RESERVE (mconn_stripe_fast.go)
@@ -694,6 +1011,9 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	}
 	if shared {
 		chosen.stShared.Add(1)
+		if dlHot {
+			chosen.stDlHot.Add(1) // dlp217
+		}
 	}
 	dirN := stripeDirN(chosen, hint.up, hinted)
 	if dirN != nil {
@@ -707,7 +1027,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 		}
 	}
 	if stripeLog {
-		log.Printf("stripe pick: link %d set-aside=%v shared=%v xdir=%v users=%d recent=%d free=%d", chosen.id, bestRes, shared, xdir, bestUsers, bestRecent, free)
+		log.Printf("stripe pick: link %d set-aside=%v shared=%v xdir=%v upgrade=%v users=%d recent=%d free=%d", chosen.id, bestRes, shared, xdir, upg, bestUsers, bestRecent, free)
 	}
 	rel := m.releaseFor(chosen)
 	var once sync.Once
@@ -717,12 +1037,15 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 			stripeHold(chosen, -1)
 			if shared {
 				chosen.stShared.Add(-1)
+				if dlHot {
+					chosen.stDlHot.Add(-1)
+				}
 			}
 			if dirN != nil {
 				dirN.Add(-1)
 			}
 		})
-	}, true
+	}, true, false
 }
 
 // openStripe is the edge's open for planeStripe: one try, no waiting (the
@@ -733,17 +1056,24 @@ func (e *mconnEdge) openStripe(avoid []any) (mSub, any, error) {
 	if e.ended || !e.first {
 		return nil, nil, errMConnNoLink
 	}
-	l, rel, ok := e.lm.pickStripe(avoid)
+	l, rel, ok, held := e.lm.pickStripeWhy(avoid)
+	if held {
+		return nil, nil, errStripeSteerHeld // sd151: no retry spin
+	}
 	if !ok {
 		return nil, nil, errMConnNoLink
 	}
 	st, err := l.OpenStream()
 	if err == nil {
 		autoWinOffForStripe(e.lm, st) // HS2_SMUX_AUTOWIN (smux_autowin.go)
+		dl76Mark(st)
 		if _, err = st.Write(mconnHeader(e.port, e.id, mconnRoleJoin)); err == nil {
-			s := &mconnSub{stream: st, plane: planeStripe, release: rel}
+			// evacHS: HS2_MCONN_STRIPE_EVAC_DOWN moves a stripe sub through the
+			// close handshake (mconn_stripe_evac.go)
+			s := &mconnSub{stream: st, plane: planeStripe, release: rel, evacHS: peerCloseHS(l), edge: e}
 			mconnPlaneGauge(planeStripe).Add(1)
 			e.subs = append(e.subs, s)
+			e.opened++
 			return s, l, nil
 		}
 		st.Close()

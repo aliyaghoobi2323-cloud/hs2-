@@ -53,8 +53,9 @@ func TestJudgeFailFrontNotLoss(t *testing.T) {
 // with one front-handshake failure out of two dials. Old rule: B lowered to
 // ~0.19 ("lower: loss 1.1%"). New rule: B stays at 1.
 func TestJudgeEqualPathsFrontFailure(t *testing.T) {
-	old := lbJudgeData
-	t.Cleanup(func() { lbJudgeData = old })
+	old, oldEv := lbJudgeData, lbLowerEvid
+	t.Cleanup(func() { lbJudgeData, lbLowerEvid = old, oldEv })
+	lbLowerEvid = false // wj178: one low reading alone no longer lowers a path at all (lb_deadband178.go)
 	run := func(on bool) (float64, string) {
 		lbJudgeData = on
 		j := newQ2Judge(lb2Floor, "k", "i", func(string, ...any) {})

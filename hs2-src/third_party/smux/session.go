@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,7 @@ const (
 	defaultAcceptBacklog = 1024
 	maxShaperSize        = 1024
 	openCloseTimeout     = 30 * time.Second // stream open/close timeout
+	abandonCloseTimeout  = 3 * time.Second  // hs2 fx247: Close's frames after a CloseWrite timed out
 )
 
 // define frame class
@@ -37,7 +39,51 @@ type writeRequest struct {
 	class  CLASSID
 	frame  Frame
 	seq    uint32
+	jump   uint32 // hs2 SmallFirst: the request ranks as if queued jump requests earlier
 	result chan writeResult
+	own    *reqOwn // hs2 rc134
+}
+
+// reqOwn (rc134): who may read a queued request's frame.data, and the
+// writer's copy once it gave up.
+type reqOwn struct {
+	st   atomic.Uint32 // reqPending/reqTaken/reqCopying/reqDetached/reqReleased
+	data []byte        // reqDetached: the copy sendLoop sends instead
+}
+
+// hs2 rc134: who owns a queued request's frame.data. Upstream writeFrame
+// returned on its deadline (or the session's end) while the request still sat
+// in the shaper or s.writes, and sendLoop copied frame.data later: the caller
+// had already reused the buffer (hs2 returns its pooled chunk on the error),
+// so the frame carried another record's bytes (race detector: getChunkN vs
+// sendLoop's slicecopy). The request still goes out later as before (the
+// control loop's stuck measure counts on the queued pings, control.go), but
+// with a copy the writer makes before it returns; a request sendLoop already
+// took is waited for until sendLoop is done reading its data (the copy into
+// its buffer, a few us; with WriteBuffers, the socket write).
+const (
+	reqPending uint32 = iota
+	reqTaken
+	reqCopying
+	reqDetached
+	reqReleased
+)
+
+// take (sendLoop): the data to send for req, now sendLoop's to read.
+func (o *reqOwn) take(data []byte) []byte {
+	for {
+		switch o.st.Load() {
+		case reqPending:
+			if o.st.CompareAndSwap(reqPending, reqTaken) {
+				return data
+			}
+		case reqDetached:
+			o.st.Store(reqTaken)
+			return o.data
+		default: // reqCopying: the writer is copying it
+			runtime.Gosched()
+		}
+	}
 }
 
 type writeResult struct {
@@ -86,16 +132,25 @@ type Session struct {
 	requestID uint32            // write request monotonic increasing
 	shaper    chan writeRequest // a shaper for writing
 	writes    chan writeRequest
+	writesB   chan *[]writeRequest // Config.SendBatch (sendbatch.go)
 
 	aw sessAW // hs2: loop-RTT minimum for Config.AutoWindow
+
+	// hs2 mem67 (stall.go): unix ns when the current conn write started (0:
+	// idle), when recvLoop began waiting on an empty bucket (0: not waiting),
+	// and when a stream last returned tokens
+	writeBusySince, recvWaitSince, lastTokens atomic.Int64
 }
 
 func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 	s := new(Session)
+	TrackObject(s, &objSessions)
+	regSession(s)
 	s.die = make(chan struct{})
 	s.conn = conn
 	s.config = config
 	s.streams = make(map[uint32]*Stream)
+	liveSessions.Add(1)
 	s.chAccepts = make(chan *Stream, defaultAcceptBacklog)
 	s.bucket = int32(config.MaxReceiveBuffer)
 	s.bucketNotify = make(chan struct{}, 1)
@@ -111,11 +166,20 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 		s.nextStreamID = 0
 	}
 
-	go s.shaperLoop()
+	if config.SendBatch > 0 { // hs2 lk179 (sendbatch.go)
+		s.writesB = make(chan *[]writeRequest)
+		go s.shaperLoopBatch()
+		go s.sendLoopBatch()
+	} else {
+		go s.shaperLoop()
+		go s.sendLoop()
+	}
 	go s.recvLoop()
-	go s.sendLoop()
 	if !config.KeepAliveDisabled {
 		go s.keepalive()
+	}
+	if config.StallTimeout > 0 {
+		go s.stallWatch()
 	}
 	return s
 }
@@ -159,6 +223,7 @@ func (s *Session) OpenStream() (*Stream, error) {
 		return nil, io.ErrClosedPipe
 	default:
 		s.streams[sid] = stream
+		liveStreams.Add(1)
 		return stream, nil
 	}
 }
@@ -211,6 +276,13 @@ func (s *Session) Close() error {
 			s.streams[k].sessionClose()
 			s.streams[k].awRelease()
 		}
+		liveStreams.Add(-int64(len(s.streams)))
+		liveSessions.Add(-1)
+		// hs2 mem66: a stream still held (an mConn keeps its dead first
+		// sub) held this session and, through the map, every stream open
+		// when it died with their unread buffers; the map goes now
+		// (streamClosed after this finds nothing to remove)
+		clear(s.streams)
 		s.streamLock.Unlock()
 		return s.conn.Close()
 	} else {
@@ -233,6 +305,14 @@ func (s *Session) notifyBucket() {
 }
 
 func (s *Session) notifyReadError(err error) {
+	// fx170: the carrier's EOF (a FIN or close_notify on the link) ends
+	// every stream mid-way; a stream's Read reported it as io.EOF, the same
+	// as the peer's FIN on that stream, so a relay took a cut stream as a
+	// complete one (a truncated download handed to the user with a clean
+	// FIN). Only cmdFIN is a stream's EOF.
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
 	s.socketReadErrorOnce.Do(func() {
 		s.socketReadError.Store(err)
 		close(s.chSocketReadError)
@@ -303,18 +383,28 @@ func (s *Session) RemoteAddr() net.Addr {
 // notify the session that a stream has closed
 func (s *Session) streamClosed(sid uint32) {
 	s.streamLock.Lock()
+	if s.streams[sid] == nil { // hs2 mem66: the session's Close cleared the map
+		s.streamLock.Unlock()
+		return
+	}
 	if n := s.streams[sid].recycleTokens(); n > 0 { // return remaining tokens to the bucket
 		if atomic.AddInt32(&s.bucket, int32(n)) > 0 {
 			s.notifyBucket()
 		}
 	}
 	s.streams[sid].awRelease()
-	delete(s.streams, sid)
+	if !s.IsClosed() { // hs2 mem66: a closed session's Close counts its map
+		if _, ok := s.streams[sid]; ok {
+			liveStreams.Add(-1)
+		}
+		delete(s.streams, sid)
+	}
 	s.streamLock.Unlock()
 }
 
 // returnTokens is called by stream to return token after read
 func (s *Session) returnTokens(n int) {
+	s.lastTokens.Store(nowNano())
 	if atomic.AddInt32(&s.bucket, int32(n)) > 0 {
 		s.notifyBucket()
 	}
@@ -326,12 +416,16 @@ func (s *Session) recvLoop() {
 	var updHdr updHeader
 
 	for {
-		for atomic.LoadInt32(&s.bucket) <= 0 && !s.IsClosed() {
-			select {
-			case <-s.bucketNotify:
-			case <-s.die:
-				return
+		if atomic.LoadInt32(&s.bucket) <= 0 && !s.IsClosed() {
+			s.recvWaitSince.Store(nowNano())
+			for atomic.LoadInt32(&s.bucket) <= 0 && !s.IsClosed() {
+				select {
+				case <-s.bucketNotify:
+				case <-s.die:
+					return
+				}
 			}
+			s.recvWaitSince.Store(0)
 		}
 
 		// read header first
@@ -349,6 +443,7 @@ func (s *Session) recvLoop() {
 				if _, ok := s.streams[sid]; !ok {
 					stream := newStream(sid, s.config.MaxFrameSize, s)
 					s.streams[sid] = stream
+					liveStreams.Add(1)
 					select {
 					case s.chAccepts <- stream:
 					case <-s.die:
@@ -377,6 +472,14 @@ func (s *Session) recvLoop() {
 						s.notifyReadError(err)
 						return
 					}
+				} else {
+					// hs2 hc213: an empty push is the peer's "abandoned"
+					// mark (Stream.Close without CloseWrite, half-open)
+					s.streamLock.Lock()
+					if stream, ok := s.streams[sid]; ok {
+						stream.abandoned()
+					}
+					s.streamLock.Unlock()
 				}
 			case cmdUPD:
 				if _, err := io.ReadFull(s.conn, updHdr[:]); err == nil {
@@ -462,6 +565,9 @@ func (s *Session) shaperLoop() {
 			}
 			heap.Push(&reqs, r)
 		case chWrite <- next:
+			if next.jump > 0 && overtook(reqs, next) {
+				smallFirstOvertakes.Add(1)
+			}
 		}
 	}
 }
@@ -488,20 +594,26 @@ func (s *Session) sendLoop() {
 		case <-s.die:
 			return
 		case request := <-s.writes:
+			data := request.own.take(request.frame.data)
 			buf[0] = request.frame.ver
 			buf[1] = request.frame.cmd
-			binary.LittleEndian.PutUint16(buf[2:], uint16(len(request.frame.data)))
+			binary.LittleEndian.PutUint16(buf[2:], uint16(len(data)))
 			binary.LittleEndian.PutUint32(buf[4:], request.frame.sid)
 
+			s.writeBusySince.Store(nowNano())
 			if len(vec) > 0 {
 				vec[0] = buf[:headerSize]
-				vec[1] = request.frame.data
+				vec[1] = data
 				n, err = bw.WriteBuffers(vec)
+				vec[1] = nil
+				request.own.st.Store(reqReleased)
 			} else {
-				copy(buf[headerSize:], request.frame.data)
-				n, err = s.conn.Write(buf[:headerSize+len(request.frame.data)])
+				copy(buf[headerSize:], data)
+				request.own.st.Store(reqReleased) // the data is ours now
+				n, err = s.conn.Write(buf[:headerSize+len(data)])
 			}
 
+			s.writeBusySince.Store(0)
 			n -= headerSize
 			if n < 0 {
 				n = 0
@@ -532,11 +644,35 @@ func (s *Session) writeFrame(f Frame) (n int, err error) {
 
 // internal writeFrame version to support deadline used in keepalive
 func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class CLASSID) (int, error) {
+	return s.writeFrameCut(f, deadline, nil, class)
+}
+
+// writeFrameCut: writeFrameInternal that also gives up when cut closes (hs2
+// er94, Stream.SetWriteDeadline into the past).
+func (s *Session) writeFrameCut(f Frame, deadline <-chan time.Time, cut <-chan struct{}, class CLASSID) (int, error) {
+	return s.writeFrameQueued(f, deadline, cut, class, nil)
+}
+
+// writeFrameQueued: writeFrameCut that unlocks queued (if not nil) once the
+// request is in the shaper (or was given up on before): requests queued in
+// that lock's order leave in that order (same class and jump; aw163).
+func (s *Session) writeFrameQueued(f Frame, deadline <-chan time.Time, cut <-chan struct{}, class CLASSID, queued func()) (int, error) {
+	if queued != nil {
+		defer func() {
+			if queued != nil {
+				queued()
+			}
+		}()
+	}
 	req := writeRequest{
 		class:  class,
 		frame:  f,
 		seq:    atomic.AddUint32(&s.requestID, 1),
 		result: make(chan writeResult, 1),
+		own:    new(reqOwn),
+	}
+	if sf := s.config.SmallFirst; sf > 0 && class == CLSDATA && len(f.data) <= sf {
+		req.jump = SmallFirstJump
 	}
 	select {
 	case s.shaper <- req:
@@ -546,16 +682,52 @@ func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class C
 		return 0, s.socketWriteError.Load().(error)
 	case <-deadline:
 		return 0, ErrTimeout
+	case <-cut:
+		return 0, ErrTimeout
+	}
+	if queued != nil {
+		queued()
+		queued = nil
 	}
 
+	var err error
 	select {
 	case result := <-req.result:
 		return result.n, result.err
 	case <-s.die:
-		return 0, io.ErrClosedPipe
+		err = io.ErrClosedPipe
 	case <-s.chSocketWriteError:
-		return 0, s.socketWriteError.Load().(error)
+		err = s.socketWriteError.Load().(error)
 	case <-deadline:
-		return 0, ErrTimeout
+		err = ErrTimeout
+	case <-cut:
+		err = ErrTimeout
 	}
+	return s.giveUp(&req, err)
+}
+
+// giveUp (rc134): the writer stops waiting for req. A request sendLoop has
+// not taken gets its own copy of the data (it still goes out, as upstream);
+// a taken one is waited for until sendLoop is done reading the data. Either
+// way the caller may reuse its buffer once this returns, and err is reported
+// as before.
+func (s *Session) giveUp(req *writeRequest, err error) (int, error) {
+	o := req.own
+	if o.st.CompareAndSwap(reqPending, reqCopying) {
+		o.data = append([]byte(nil), req.frame.data...)
+		o.st.Store(reqDetached)
+		return 0, err
+	}
+	for i := 0; o.st.Load() == reqTaken; i++ {
+		if i < 64 {
+			runtime.Gosched()
+			continue
+		}
+		select { // WriteBuffers: the data is the socket write's until it returns
+		case r := <-req.result:
+			return r.n, r.err
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return 0, err
 }

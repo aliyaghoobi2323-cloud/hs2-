@@ -2,6 +2,7 @@ package engine
 
 import (
 	"sync/atomic"
+	"time"
 )
 
 // Close handshake for an idle lite second sub (HS2_MCONN_CLOSE_HS=1 on both
@@ -30,7 +31,8 @@ import (
 //     (the only copies it held may be lost: the usual reset rule), so Kharej
 //     never takes the sub as closed while its bytes may be in flight. A
 //     third record is needed because the stream's EOF cannot tell Iran's
-//     close from a link that went down (smux reports io.EOF for both).
+//     close from a link that went down (smux reported io.EOF for both;
+//     fx170: a dead link now reads io.ErrUnexpectedEOF).
 //
 // Iran never closes the sub without CLOSE-ACK: it stays open (and out of
 // use) until the ACK, the link's death, or the end of the connection.
@@ -98,6 +100,12 @@ func (m *mConn) onCloseReq(s *msub) bool {
 	}
 	s.closeHS = true
 	s.retired = true
+	m.stripeCloseResendLocked(s) // HS2_MCONN_STRIPE_EVAC_DOWN (mconn_stripe_evac.go): a stripe sub's bytes ride a live sub too
+	if !s.stripe && cs223CallResend.Load() && m.callKeepLocked() && m.subUndeliveredLocked(s, time.Now()) {
+		// cs223: a given-up call sub that may hold undelivered bytes: they
+		// ride a live sub now, not at its death (an idle sub's close resends nothing)
+		m.cs223GiveUpResendLocked(s, m.resendTargetLocked())
+	}
 	c := getChunk(mRecCloseAck)
 	c.setOff(s.txEnd)
 	s.push(c)

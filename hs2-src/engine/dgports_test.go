@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -15,11 +17,68 @@ import (
 // loopback addresses: the edge's user ports listen on one 127.0.0.x, the
 // exit's "tun IP" is another, exactly as the forwarders see the real tun.
 
+// dgIPs returns n loopback addresses (127.a.b.c, Linux routes all of 127/8 to
+// lo) that no other dg test uses. The dg exit listens on FIXED ports
+// (DgTunPort, DgTagPort), so two exits on one address collide: the second
+// one's tagged port fails with "address already in use" (it then runs
+// untagged, as in production), and its edge's probe is answered by the OTHER
+// exit, which also gets the test's connections and logs them in its own log —
+// "timed out: the exit names the port" in TestDgPortsEmptySides. The other
+// exit was the previous -count iteration's (its listener closes in a goroutine
+// after the test's context ends, late on a loaded host) or the same test in a
+// second `go test ./engine` running on the host at the same time (race147 ran
+// several). Fixed 127.0.0.x constants made both possible; a random address
+// out of 2^24, never handed out twice in a process and checked free on both
+// ports, makes neither.
+func dgIPs(t *testing.T, n int) []string {
+	t.Helper()
+	out := make([]string, 0, n)
+	for len(out) < n {
+		ip := fmt.Sprintf("127.%d.%d.%d", 1+rand.IntN(254), rand.IntN(256), 1+rand.IntN(254))
+		dgIPsMu.Lock()
+		taken := dgIPsUsed[ip]
+		dgIPsUsed[ip] = true
+		dgIPsMu.Unlock()
+		if !taken && dgIPFree(ip) {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
+var (
+	dgIPsMu   sync.Mutex
+	dgIPsUsed = map[string]bool{}
+)
+
+// dgIPFree reports whether nothing listens on ip's fixed dg ports now.
+func dgIPFree(ip string) bool {
+	for _, p := range []string{DgTunPort, DgTagPort} {
+		ln, err := net.Listen("tcp", net.JoinHostPort(ip, p))
+		if err != nil {
+			return false
+		}
+		ln.Close()
+	}
+	return true
+}
+
+// dgPair is dgIPs for the usual edge + exit pair.
+func dgPair(t *testing.T) (edgeIP, exitIP string) {
+	ips := dgIPs(t, 2)
+	return ips[0], ips[1]
+}
+
 func startDgPair(t *testing.T, edgeIP, exitIP string, udp bool, def string, routes map[int]string, ports ...string) (edge, exit func() *PeerRoutes, logs *logSink) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	logs = &logSink{}
+	t.Cleanup(func() { // race147: what both sides said, to tell a flake's cause
+		if t.Failed() {
+			t.Logf("edge %s / exit %s log:\n%s", edgeIP, exitIP, logs)
+		}
+	})
 	var err error
 	exit, err = StartDgPorts(ctx, DgPortsConfig{LocalTunIP: exitIP, Default: def, Routes: routes, UDP: udp, Log: logs.logf})
 	if err != nil {
@@ -44,7 +103,7 @@ func dgWait(t *testing.T, what string, ok func() bool) {
 }
 
 func TestDgPortsRouteEachPort(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.11", "127.0.0.12"
+	edgeIP, exitIP := dgPair(t)
 	def, a := namedPanel(t, "default"), namedPanel(t, "A")
 	p1, p2 := freePortOn(t, edgeIP), freePortOn(t, edgeIP)
 	n2, _ := strconv.Atoi(p2)
@@ -74,7 +133,7 @@ func TestDgPortsRouteEachPort(t *testing.T) {
 // probe is refused, TCP falls back without losing the connection, UDP goes
 // untagged, and every port reaches the one panel — as before.
 func TestDgPortsOlderExit(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.13", "127.0.0.14"
+	edgeIP, exitIP := dgPair(t)
 	panel := namedPanel(t, "panel")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -104,7 +163,7 @@ func TestDgPortsOlderExit(t *testing.T) {
 // An OLDER edge (it sends every user port to DgTunPort) in front of a newer
 // exit with a port_map: everything reaches the default panel, as before.
 func TestDgPortsOlderEdge(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.15", "127.0.0.16"
+	edgeIP, exitIP := dgPair(t)
 	def, a := namedPanel(t, "default"), namedPanel(t, "A")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -129,7 +188,7 @@ func TestDgPortsOlderEdge(t *testing.T) {
 // Something that is not an hs2 exit answering on the tagged port never gets
 // a user's bytes: the probe sees no hs2 answer and the edge stays untagged.
 func TestDgPortsForeignListenerOnTagPort(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.17", "127.0.0.18"
+	edgeIP, exitIP := dgPair(t)
 	panel := namedPanel(t, "panel")
 	foreign, err := net.Listen("tcp", net.JoinHostPort(exitIP, DgTagPort))
 	if err != nil {
@@ -165,7 +224,7 @@ func TestDgPortsForeignListenerOnTagPort(t *testing.T) {
 // An exit with port_map entries and no expose refuses an unmapped port and
 // says which, once a minute.
 func TestDgPortsNoDefault(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.19", "127.0.0.20"
+	edgeIP, exitIP := dgPair(t)
 	a := namedPanel(t, "A")
 	p1, p2 := freePortOn(t, edgeIP), freePortOn(t, edgeIP)
 	n1, _ := strconv.Atoi(p1)
@@ -190,7 +249,7 @@ func TestDgPortsNoDefault(t *testing.T) {
 // turns per-port routing off instead of leaving every connection to time out,
 // and connections reach the default panel.
 func TestDgPortsTagPortFiltered(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.21", "127.0.0.22"
+	edgeIP, exitIP := dgPair(t)
 	def, a := namedPanel(t, "default"), namedPanel(t, "A")
 	old := dgDialFn
 	dgDialFn = func(ctx context.Context, addr string, rcvbuf int, timeout time.Duration) (net.Conn, error) {
@@ -222,7 +281,7 @@ func (timeoutErr) Temporary() bool { return true }
 func TestDgPortsTunDownStaysUnknown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	e := &dgEdge{cfg: DgPortsConfig{PeerTunIP: "127.0.0.23", Log: func(string, ...any) {}}, kick: make(chan struct{}, 1),
+	e := &dgEdge{cfg: DgPortsConfig{PeerTunIP: dgIPs(t, 1)[0], Log: func(string, ...any) {}}, kick: make(chan struct{}, 1),
 		dial: func(context.Context, string, int, time.Duration) (net.Conn, error) {
 			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: timeoutErr{}}
 		}}
@@ -234,7 +293,7 @@ func TestDgPortsTunDownStaysUnknown(t *testing.T) {
 // Something on the tagged port accepts but never answers like an hs2 exit:
 // the edge never sends it a user's bytes.
 func TestDgPortsSilentListenerOnTagPort(t *testing.T) {
-	const exitIP = "127.0.0.24"
+	exitIP := dgIPs(t, 1)[0]
 	ln, err := net.Listen("tcp", net.JoinHostPort(exitIP, DgTagPort))
 	if err != nil {
 		t.Skip(err)
@@ -270,7 +329,7 @@ func TestDgPortsSilentListenerOnTagPort(t *testing.T) {
 // One refused UDP flow (an exit without UDP on the tagged port) never turns
 // per-port routing off for the whole edge: it only asks the probe.
 func TestDgPortsRefusedUDPFlowKeepsState(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.29", "127.0.0.30" // nothing listens on exitIP
+	edgeIP, exitIP := dgPair(t) // nothing listens on exitIP
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	p1 := freePortOn(t, edgeIP)
@@ -301,7 +360,7 @@ func TestDgPortsRefusedUDPFlowKeepsState(t *testing.T) {
 // A UDP flow that began tagged is redone untagged as soon as the edge learns
 // the exit no longer routes tags (and back) — it never stays on a dead path.
 func TestDgPortsUDPFlowFollowsState(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.25", "127.0.0.26"
+	edgeIP, exitIP := dgPair(t)
 	def, a := namedPanel(t, "default"), namedPanel(t, "A")
 	p1 := freePortOn(t, edgeIP)
 	n1, _ := strconv.Atoi(p1)
@@ -353,7 +412,7 @@ func TestDgPortsUDPFlowFollowsState(t *testing.T) {
 // exit is found — never called "filtered" by that race (it used to send every
 // port to the default panel for the first seconds of a reverse tunnel).
 func TestDgPortsTunUpMidProbe(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.27", "127.0.0.28"
+	edgeIP, exitIP := dgPair(t)
 	def, a := namedPanel(t, "default"), namedPanel(t, "A")
 	p1 := freePortOn(t, edgeIP)
 	n1, _ := strconv.Atoi(p1)
@@ -382,7 +441,7 @@ func TestDgPortsTunUpMidProbe(t *testing.T) {
 // reuses a source port for ANOTHER user port, the stale flow is replaced, not
 // the new datagrams dropped.
 func TestDgPortsExitUDPFlowReuse(t *testing.T) {
-	const exitIP = "127.0.0.31"
+	exitIP := dgIPs(t, 1)[0]
 	a, b := namedPanel(t, "A"), namedPanel(t, "B")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -418,7 +477,7 @@ func TestDgPortsExitUDPFlowReuse(t *testing.T) {
 // exactly that (and tags, so a refused port is named) instead of calling it
 // an older hs2; and an edge with no user port still tells the exit so.
 func TestDgPortsEmptySides(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.32", "127.0.0.33"
+	edgeIP, exitIP := dgPair(t)
 	p1 := freePortOn(t, edgeIP)
 	edge, _, logs := startDgPair(t, edgeIP, exitIP, false, "", nil, p1)
 	dgWait(t, "probe", func() bool { r := edge(); return r.Known && !r.Default && len(r.Ports) == 0 })
@@ -427,7 +486,7 @@ func TestDgPortsEmptySides(t *testing.T) {
 	}
 	dgWait(t, "the exit names the port", func() bool { return logs.count("Iran user port "+p1+" (tcp) has no target", 0) == 1 })
 
-	const edge2, exit2 = "127.0.0.34", "127.0.0.35"
+	edge2, exit2 := dgPair(t)
 	_, exit, _ := startDgPair(t, edge2, exit2, false, namedPanel(t, "d"), nil)
 	dgWait(t, "an edge without user ports still reports", func() bool { r := exit(); return r.Known && len(r.Ports) == 0 })
 }
@@ -435,7 +494,7 @@ func TestDgPortsEmptySides(t *testing.T) {
 // One silence of the tagged port right after "yes" (a tun flap) is not taken
 // for a filter; the second in a row is.
 func TestDgPortsFlapIsNotFiltered(t *testing.T) {
-	const exitIP = "127.0.0.38"
+	exitIP := dgIPs(t, 1)[0]
 	tag := net.JoinHostPort(exitIP, DgTagPort)
 	ln, err := net.Listen("tcp", net.JoinHostPort(exitIP, DgTunPort)) // the tun answers on 28443
 	if err != nil {
@@ -480,7 +539,7 @@ func TestDgPortsFlapIsNotFiltered(t *testing.T) {
 // probe, a TCP connection on the newly mapped port already reaches its own
 // target — the exit decides with the table it has now.
 func TestDgPortsTCPFollowsExitTableAtOnce(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.39", "127.0.0.40"
+	edgeIP, exitIP := dgPair(t)
 	def, a := namedPanel(t, "default"), namedPanel(t, "A")
 	p1 := freePortOn(t, edgeIP)
 	n1, _ := strconv.Atoi(p1)
@@ -526,7 +585,7 @@ func TestDgPortsTCPFollowsExitTableAtOnce(t *testing.T) {
 // waits for the first probe (an untagged dial would wait for the tun just the
 // same) instead of going untagged to the default panel.
 func TestDgPortsStartWaitsForTun(t *testing.T) {
-	const edgeIP, exitIP = "127.0.0.41", "127.0.0.42"
+	edgeIP, exitIP := dgPair(t)
 	def, a := namedPanel(t, "default"), namedPanel(t, "A")
 	p1 := freePortOn(t, edgeIP)
 	n1, _ := strconv.Atoi(p1)

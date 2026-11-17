@@ -43,10 +43,11 @@ func TestDgExitForwarderSurvivesPanelOnWildcard(t *testing.T) {
 	defer cancel()
 	nolog := func(string, ...any) {}
 
-	if err := StartDgForwarders(ctx, false, []string{userPort}, "", "", "127.0.0.1", panel, false, nolog); err != nil {
+	tunIP := dgIPs(t, 1)[0] // a fixed address collides with other dg tests (dgIPs)
+	if err := StartDgForwarders(ctx, false, []string{userPort}, "", "", tunIP, panel, false, nolog); err != nil {
 		t.Fatalf("exit forwarder did not start despite the panel on the wildcard: %v", err)
 	}
-	roundTrip(t, "127.0.0.1:"+DgTunPort)
+	roundTrip(t, net.JoinHostPort(tunIP, DgTunPort))
 }
 
 // The user ports are configured once, on the edge: an exit started with NO
@@ -58,17 +59,17 @@ func TestDgForwarderUserPortsLiveOnlyOnEdge(t *testing.T) {
 	defer cancel()
 	nolog := func(string, ...any) {}
 
-	// The exit's tun address is 127.0.0.3 here (the wildcard test uses 127.0.0.1),
-	// so the two tests never contend for DgTunPort.
-	if err := StartDgForwarders(ctx, false, nil, "", "", "127.0.0.3", panel, false, nolog); err != nil {
+	// Addresses of their own (dgIPs), so no other test contends for DgTunPort.
+	edgeIP, exitIP := dgPair(t)
+	if err := StartDgForwarders(ctx, false, nil, "", "", exitIP, panel, false, nolog); err != nil {
 		t.Fatalf("exit forwarder with no port list did not start: %v", err)
 	}
-	p1, p2 := freePortOn(t, "127.0.0.2"), freePortOn(t, "127.0.0.2")
-	if err := StartDgForwarders(ctx, true, []string{p1, p2}, "127.0.0.2", "127.0.0.3", "", "", false, nolog); err != nil {
+	p1, p2 := freePortOn(t, edgeIP), freePortOn(t, edgeIP)
+	if err := StartDgForwarders(ctx, true, []string{p1, p2}, edgeIP, exitIP, "", "", false, nolog); err != nil {
 		t.Fatalf("edge forwarder did not start: %v", err)
 	}
 	for _, p := range []string{p1, p2} {
-		roundTrip(t, "127.0.0.2:"+p)
+		roundTrip(t, net.JoinHostPort(edgeIP, p))
 	}
 }
 
@@ -76,10 +77,11 @@ func TestDgForwarderUserPortsLiveOnlyOnEdge(t *testing.T) {
 func TestDgExitWithoutPanelOpensNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := StartDgForwarders(ctx, false, []string{"8443"}, "", "", "127.0.0.4", "", false, func(string, ...any) {}); err != nil {
+	tunIP := dgIPs(t, 1)[0]
+	if err := StartDgForwarders(ctx, false, []string{"8443"}, "", "", tunIP, "", false, func(string, ...any) {}); err != nil {
 		t.Fatalf("exit without a panel returned an error: %v", err)
 	}
-	if c, err := net.DialTimeout("tcp", "127.0.0.4:"+DgTunPort, 300*time.Millisecond); err == nil {
+	if c, err := net.DialTimeout("tcp", net.JoinHostPort(tunIP, DgTunPort), 300*time.Millisecond); err == nil {
 		c.Close()
 		t.Fatal("exit without a panel is listening on the tun forwarder port")
 	}

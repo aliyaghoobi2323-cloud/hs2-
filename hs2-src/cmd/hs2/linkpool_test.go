@@ -432,8 +432,25 @@ func TestWarmFile(t *testing.T) {
 	if n := warmLinks(func(string, ...any) {}, 2, 300); n != 0 {
 		t.Fatalf("a warm value below the default start size gave %d, want 0 (the default)", n)
 	}
-	old := time.Now().Add(-warmMaxAge - time.Minute)
-	os.Chtimes(warmPath(cfg), old, old)
+	// ou180: a 22-min outage (prod: a missing binary kept the unit failing)
+	// still comes back at the old size; past warmMaxAge at half; past
+	// warmOldAge cold.
+	w.last = 0
+	w.note(120)
+	at := func(ago time.Duration) {
+		t.Helper()
+		old := time.Now().Add(-ago)
+		os.Chtimes(warmPath(cfg), old, old)
+	}
+	at(22 * time.Minute)
+	if n := readWarm(cfg); n != 120 {
+		t.Fatalf("22 min old: %d, want 120", n)
+	}
+	at(warmMaxAge + time.Minute)
+	if n := readWarm(cfg); n != 60 {
+		t.Fatalf("past warmMaxAge: %d, want half (60)", n)
+	}
+	at(warmOldAge + time.Minute)
 	if n := readWarm(cfg); n != 0 {
 		t.Fatalf("stale: %d, want 0", n)
 	}

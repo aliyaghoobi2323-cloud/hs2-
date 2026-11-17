@@ -114,6 +114,9 @@ type l3Link struct {
 	// path is the key of the path the link's TCP connection rides ("" not
 	// known); HS2_DUP_PATHS puts a second copy on another path (dup_paths.go).
 	path string
+	// cut (nil: none) is its tunnel's cut path set, set by l3Set.add
+	// (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go).
+	cut *l3CutSet
 	// qs is the link's HS2_QUIET_IDLE state (nil: off; quiet.go).
 	qs   *quietState
 	dead atomic.Bool
@@ -318,9 +321,13 @@ type l3Set struct {
 	// receiving side (nil until the other server sent a parity packet).
 	fec   *l3Fec
 	fecRx atomic.Pointer[l3FecRx]
+	// cut: this tunnel's cut paths (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go);
+	// add points each link at it.
+	cut l3CutSet
 }
 
 func (s *l3Set) add(l *l3Link) {
+	l.cut = &s.cut
 	s.mu.Lock()
 	s.links = append(s.links, l)
 	s.mu.Unlock()

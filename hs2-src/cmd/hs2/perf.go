@@ -69,6 +69,8 @@ var perfKeys = func() []perfKey {
 		"HS2_LB_SPARE_PER_ROUND":    {"kharej: spare links asked per rebalance round", "خارج: لینک یدکی در هر دور توازن"},
 		"HS2_LB_REC_CONFIRM":        {"kharej: one bad tiny reading does not restart a cut path's recovery", "خارج: یک خوانش بد کوچک بازگشت مسیر قطع‌شده را از نو شروع نمی‌کند"},
 		"HS2_LB_FLAP_PEN":           {"kharej: a flapping path is kept out longer (30 min, up to 2 h)", "خارج: مسیر نوسانی مدت بیشتری بیرون می‌ماند (۳۰ دقیقه تا ۲ ساعت)"},
+		"HS2_LB_SILENT":             {"kharej: a blackholed path (nothing acked) is cut, held out while dark, probed every 2 s", "خارج: مسیر سیاه‌چاله (هیچ تأییدی نمی‌رسد) قطع می‌شود، تا تاریک است بیرون می‌ماند و هر ۲ ثانیه آزموده می‌شود"},
+		"HS2_LB_EDGE_SYNC":          {"Iran: keeps a path cut while kharej still cuts it (no false cut/recover ping-pong)", "ایران: مسیری که خارج هنوز قطع نگه داشته، قطع می‌ماند (بدون رفت‌وبرگشت کاذب قطع/بازگشت)"},
 		"HS2_L3_DUP":                {"duplicate tiny packets of calls/games on a second link", "تکرار بسته‌های کوچک تماس/بازی روی لینک دوم"},
 		"HS2_MCONN":                 {"multi-connection mode (lite = production)", "حالت چنداتصالی (lite = پیش‌فرض)"},
 		"HS2_MCONN_STRIPE_RESEND":   {"a striped connection survives a dead link (resend + 3 s rejoin)", "اتصال راه‌راه با مرگ یک لینک قطع نمی‌شود (بازفرستی + ۳ ثانیه پیوستن دوباره)"},
@@ -419,7 +421,7 @@ func perfCmd(args []string) {
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("perf "+sub, flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	lang := langFlag(fs)
 	adv := fs.Bool("advanced", false, "show every key")
 	within := fs.Duration("confirm-within", 5*time.Minute, "trial time before the automatic rollback")

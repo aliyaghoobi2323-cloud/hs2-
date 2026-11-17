@@ -9,6 +9,25 @@ smux stream over a pool of real TLS 1.3 links (Chrome fingerprint, real
 certificate, active-probe resistance). The kharej server opens its own
 connection to the panel. There is never TCP inside TCP.
 
+> **Current docs.** This file is the v3 overview of the source tree. The
+> behaviour of the current releases (rel60 … rel67b) — production defaults on
+> reverse `l3mtcp` (`envdef/envdef.go`), load balancing, rescue, KEEPSTALL,
+> the adaptive window, status counters — is documented in the repository's
+> root `README.md`, and every release in the root `CHANGELOG.md`. Building and
+> testing: `BUILD.md`; real-server checks: `VALIDATION.md`.
+
+## Build and test (summary)
+
+Go 1.27 toolchain, from this directory (details and the full release
+checklist in `BUILD.md`):
+```bash
+export GOPROXY=off GOFLAGS=-mod=mod      # offline, from the module cache
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" ./cmd/hs2
+go vet ./... && go test ./...
+go test -race ./engine
+(cd third_party/smux && go test ./...)   # the smux fork is its own module
+```
+
 ## What it does
 
 - Opens user ports on the Iran server and forwards them to a panel inbound on
@@ -52,6 +71,8 @@ the per-connection cap; use `mtcp` there.
 ## Requirements
 
 - Two Linux servers (tested on Ubuntu 22.04+), root access.
+- `net.ipv4.tcp_mtu_probing=1` on both (hs2's tuning sets it when run as root;
+  `hs2 doctor` warns otherwise).
 - A domain whose A record points to the **kharej** server.
 - Port 80 free on the kharej server during first install (for the certificate),
   or an existing Let's Encrypt certificate for the domain.

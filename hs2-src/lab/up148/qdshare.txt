@@ -1,0 +1,12 @@
+l4on   ARM=ON   SC=L   upload pkts    366449  path1 share   6.1%  path1 drops  3.06%
+l5on   ARM=ON   SC=L   upload pkts    359835  path1 share   2.2%  path1 drops  3.00%
+l6on   ARM=ON   SC=L   upload pkts    346918  path1 share   9.6%  path1 drops  2.93%
+l4off  ARM=OFF  SC=L   upload pkts    345093  path1 share  14.7%  path1 drops  3.08%
+l5off  ARM=OFF  SC=L   upload pkts    366532  path1 share  17.5%  path1 drops  3.01%
+l6off  ARM=OFF  SC=L   upload pkts    367764  path1 share  22.9%  path1 drops  2.92%
+m2on   ARM=ON   SC=M   upload pkts    346184  path1 share  18.7%  path1 drops  0.52%
+m2off  ARM=OFF  SC=M   upload pkts    347225  path1 share  20.6%  path1 drops  0.51%
+u4on   ARM=ON   SC=U   upload pkts   4718276  path1 share   8.5%  path1 drops  3.05%
+u5on   ARM=ON   SC=U   upload pkts   5001320  path1 share   9.5%  path1 drops  2.98%
+u4off  ARM=OFF  SC=U   upload pkts   4358312  path1 share   6.0%  path1 drops  3.03%
+u5off  ARM=OFF  SC=U   upload pkts   4888445  path1 share  15.4%  path1 drops  3.00%

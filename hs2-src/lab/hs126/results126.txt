@@ -1,0 +1,49 @@
+# hs126 lab1 (198.51.100.168 only) — final acceptance of HS2_MCONN_STRIPE_KEEPSTALL (both sides), on hs123 (b3815d90)
+# Binary hs2-k123 = bin123 release build (sha256 f1731e4c...), both sides; key on/off by env only; mixed: hs2-r61 (16d1629d).
+# 36 runs, 3 slots, interleaved (j1.txt), 16:07-16:40 UTC. Q = quiet 150 s; bS = path 49.2->53.1 dark one way 30..90 s.
+# Per-run lines: ana-all.txt (hs126), ana-hs123.txt (hs123 runs re-analysed, pooled). Stats: stat-hs126.txt, stat-pooled.txt
+#   (stat126.py: Welch t (exact t-dist), exact two-sided Mann-Whitney). gw/glive = exit stripe gate width / live subs,
+#   mean over "stripe gate" lines with live>=2 (the exit queue-limiter spread). Void: qu8off2 (iperf3 crash, mbps None).
+
+## quiet download d8 (Mbit/s)
+hs126 ON  1138  954  876  675 1257   (gw 5.2 4.2 3.1 2.3 5.4)
+hs126 off 1192 1239 1322 1132 1309   (gw 5.3 4.8 4.7 3.5 3.9)
+ hs126 n=5/5: ON mean 980 vs off 1239 (-21 %), Welch p=0.062, MWU p=0.095
+ pooled with hs123 (ON 702 1230, off 1019 1063) n=7/7: ON mean 976 med 954 vs off 1182 med 1192 (-17 %), Welch 0.073, MWU 0.128
+ light p99 pooled (ON vs off median): call 573 vs 488 (MWU p=0.026), echo 338 vs 327, crowd 467 vs 425, ping 406 vs 384
+ Gate: within ON, throughput follows the exit gate width (675 at w 2.3, 876 at 3.1, 1138-1257 at 5.2-5.4); off runs
+ keep w 3.5-5.3 and all >= 1132. Live subs are the same (5-6) -> the exit gate cuts more with the key on (it cuts on
+ the path queue of the other links), i.e. the key's cost sits in the exit's queue-limiter, not in the sub count.
+ CPU ir/kh 2.3/2.5 vs 2.4/2.7; RSS kh 868 vs 907 MB (ns).
+## quiet download d1 (4 more per arm)
+hs126 ON  806 576 582 799 / off 819 786 757 1089: ON 690 vs 862 (p 0.14 / 0.34); light call99 ON 349 vs 277 (Welch 0.009, MWU 0.029)
+pooled n=7/7: ON 769 med 806 vs off 806 med 819 (Welch 0.67); call99 324 vs 293 (0.11); RSS kh 737 vs 663 MB (p<0.001, +75 MB)
+## quiet upload
+u1 hs126 ON 606 530 / off 569 495; pooled n=3/3 ON 564 vs 482 (p 0.27); light p99 equal.
+u8 hs126 ON 949 1035 / off 1308 (+ qu8off2 void); pooled ON 1054 (n=3) vs 1040 (n=2) (p 0.97);
+   light p99 ON higher: echo 254 vs 212, crowd 301 vs 250, call 379 vs 336 (ns, n=3; off arm includes the void run's p99)
+## dark (one-way blackhole 30..90 s)
+download key OFF: xdoff1-3  94 / 106 / 115 Mbit/s, zero 119 / 119 / 119 s, gapRST 1/1/1 (connection reset "missing bytes
+  never arrived") -> 0/3 survive. crowdfail 60 / 75 / 82.
+download key ON : xdon3 895, xdon4 772 (+ hs123 xd1 657, xd2 854): zero 0, gapRST 0, 4/4 survive; kh rto closes 2/1;
+  crowdfail 56 / 69 (hs123 66 / 68). pooled mbps Welch p=0.001, zero MWU p=0.029. Light p99 in dark runs equal
+  (crowd 248 vs 267, echo 212 vs 220). Cost in dark: cpu ir/kh 2.2/2.4 vs 1.9/1.7, RSS ir 772 vs 530 MB, kh 785 vs 708.
+upload key OFF: xuoff1 107 (zero 119, gapRST 1, died), xuoff2 445 (zero 0, survived) -> 1/2.
+upload key ON : xuon3 474 (+ hs123 xu1 589, xu2 654): zero 0, 3/3 survive. crowdfail 61 (70/83) vs off 83/89.
+## mixed (dark download, key ON env on both; rel61 ignores it)
+mxe61 rel61 edge + new exit: 165 Mbit/s zero 118 gapRST 1 -> dies
+mxx61 new edge + rel61 exit: 111 Mbit/s zero 119 gapRST 1 -> dies (Iran hole_sub 2851, RSS ir 1347 MB)
+-> the dark survival needs BOTH sides new + key on; one new side gives no gain (and no harm vs off: same death).
+
+## verdict
+Dark survival: key ON 100 % (download 4/4, upload 3/3) vs off 0/3 download, 1/2 upload — the key does what it is for.
+Quiet: d8 throughput ON is lower in every comparison (-21 % hs126 p=0.06, -17 % pooled p=0.07; 3 of 5 hs126 ON runs
+below the lowest off run) and light call p99 worse (d8 MWU 0.026, d1 hs126 0.029); d1/u1/u8 throughput not different.
+Criteria "quiet throughput not significantly lower in any class, light p99 not worse" are NOT met (d8 at p 0.06-0.07,
+-17..-21 %, plus call p99). -> KEY STAYS OFF. No envdef / README / CHANGELOG / table-count change, no new binary:
+bin123 (f1731e4c) stays the build of record (its tests: hs123 test-all / test-race, 0 races).
+Rollout guidance if the operator wants dark survival anyway (opt-in): HS2_MCONN_STRIPE_KEEPSTALL=1 on BOTH sides with
+the hs123 build on both (mixed rel61 pairings die like key off); expect d8 -17..-21 % in quiet and +60-75 MB kh RSS on d1.
+Next: the exit gate with the key on — find why the other links' path queue reads higher (kept chunks pinning the
+exit's smux windows / later window updates on the dark-free subs?) and gate the key's sender side on a detected dark
+sub only (receiver side alone, hs123 Iran-only d8 1208/1198, had no cost).

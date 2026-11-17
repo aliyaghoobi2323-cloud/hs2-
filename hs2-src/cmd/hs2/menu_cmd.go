@@ -31,7 +31,7 @@ func die(format string, a ...any) {
 }
 
 func unitFlags(fs *flag.FlagSet) (unit, cfg, lang *string) {
-	unit = fs.String("u", "hs2", "systemd unit of the tunnel")
+	unit = unitFlag(fs, "hs2", "systemd unit of the tunnel")
 	cfg = fs.String("c", "", "config file (default: from the unit name)")
 	lang = fs.String("lang", "en", "output language: en|fa")
 	return

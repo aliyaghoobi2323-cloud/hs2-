@@ -362,16 +362,26 @@ type streamAW struct {
 	probeWin   uint32
 	probeAt    time.Time
 
-	pendingUPD bool      // the window changed: send a UPD at the next read
-	limitedAt  time.Time // last proof of being window-bound (or last change)
-	usedAt     time.Time // last sweep that saw the stream use half its window per RTT
-	tickRead   uint32
-	tickAt     time.Time
-	closed     bool
-	off        bool   // SetAutoWindowOff: upstream rules
-	offWin     uint32 // SetOffWindow: the fixed window while off (0: MaxStreamBuffer)
-	offDiv     uint32 // SetOffWindow: an update every offWin/offDiv read while off (0: 2)
-	strictNb   bool   // SetAutoWindowStrictNeighbor: the neighbour cap without Rel's queue proof
+	pendingUPD     bool      // the window changed: send a UPD at the next read
+	limitedAt      time.Time // last proof of being window-bound (or last change)
+	usedAt         time.Time // last sweep that saw the stream use half its window per RTT
+	tickRead       uint32
+	tickAt         time.Time
+	closed         bool
+	off            bool   // SetAutoWindowOff: upstream rules
+	offWin         uint32 // SetOffWindow: the fixed window while off (0: MaxStreamBuffer)
+	offDiv         uint32 // SetOffWindow: an update every offWin/offDiv read while off (0: 2)
+	strictNb       bool   // SetAutoWindowStrictNeighbor: the neighbour cap without Rel's queue proof
+	floorWant      uint32 // SetHeavyFloor: the base this stream takes once it receives at a heavy rate
+	floorBase      uint32 // the base before the floor (0: never raised)
+	floorGate      bool   // SetHeavyFloorGated: a queued probe drops the floor
+	floorNeed      uint8  // queued probes in a row that drop it
+	floorQ         uint8  // queued probes in a row so far
+	floorQE        bool   // a queued probe in this rate epoch
+	floorSoft      bool   // SetHeavyFloorSoft
+	floorAt        int64  // unix ns of the last raise
+	floorHold      time.Duration
+	floorHoldUntil int64 // unix ns: no raise before (gated)
 
 	recent  [awRecent]time.Duration // the last probe samples (queue rule)
 	nRecent int
@@ -397,8 +407,9 @@ func newStreamAW(cfg *AutoWindow, base int) *streamAW {
 
 // awConsumed is the AutoWindow version of the read side's UPD rule, called
 // with bufferLock held after numRead/incr were advanced by n. It returns the
-// consumed count and window to send (consumed 0: no UPD now).
-func (s *Stream) awConsumed(n uint32) (uint32, uint32) {
+// consumed count and window to send (consumed 0: no UPD now) and the UPD's
+// sequence number (sendWindowUpdateSeq).
+func (s *Stream) awConsumed(n uint32) (uint32, uint32, uint32) {
 	a := s.aw
 	if a.off { // upstream, byte for byte
 		if a.offWin > 0 || a.offDiv > 2 {
@@ -410,29 +421,29 @@ func (s *Stream) awConsumed(n uint32) (uint32, uint32) {
 			d := max(a.offDiv, 2)
 			if s.incr >= w/d || s.numRead == n || (a.pendingUPD && n > 0) {
 				s.incr, a.pendingUPD = 0, false
-				return s.numRead, w
+				return s.numRead, w, s.nextUPDSeqLocked()
 			}
-			return 0, 0
+			return 0, 0, 0
 		}
 		if s.incr >= uint32(s.sess.config.MaxStreamBuffer/2) || s.numRead == n {
 			s.incr = 0
-			return s.numRead, 0
+			return s.numRead, 0, s.nextUPDSeqLocked()
 		}
-		return 0, 0
+		return 0, 0, 0
 	}
 	if !(s.incr >= a.win/a.div || s.numRead == n || (a.pendingUPD && n > 0)) {
-		return 0, 0
+		return 0, 0, 0
 	}
 	s.incr = 0
 	if s.numRead == 0 {
-		return 0, 0
+		return 0, 0, 0
 	}
 	a.pendingUPD = false
 	if !a.probeOn && a.limit != s.numRead+a.win {
 		a.probeOn, a.probeLimit, a.probeWin, a.probeAt = true, a.limit, a.limitWin, time.Now()
 	}
 	a.limit, a.limitWin = s.numRead+a.win, a.win
-	return s.numRead, a.win
+	return s.numRead, a.win, s.nextUPDSeqLocked()
 }
 
 // awPushed accounts n received bytes (recvLoop: streamLock and bufferLock
@@ -457,6 +468,12 @@ func (s *Stream) awPushed(n uint32) {
 	a.lastRecv.Store(ns)
 	if ns-a.epochAt >= int64(rateEpoch) {
 		a.epochRate.Store(a.epochBytes)
+		if a.floorWant > a.base && a.epochBytes >= heavyFloorEpochBytes && a.awFloorMayRaiseLocked(ns) {
+			if f := a.awFloorTargetLocked(); f > a.base {
+				s.awRaiseBaseLocked(f)
+			}
+		}
+		a.floorQE = false
 		a.epochAt, a.epochBytes = ns, 0
 	}
 	a.epochBytes += n
@@ -484,6 +501,14 @@ func (s *Stream) awPushed(n uint32) {
 			// trip at once), not a queue, which builds up through the
 			// smaller excesses first and is cut there: no verdict
 			a.nRecent--
+			return
+		}
+	}
+	if a.floorGate && a.floorBase != 0 && a.base > a.floorBase {
+		if !a.awFloorQueued(sample, min, rawMin) {
+			a.floorQ = 0
+		} else if a.floorQ, a.floorQE = a.floorQ+1, true; a.floorQ >= a.floorNeed {
+			s.awDropFloorLocked(now) // dl77: the floor is queueing, not filling an idle link
 			return
 		}
 	}
@@ -634,7 +659,9 @@ func (s *Stream) awShrinkLocked(nw uint32, now time.Time) {
 	b.shrinks.Add(1)
 	atomic.AddInt32(&s.sess.bucket, -int32(d))
 	if consumed > 0 {
-		go s.sendWindowUpdate(consumed, nw) // the peer learns the smaller window now
+		// the peer learns the smaller window now, unless a later UPD already
+		// told it (aw163: never an older one after a newer)
+		go s.sendWindowUpdateSeq(consumed, nw, s.nextUPDSeqLocked())
 	}
 }
 

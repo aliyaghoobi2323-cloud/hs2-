@@ -1,0 +1,18 @@
+fl106 — lab1 (198.51.100.168), 2026-11-13. Base rel60 25a039a0. Mesh 10 paths (5 Iran IPs x 2 kharej), crowd 3000 w/ 40 s churn.
+Scenario F: path 49.2>53.1 dark 25 s / clean 25 s, 5 dark phases. Keys (both off by default, read from env, not in envdef):
+  HS2_LB_FLAP_FAST=1 (exit): 2 cuts in 5 min -> flap penalty 6 min (early back after 2 min clean).
+  HS2_LB_CUT_NONEW=1 (edge): a path the dialer reports cut gets 0 share of the steering draw (no new conns onto it).
+Diagnosis (A = rel60 defaults, n=3; B = FLAP_FAST, n=3; binary 7b3d6dee):
+  fails per dark phase  A: [172 23 21 13 20] [158 30 20 15 19] [167 31 14 25 17]  total 249/242/254
+                        B: [171 50 18 15 20] [154 35 20 28 18] [137 25 18 18 18]  total 274/255/216
+  - Phase 1 (~140-170) is the plain blackhole cost (silent cut ~10-12 s after dark).
+  - Key-off already holds the path after cut 2 (hold doubles to 1 min, dark every 50 s resets okSince) —
+    cuts = 2 in every run; FLAP_FAST engages at the same moment (cut 2), so B == A: NO GAIN.
+  - Phases 3-5 still cost 13-30 fails each while the path is CUT: the edge still draws new conns onto the cut
+    path's floor/probe links (steerDrawLocked weights a cut path by its reported share, floor 0.01; unit test:
+    10 % share cut path drawn 2058/20000). ~0.75 new conns/s x 25 s ~= 19 = observed. -> HS2_LB_CUT_NONEW.
+Queue2 (binary hs2-c 309bd54b, arms A / C = FLAP_FAST+CUT_NONEW / H = DEAD_HYST=5): j106b.txt
+  F C x4 + F4A, bP A/C x2, Qt A/C/H x1 — STARTED 07:59 UTC, NOT FINISHED at commit. Results: /opt/hs2lab/fl106/res,
+  summary: python3 /opt/hs2lab/fl106/sum106.py /opt/hs2lab/fl106/res/*
+Harness incident: queue1 workers died (exit 2) at 07:32 because seq106.sh was overwritten while bash was reading it;
+  queue2 waiter never fired; restarted by hand 07:59 UTC.

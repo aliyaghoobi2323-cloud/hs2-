@@ -30,6 +30,8 @@ type mtcpLink struct {
 
 	flowMu sync.Mutex
 	flows  map[*countedStream]struct{} // open user streams, for activity sampling
+
+	aid atomic.Uint64 // avoid identity (mconn_avoidkey.go), 0 until first used
 }
 
 func (l *mtcpLink) meter() *linkMeter { return l.mtr }
@@ -103,6 +105,9 @@ func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 	for cs := range l.flows {
 		b := cs.bytes.Load()
 		if cs.copyOnly.Load() {
+			if cs224CopyIdle.Load() && b != cs.prevBytes {
+				cs.lastActive = now // cs224: a copy sub moving bytes is not idle (idleStreams)
+			}
 			cs.prevBytes = b
 			fs.open++
 			continue
@@ -194,6 +199,9 @@ func (l *mtcpLink) slowStreams(max int) []idleCand {
 	for cs := range l.flows {
 		if len(out) >= max {
 			break
+		}
+		if slowSkipCopy && cs.copyOnly.Load() { // HS2_LB_SLOW_SKIP_COPY (lb_copyslow81.go)
+			continue
 		}
 		if float64(cs.ewma) < flowingRate && cs.steady != 7 {
 			out = append(out, idleCand{cs: cs, snap: cs.bytes.Load()})
@@ -347,7 +355,10 @@ func newSmuxConfig() *smux.Config {
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer
-	c.AutoWindow = smuxAutoWin // HS2_SMUX_AUTOWIN (smux_autowin.go); nil: off
+	c.AutoWindow = smuxAutoWin        // HS2_SMUX_AUTOWIN (smux_autowin.go); nil: off
+	c.SmallFirst = smuxSmallFirst     // HS2_SMUX_SMALL_FIRST (smux_smallfirst.go); 0: off
+	c.StallTimeout = smuxStallTimeout // HS2_SMUX_STALL_S (smux_stall.go)
+	c.SendBatch = smuxSendBatch       // HS2_SMUX_SENDBATCH (smux_sendbatch.go); 0: off
 	return c
 }
 
@@ -372,6 +383,7 @@ func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLin
 		return nil, err
 	}
 	l := &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}
+	memTrack(l, &memObjLinks)
 	if mtr.quiet != nil {
 		mtr.quiet.setUsers(func() bool { return l.Active() > 0 })
 	}

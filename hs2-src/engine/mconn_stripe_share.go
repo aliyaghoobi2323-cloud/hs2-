@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -89,50 +90,183 @@ const (
 // pickStripeSharedLocked (under m.mu): the least loaded light link for a
 // stripe sub, or nil.
 func (m *LinkManager) pickStripeSharedLocked(avoid []any, pool *peerInfo) *managedLink {
-	serving, busy, own, total := 0, 0, 0, 0
+	ml, _ := m.pickStripeSharedWhyLocked(avoid, pool)
+	return ml
+}
+
+// stripeShareWhy (diagnostics, diag60): why the shared pick found no link —
+// each serving link counted once, under the first rule that left it out.
+// Production (5000 users, 70 serving links, every link with a user) logged
+// "stripe pick: none (free=1..6 chosen=false)" 150+ times in 5 single
+// uploads, and 8 of the 10 uploads never got a stripe sub; the line did not
+// say which rule held the shared pick.
+type stripeShareWhy struct {
+	serving, busy, info, pressed, avoided, copies, call, lane int
+	cand, own, total                                          int
+	copyOK                                                    int // candidates with copies (SHARE_COPIES)
+	laneBusy                                                  int // candidates the lane used lately (SHARE_COPIES_LANEQ)
+	dlPrim                                                    int // fx212: copies' links left out for a light primary (download)
+	// dlp217 (DL_PRIM=2): copies' links with idle primaries (tier 1), with
+	// hot ones (tier 2), hot ones refused (HOTK spent), and this
+	// connection's shared subs already on hot links
+	dlQuiet, dlHot, dlHotRef, ownHot int
+	tier                             int  // dlp217: the picked link's tier (dlV2)
+	picked                           bool // a link was returned
+	half, kCap, totalCap             bool
+}
+
+func (w stripeShareWhy) String() string {
+	s := fmt.Sprintf("serving=%d busy=%d cand=%d skip[info=%d pressed=%d avoid=%d copies=%d call=%d lane=%d] copy-ok=%d lane-busy=%d own=%d total=%d dlprim=%d",
+		w.serving, w.busy, w.cand, w.info, w.pressed, w.avoided, w.copies, w.call, w.lane, w.copyOK, w.laneBusy, w.own, w.total, w.dlPrim)
+	if w.dlQuiet+w.dlHot+w.dlHotRef+w.ownHot > 0 {
+		s += fmt.Sprintf(" dlq=%d dlhot=%d dlhotref=%d ownhot=%d", w.dlQuiet, w.dlHot, w.dlHotRef, w.ownHot)
+	}
+	switch {
+	case w.kCap:
+		s += " refused=share-k"
+	case w.totalCap:
+		s += " refused=share-total"
+	case w.cand == 0:
+		s += " refused=no-candidate"
+	case w.half:
+		s += " refused=half-heavy"
+	}
+	return s
+}
+
+// pickStripeSharedWhyLocked: pickStripeSharedLocked and, when it gives no
+// link, why (stripeShareWhy).
+func (m *LinkManager) pickStripeSharedWhyLocked(avoid []any, pool *peerInfo) (*managedLink, stripeShareWhy) {
+	var w stripeShareWhy
 	now := ctrlNow()
 	var best *managedLink
+	bestC := 0 // best's copy-only streams (0 unless SHARE_COPIES)
+	// share62: SHARE_COPIES serves an upload's open only (stripeCopyUpHint)
+	shareCopies := stripeShareCopies.Load() && stripeCopyUp(avoid)
+	// fx212: a download's copies' links must carry no light primary
+	dlPrim := shareCopies && fx212DlPrim && stripeCopyDl(avoid)
+	dlV2 := dlPrim && fx212DlPrimMode == 2 // dlp217: grade, not refuse
+	bestCut := false                       // best on a cut path (HS2_LB_STRIPE_STEER)
+	bestLB := false                        // best's lane busy (HS2_MCONN_STRIPE_SHARE_COPIES_LANEQ)
+	bestT, bestH := 0, 0                   // dlp217: best's tier and hot primaries (dlV2)
 	for _, ml := range m.links {
 		if n := ml.stShared.Load(); n > 0 {
-			total += int(n) // every connection's shared subs
-			if avoided(ml.link, avoid) {
-				own++ // this connection's shared sub (avoid: its links)
+			w.total += int(n) // every connection's shared subs
+			if avoided(ml.link, avoid) || stripeEvacSkip(ml.link) {
+				w.own++ // this connection's shared sub (avoid: its links)
+				if ml.stDlHot.Load() > 0 {
+					w.ownHot++ // dlp217: placed on a hot link (tier 2)
+				}
 			}
 		}
+	}
+	for _, ml := range m.links {
 		if !ml.serving() {
 			continue
 		}
-		serving++
+		w.serving++
 		if ml.heavy > 0 || stripeOn(ml) {
-			busy++
+			w.busy++
 			continue
 		}
 		if m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() || !linkMConn(ml, pool) {
+			w.info++
 			continue
 		}
-		if ml.pressed || avoided(ml.link, avoid) || linkCopies(ml.link) > 0 {
+		switch {
+		case ml.pressed:
+			w.pressed++
+			continue
+		case avoided(ml.link, avoid):
+			w.avoided++
 			continue
 		}
-		if stripeCallFree && callLinkOn(ml.mtr, time.Now()) {
-			continue // HS2_MCONN_STRIPE_CALLFREE: a call rides it
+		nc, tier, hot := 0, 0, 0
+		if c := stripeLinkCopies(ml.link); c > 0 {
+			if !shareCopies {
+				w.copies++
+				continue
+			}
+			if dlV2 {
+				// dlp217: idle primaries rank after none, hot ones last and
+				// at most fx212DlPrimHotK per connection
+				prims, h := stripeLinkPrimHot(ml.link, fx212DlPrimQuiet)
+				fx212DlPrimStat.scanned.Add(1)
+				switch {
+				case prims == 0:
+				case h == 0:
+					tier = 1
+					w.dlQuiet++
+				case w.ownHot >= fx212DlPrimHotK:
+					w.copies++
+					w.dlHotRef++
+					fx212DlPrimStat.hotRef.Add(1)
+					continue
+				default:
+					tier, hot = 2, h
+					w.dlHot++
+				}
+			} else if dlPrim && stripeLinkPrims(ml.link) > 0 {
+				w.copies++ // fx212: a download's stripe never joins a light primary on a copies' link
+				w.dlPrim++
+				continue
+			}
+			nc = c // HS2_MCONN_STRIPE_SHARE_COPIES (mconn_stripe_sharecopy.go)
+			w.copyOK++
+		}
+		if (stripeCallFree || shareCopies) && callLinkOn(ml.mtr, time.Now()) {
+			w.call++
+			continue // HS2_MCONN_STRIPE_CALLFREE / SHARE_COPIES: a call rides it
 		}
 		if stripeShareLane && laneAtOf(ml) != 0 && now-laneAtOf(ml) < int64(stripeLaneQuiet) {
+			w.lane++
 			continue // the TUN lane's interactive flows ride it
 		}
-		if best == nil || ml.flowing < best.flowing || ml.flowing == best.flowing && (ml.rate10 < best.rate10 || ml.rate10 == best.rate10 && ml.users.Load() < best.users.Load()) {
-			best = ml
+		cut := m.stripeCutLocked(ml) // HS2_LB_STRIPE_STEER (mconn_stripe_steer.go)
+		if cut && m.stSteerNoCut {
+			continue
+		}
+		w.cand++
+		lb := shareCopies && stripeShareCopiesLaneQ && laneAtOf(ml) != 0 && now-laneAtOf(ml) < int64(stripeLaneQuiet)
+		if lb {
+			w.laneBusy++ // share62: a game's or a call's lane rides it, the others first
+		}
+		// dlp217: the tier (0 without dlV2) and the hot primaries rank
+		// before the old order
+		tb := tier < bestT || tier == bestT && hot < bestH
+		te := tier == bestT && hot == bestH
+		if best == nil || !cut && bestCut || cut == bestCut && (!lb && bestLB || lb == bestLB && (tb || te && (ml.flowing < best.flowing || ml.flowing == best.flowing && (nc < bestC || nc == bestC && (ml.rate10 < best.rate10 || ml.rate10 == best.rate10 && ml.users.Load() < best.users.Load()))))) {
+			best, bestC, bestLB, bestCut, bestT, bestH = ml, nc, lb, cut, tier, hot
 		}
 	}
-	if stripeShareK > 0 && own >= stripeShareK {
-		return nil
+	w.tier = bestT
+	if dlV2 {
+		defer func() { fx212DlPrimNote(w) }()
 	}
-	if stripeShareTotal > 0 && total >= stripeShareTotal {
-		return nil // the pool's budget is spent (several stripes share it)
+	if stripeShareK > 0 && w.own >= stripeShareK {
+		w.kCap = true
+		return nil, w
 	}
-	if best == nil || 2*(busy+1) > serving {
-		return nil
+	if best != nil && bestC > 0 && stripeShareCopiesK > 0 && w.own >= stripeShareCopiesK {
+		w.kCap = true // HS2_MCONN_STRIPE_SHARE_COPIES_K: fewer subs on the copies' links
+		return nil, w
 	}
-	return best
+	if stripeShareTotal > 0 && w.total >= stripeShareTotal {
+		w.totalCap = true
+		return nil, w // the pool's budget is spent (several stripes share it)
+	}
+	if best == nil {
+		return nil, w
+	}
+	if 2*(w.busy+1) > w.serving {
+		w.half = true
+		return nil, w
+	}
+	if shareCopies {
+		stripeShareCopiesNote(best, bestC, bestLB, w) // diagnostics (share62)
+	}
+	w.picked = true
+	return best, w
 }
 
 // stripeNoteRateLocked (Iran, the growth tick): the connection's rate now.

@@ -200,7 +200,7 @@ func statsCmd(args []string) {
 	etc := fs.String("etc", "/etc/hs2", "tunnel configs")
 	run := fs.String("run", statusRunDir, "live status directory")
 	state := fs.String("state", alertStateDir, "state directory")
-	unit := fs.String("u", "", "tunnel unit (show)")
+	unit := unitFlag(fs, "", "tunnel unit (show)")
 	fs.Parse(args[1:])
 	now := time.Now()
 	if args[0] == "show" {

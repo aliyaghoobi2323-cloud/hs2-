@@ -1,0 +1,195 @@
+== hv83 results (lab1, bin79 edge dec281e0 + rel58 exit 5d87000d for A arms; hs2X=c41593e6+guard both sides for X0/XG)
+-- scaling N=0/10/20/40 (arm A = production binaries)
+N=0 A   n=2 crowd95=96.5 crowd99=159.2 call99=191.7 late=3.5 game99=145.5 echo99=120.1 conn95=152.3 ping99=92.2 cfail=0.0 mbps=0.0 jain=nan cuts=0.0 held=0.0
+N=10 A   n=2 crowd95=130.3 crowd99=181.8 call99=213.5 late=13.1 game99=185.0 echo99=169.9 conn95=178.8 ping99=133.9 cfail=0.0 mbps=4242.8 jain=0.8 cuts=0.0 held=0.0
+N=20 A   n=2 crowd95=147.8 crowd99=189.5 call99=283.9 late=28.4 game99=208.4 echo99=157.3 conn95=202.1 ping99=147.5 cfail=0.0 mbps=5117.1 jain=0.7 cuts=0.0 held=0.0
+N=40 A   n=5 crowd95=198.1 crowd99=511.0 call99=1514.9 late=37.6 game99=417.9 echo99=287.7 conn95=694.6 ping99=184.6 cfail=34.2 mbps=4167.5 jain=0.5 cuts=7.0 held=0.0
+N=40 W   n=2 crowd95=216.9 crowd99=936.2 call99=4946.1 late=52.2 game99=185.0 echo99=213.6 conn95=1649.1 ping99=178.0 cfail=52.5 mbps=3748.7 jain=0.5 cuts=12.5 held=0.0
+N=40 L   n=1 crowd95=210.1 crowd99=924.6 call99=1838.1 late=37.2 game99=195.9 echo99=270.6 conn95=277.6 ping99=225.0 cfail=86.0 mbps=3407.0 jain=0.5 cuts=8.0 held=0.0
+-- exact permutation p (two-sided, mean diff), arm2 vs arm1
+N=40 W vs A: crowd95 +9.5% p=0.238, crowd99 +83.2% p=0.095, call99 +226.5% p=0.048, late +38.9% p=0.524, game99 -55.7% p=0.333, echo99 -25.8% p=0.286, conn95 +137.4% p=0.286, ping99 -3.6% p=0.952, cfail +53.5% p=0.524, mbps -10.1% p=0.476, jain -6.9% p=0.429, cuts +78.6% p=0.238, held +0.0% p=1.000
+-- per run
+== b0a  crowd p50/p95/p99=91/96/158 call p99=201 late%=3.6 game p99=134 echo p99=112 conn p95=185 ping p99=93.2 fail=0/0
+== b0b  crowd p50/p95/p99=91/97/160 call p99=182 late%=3.3 game p99=156 echo p99=128 conn p95=120 ping p99=91.1 fail=0/0
+== n10a  crowd p50/p95/p99=92/138/184 call p99=256 late%=24.1 game p99=183 echo p99=162 conn p95=186 ping p99=169.0 fail=0/0
+   users=10 sum_mbps=5183 | fast n=6 min/med/max=229/609/1407 jain=0.77 per-stream jain=0.96 | lte %cap min/med/max=67/78/90 | up n=2 125/206/287 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=183/196/551
+   ir: samples=29 links min/max=80/153 cpu% med/max=385/510 lb mbit med/max=3197/4490 path-samples lowered=80 {'lower: loss #%': 77, 'recovering': 3}
+      last counters {'stripe_gate_closed': 204, 'stripe_gate_grow': 2, 'aw_floor_subs': 58, 'stripe_q_us': 7634, 'stripe_width_avg': 0.23529411764705882, 'stripe_gate_cut': 203, 'smux_win_peak_mib': 20.7, 'stripe_refused': 198}
+   kh: samples=29 links min/max=103/153 cpu% med/max=406/545 lb mbit med/max=3185/4530 path-samples lowered=0 {}
+      last counters {'smux_win_peak_mib': 4, 'stripe_gate_closed': 648, 'stripe_gate_grow': 30, 'stripe_q_us': 849, 'stripe_width_avg': 0.9565217391304348, 'stripe_gate_cut': 87}
+   proc: cpu ir=366% kh=382% (avg cores*100) rss max ir=445 kh=606 MB
+== n10b  crowd p50/p95/p99=92/122/179 call p99=171 late%=2.1 game p99=187 echo p99=178 conn p95=171 ping p99=98.8 fail=0/0
+   users=10 sum_mbps=3303 | fast n=4 min/med/max=102/486/718 jain=0.75 per-stream jain=0.88 | lte %cap min/med/max=88/92/93 | up n=1 1110/1110/1110 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=166/310/424
+   ir: samples=28 links min/max=76/152 cpu% med/max=364/573 lb mbit med/max=2152/3362 path-samples lowered=84 {'lower: loss #%': 82, 'recovering': 2}
+      last counters {'aw_floor_subs': 64, 'smux_win_peak_mib': 18.4, 'stripe_gate_closed': 404, 'stripe_gate_grow': 2, 'stripe_q_us': 10969, 'stripe_width_avg': 0.27906976744186046, 'stripe_gate_cut': 399, 'stripe_refused': 186}
+   kh: samples=28 links min/max=102/152 cpu% med/max=332/552 lb mbit med/max=2144/3453 path-samples lowered=0 {}
+      last counters {'smux_win_peak_mib': 22, 'stripe_gate_closed': 130, 'stripe_gate_grow': 37, 'stripe_q_us': 131, 'stripe_width_avg': 1.1388888888888888, 'stripe_gate_cut': 9}
+   proc: cpu ir=374% kh=351% (avg cores*100) rss max ir=693 kh=519 MB
+== n20a  crowd p50/p95/p99=92/148/192 call p99=304 late%=46.5 game p99=251 echo p99=148 conn p95=199 ping p99=156.0 fail=0/0
+   users=20 sum_mbps=5666 | fast n=8 min/med/max=11/440/1237 jain=0.60 per-stream jain=0.87 | lte %cap min/med/max=68/81/92 | up n=4 6/180/277 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=189/260/494
+   ir: samples=29 links min/max=86/150 cpu% med/max=409/507 lb mbit med/max=3321/5049 path-samples lowered=114 {'lower: loss #%': 74, 'recovering': 26, 'lower: loss #%, queue #ms': 14}
+      last counters {'stripe_gate_cut': 221, 'stripe_gate_closed': 236, 'aw_floor_subs': 70, 'stripe_q_us': 21691, 'smux_win_peak_mib': 26.7, 'stripe_refused': 364}
+   kh: samples=29 links min/max=103/150 cpu% med/max=386/523 lb mbit med/max=3396/5122 path-samples lowered=0 {}
+      last counters {'smux_win_peak_mib': 16.8, 'stripe_gate_closed': 563, 'stripe_gate_grow': 25, 'stripe_q_us': 398, 'stripe_width_avg': 1.6835443037974684, 'stripe_gate_cut': 77}
+   proc: cpu ir=377% kh=393% (avg cores*100) rss max ir=517 kh=603 MB
+== n20b  crowd p50/p95/p99=93/147/188 call p99=264 late%=10.3 game p99=166 echo p99=167 conn p95=206 ping p99=139.0 fail=0/0
+   users=20 sum_mbps=4569 | fast n=8 min/med/max=122/311/606 jain=0.82 per-stream jain=0.90 | lte %cap min/med/max=85/90/93 | up n=2 158/382/607 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=186/326/577
+   ir: samples=27 links min/max=77/153 cpu% med/max=460/626 lb mbit med/max=2654/4288 path-samples lowered=74 {'lower: loss #%': 48, 'recovering': 26}
+      last counters {'aw_floor_subs': 79, 'stripe_gate_closed': 521, 'stripe_q_us': 1433, 'smux_win_peak_mib': 18.4, 'stripe_gate_cut': 472, 'stripe_gate_grow': 1, 'stripe_refused': 395, 'stripe_width_avg': 0.10638297872340426}
+   kh: samples=27 links min/max=102/153 cpu% med/max=443/638 lb mbit med/max=2890/4356 path-samples lowered=0 {}
+      last counters {'smux_win_peak_mib': 16.8, 'stripe_gate_closed': 253, 'stripe_q_us': 380, 'stripe_gate_grow': 32, 'stripe_width_avg': 1.25, 'stripe_gate_cut': 21}
+   proc: cpu ir=443% kh=434% (avg cores*100) rss max ir=667 kh=530 MB
+== n40a  crowd p50/p95/p99=93/185/430 call p99=887 late%=84.5 game p99=239 echo p99=239 conn p95=478 ping p99=151.0 fail=11/2
+   users=40 sum_mbps=4684 | fast n=13 min/med/max=4/110/818 jain=0.45 per-stream jain=0.59 | lte %cap min/med/max=1/50/88 | up n=9 2/87/356 | starved(<5M)=[5, 36, 39]
+   heavy users own new-conn loaded p90 ms min/med/max=492/1439/2970
+   ir: samples=28 links min/max=103/150 cpu% med/max=417/532 lb mbit med/max=2535/3899 path-samples lowered=152 {'lower: loss #%': 118, 'recovering': 29, 'cut: loss #%': 5}
+      last counters {'stripe_gate_cut': 462, 'stripe_gate_closed': 526, 'aw_floor_subs': 90, 'stripe_q_us': 3163, 'smux_win_peak_mib': 20.3, 'stripe_refused': 292}
+   kh: samples=28 links min/max=103/150 cpu% med/max=397/584 lb mbit med/max=2486/3864 path-samples lowered=0 {}
+      last counters {'smux_win_peak_mib': 16, 'stripe_gate_closed': 298, 'stripe_gate_grow': 45, 'stripe_q_us': 535, 'stripe_width_avg': 1.6, 'stripe_gate_cut': 27}
+   proc: cpu ir=378% kh=383% (avg cores*100) rss max ir=547 kh=647 MB
+== n40b  crowd p50/p95/p99=95/192/342 call p99=1224 late%=24.4 game p99=333 echo p99=273 conn p95=1161 ping p99=141.0 fail=47/0
+   users=40 sum_mbps=4265 | fast n=18 min/med/max=0/98/589 jain=0.46 per-stream jain=0.70 | lte %cap min/med/max=7/68/91 | up n=7 41/100/218 | starved(<5M)=[7, 35]
+   heavy users own new-conn loaded p90 ms min/med/max=323/810/2048
+   ir: samples=28 links min/max=103/150 cpu% med/max=512/614 lb mbit med/max=2508/3758 path-samples lowered=166 {'lower: loss #%': 65, 'cut: loss #%': 62, 'recovering': 39}
+      last counters {'aw_floor_subs': 118, 'smux_win_peak_mib': 16, 'stripe_gate_cut': 164, 'stripe_gate_closed': 226, 'stripe_refused': 258, 'stripe_q_us': 5251, 'stripe_gate_grow': 6, 'stripe_width_avg': 0.020833333333333332}
+   kh: samples=28 links min/max=102/150 cpu% med/max=521/617 lb mbit med/max=2615/3740 path-samples lowered=0 {}
+      last counters {'smux_win_peak_mib': 13, 'stripe_gate_closed': 178, 'stripe_q_us': 350, 'stripe_gate_grow': 47, 'stripe_width_avg': 1.4090909090909092}
+   proc: cpu ir=203% kh=197% (avg cores*100) rss max ir=688 kh=645 MB
+-- A/B HS2_LB_COMMON_GUARD N=40 (n=6 interleaved, same seeds per pair)
+N=40 X0  n=6 crowd95=217.6 crowd99=1206.8 call99=5479.8 late=50.8 game99=1068.3 echo99=217.4 conn95=943.9 ping99=424.8 cfail=99.2 mbps=3657.5 jain=0.4 cuts=13.2 held=0.0
+N=40 XG  n=6 crowd95=211.9 crowd99=919.3 call99=4415.0 late=55.5 game99=417.6 echo99=186.2 conn95=1234.1 ping99=178.8 cfail=16.5 mbps=3769.5 jain=0.4 cuts=0.8 held=1.0
+-- exact permutation p (two-sided, mean diff), arm2 vs arm1
+N=40 XG vs X0: crowd95 -2.6% p=0.513, crowd99 -23.8% p=0.156, call99 -19.4% p=0.563, late +9.3% p=0.652, game99 -60.9% p=0.286, echo99 -14.4% p=0.206, conn95 +30.7% p=0.606, ping99 -57.9% p=0.801, cfail -83.4% p=0.013, mbps +3.1% p=0.725, jain -1.7% p=0.896, cuts -93.7% p=0.002, held +0.0% p=0.002
+-- A/B N=20 (n=3)
+N=20 X0  n=3 crowd95=171.2 crowd99=269.8 call99=604.3 late=16.8 game99=221.0 echo99=154.1 conn95=210.3 ping99=142.0 cfail=3.0 mbps=4781.2 jain=0.6 cuts=4.0 held=0.0
+N=20 XG  n=3 crowd95=163.6 crowd99=202.4 call99=214.5 late=14.3 game99=164.7 echo99=156.3 conn95=245.3 ping99=175.3 cfail=0.0 mbps=5375.3 jain=0.6 cuts=0.0 held=0.0
+-- exact permutation p (two-sided, mean diff), arm2 vs arm1
+N=20 XG vs X0: crowd95 -4.4% p=0.500, crowd99 -25.0% p=0.400, call99 -64.5% p=0.100, late -15.2% p=0.800, game99 -25.5% p=0.100, echo99 +1.4% p=0.900, conn95 +16.6% p=0.400, ping99 +23.5% p=0.200, cfail -100.0% p=1.000, mbps +12.4% p=0.400, jain +2.3% p=0.800, cuts -100.0% p=1.000, held +0.0% p=1.000
+-- per run A/B
+== g10  crowd p50/p95/p99=94/245/1381 call p99=6797 late%=50.7 game p99=3771 echo p99=263 conn p95=353 ping p99=1786.0 fail=172/4
+   users=40 sum_mbps=3074 | fast n=19 min/med/max=2/47/370 jain=0.50 per-stream jain=0.58 | lte %cap min/med/max=3/43/84 | up n=8 7/33/175 | starved(<5M)=[11, 32]
+   heavy users own new-conn loaded p90 ms min/med/max=508/2183/3089
+   ir: samples=28 links min/max=103/150 cpu% med/max=355/631 lb mbit med/max=1633/3492 path-samples lowered=180 {'lower: loss #%': 84, 'cut: loss #%': 72, 'recovering': 14, 'lower: loss #%, queue #ms': 10}
+   kh: samples=28 links min/max=103/150 cpu% med/max=385/657 lb mbit med/max=1671/3289 path-samples lowered=0 {}
+   proc: cpu ir=396% kh=385% (avg cores*100) rss max ir=728 kh=689 MB
+== g20  crowd p50/p95/p99=94/220/1434 call p99=2630 late%=40.6 game p99=276 echo p99=281 conn p95=1771 ping p99=131.0 fail=41/3
+   users=40 sum_mbps=3133 | fast n=17 min/med/max=1/42/459 jain=0.44 per-stream jain=0.51 | lte %cap min/med/max=2/51/86 | up n=9 1/34/502 | starved(<5M)=[5, 16, 17, 27, 28]
+   heavy users own new-conn loaded p90 ms min/med/max=1692/2648/3552
+   ir: samples=33 links min/max=103/150 cpu% med/max=345/605 lb mbit med/max=1475/3170 path-samples lowered=226 {'cut: loss #%': 119, 'lower: loss #%': 78, 'recovering': 21, 'lower: loss #%, queue #ms': 8}
+   kh: samples=33 links min/max=103/150 cpu% med/max=368/611 lb mbit med/max=1267/3217 path-samples lowered=0 {}
+   proc: cpu ir=356% kh=344% (avg cores*100) rss max ir=815 kh=653 MB
+== g30  crowd p50/p95/p99=93/211/1074 call p99=11311 late%=89.4 game p99=1380 echo p99=181 conn p95=2608 ping p99=107.0 fail=80/0
+   users=40 sum_mbps=3466 | fast n=20 min/med/max=1/42/345 jain=0.42 per-stream jain=0.57 | lte %cap min/med/max=13/61/77 | up n=9 0/64/427 | starved(<5M)=[4, 5, 30, 34, 40]
+   heavy users own new-conn loaded p90 ms min/med/max=241/2111/3402
+   ir: samples=30 links min/max=80/150 cpu% med/max=372/616 lb mbit med/max=1735/3243 path-samples lowered=198 {'lower: loss #%': 93, 'cut: loss #%': 66, 'recovering': 39}
+   kh: samples=30 links min/max=103/150 cpu% med/max=335/605 lb mbit med/max=1803/3277 path-samples lowered=0 {}
+   proc: cpu ir=391% kh=366% (avg cores*100) rss max ir=850 kh=639 MB
+== g40  crowd p50/p95/p99=92/207/1055 call p99=4984 late%=42.2 game p99=242 echo p99=214 conn p95=186 ping p99=177.0 fail=13/2
+   users=40 sum_mbps=4200 | fast n=19 min/med/max=5/59/436 jain=0.43 per-stream jain=0.60 | lte %cap min/med/max=0/56/86 | up n=5 0/383/418 | starved(<5M)=[5, 30, 35]
+   heavy users own new-conn loaded p90 ms min/med/max=271/2059/3296
+   ir: samples=32 links min/max=103/153 cpu% med/max=244/595 lb mbit med/max=1690/3432 path-samples lowered=197 {'lower: loss #%': 70, 'cut: loss #%': 65, 'recovering': 62}
+   kh: samples=32 links min/max=103/153 cpu% med/max=223/589 lb mbit med/max=1490/3594 path-samples lowered=0 {}
+   proc: cpu ir=312% kh=299% (avg cores*100) rss max ir=766 kh=661 MB
+== g50  crowd p50/p95/p99=93/224/1505 call p99=5052 late%=44.3 game p99=568 echo p99=197 conn p95=275 ping p99=194.0 fail=109/3
+   users=40 sum_mbps=4067 | fast n=15 min/med/max=3/58/919 jain=0.29 per-stream jain=0.67 | lte %cap min/med/max=1/43/68 | up n=11 1/29/481 | starved(<5M)=[16, 27, 28, 36]
+   heavy users own new-conn loaded p90 ms min/med/max=274/2476/3402
+   ir: samples=36 links min/max=77/150 cpu% med/max=230/568 lb mbit med/max=2040/3859 path-samples lowered=252 {'lower: loss #%': 106, 'cut: loss #%': 89, 'recovering': 45, 'lower: loss #%, queue #ms': 12}
+   kh: samples=36 links min/max=103/150 cpu% med/max=256/562 lb mbit med/max=2139/3821 path-samples lowered=0 {}
+   proc: cpu ir=300% kh=290% (avg cores*100) rss max ir=712 kh=643 MB
+== g60  crowd p50/p95/p99=93/199/792 call p99=2104 late%=37.3 game p99=174 echo p99=168 conn p95=470 ping p99=154.0 fail=180/0
+   users=40 sum_mbps=4005 | fast n=23 min/med/max=4/102/355 jain=0.60 per-stream jain=0.74 | lte %cap min/med/max=14/34/88 | up n=6 5/54/183 | starved(<5M)=[2, 20, 37]
+   heavy users own new-conn loaded p90 ms min/med/max=228/646/2160
+   ir: samples=29 links min/max=81/150 cpu% med/max=303/573 lb mbit med/max=2392/3196 path-samples lowered=200 {'cut: loss #%': 91, 'lower: loss #%': 80, 'recovering': 20, 'lower: loss #%, queue #ms': 9}
+   kh: samples=29 links min/max=103/150 cpu% med/max=308/562 lb mbit med/max=2482/3284 path-samples lowered=0 {}
+   proc: cpu ir=334% kh=327% (avg cores*100) rss max ir=600 kh=673 MB
+== g1G  crowd p50/p95/p99=95/211/566 call p99=2440 late%=56.1 game p99=191 echo p99=211 conn p95=915 ping p99=148.0 fail=10/1
+   users=40 sum_mbps=4042 | fast n=19 min/med/max=3/140/437 jain=0.59 per-stream jain=0.60 | lte %cap min/med/max=4/51/88 | up n=8 13/51/282 | starved(<5M)=[34]
+   heavy users own new-conn loaded p90 ms min/med/max=508/1040/2318
+   ir: samples=28 links min/max=81/155 cpu% med/max=463/634 lb mbit med/max=2221/3967 path-samples lowered=103 {'lower: loss #%': 97, 'recovering': 6}
+   kh: samples=28 links min/max=103/155 cpu% med/max=460/684 lb mbit med/max=2268/3784 path-samples lowered=0 {}
+   proc: cpu ir=419% kh=415% (avg cores*100) rss max ir=701 kh=597 MB
+== g2G  crowd p50/p95/p99=94/223/1393 call p99=4286 late%=27.2 game p99=195 echo p99=181 conn p95=196 ping p99=170.0 fail=6/2
+   users=40 sum_mbps=2885 | fast n=17 min/med/max=2/84/411 jain=0.52 per-stream jain=0.54 | lte %cap min/med/max=3/50/85 | up n=9 0/49/144 | starved(<5M)=[7, 17, 28, 32, 33]
+   heavy users own new-conn loaded p90 ms min/med/max=807/2198/3074
+   ir: samples=31 links min/max=103/150 cpu% med/max=388/583 lb mbit med/max=1374/3048 path-samples lowered=160 {'lower: loss #%': 145, 'recovering': 15}
+   kh: samples=31 links min/max=102/150 cpu% med/max=388/560 lb mbit med/max=1348/3078 path-samples lowered=0 {}
+   proc: cpu ir=367% kh=354% (avg cores*100) rss max ir=705 kh=583 MB
+== g3G  crowd p50/p95/p99=93/205/874 call p99=7127 late%=45.1 game p99=1297 echo p99=172 conn p95=1306 ping p99=275.0 fail=7/0
+   users=40 sum_mbps=3376 | fast n=20 min/med/max=1/34/375 jain=0.38 per-stream jain=0.53 | lte %cap min/med/max=20/57/81 | up n=9 1/46/371 | starved(<5M)=[3, 30, 34]
+   heavy users own new-conn loaded p90 ms min/med/max=264/1948/4025
+   ir: samples=35 links min/max=82/151 cpu% med/max=309/554 lb mbit med/max=1723/3175 path-samples lowered=135 {'lower: loss #%': 135}
+   kh: samples=35 links min/max=102/151 cpu% med/max=300/601 lb mbit med/max=1803/3160 path-samples lowered=0 {}
+   proc: cpu ir=327% kh=318% (avg cores*100) rss max ir=830 kh=596 MB
+== g4G  crowd p50/p95/p99=94/207/536 call p99=6563 late%=56.1 game p99=378 echo p99=175 conn p95=2417 ping p99=174.0 fail=1/0
+   users=40 sum_mbps=4294 | fast n=19 min/med/max=5/78/569 jain=0.42 per-stream jain=0.26 | lte %cap min/med/max=1/53/89 | up n=5 1/161/609 | starved(<5M)=[1, 30]
+   heavy users own new-conn loaded p90 ms min/med/max=264/1336/3040
+   ir: samples=29 links min/max=103/150 cpu% med/max=390/613 lb mbit med/max=1550/3768 path-samples lowered=136 {'lower: loss #%': 107, 'recovering': 22, 'lower: loss #%, queue #ms': 7}
+   kh: samples=29 links min/max=103/150 cpu% med/max=398/639 lb mbit med/max=1693/3687 path-samples lowered=0 {}
+   proc: cpu ir=402% kh=388% (avg cores*100) rss max ir=795 kh=664 MB
+== g5G  crowd p50/p95/p99=93/225/1319 call p99=339 late%=96.7 game p99=271 echo p99=234 conn p95=2265 ping p99=150.0 fail=45/2
+   users=40 sum_mbps=3845 | fast n=15 min/med/max=5/61/1008 jain=0.24 per-stream jain=0.56 | lte %cap min/med/max=0/38/65 | up n=11 0/119/376 | starved(<5M)=[12, 16, 27, 28, 36]
+   heavy users own new-conn loaded p90 ms min/med/max=362/2242/3255
+   ir: samples=34 links min/max=82/155 cpu% med/max=290/567 lb mbit med/max=2015/4116 path-samples lowered=148 {'lower: loss #%': 120, 'lower: loss #%, queue #ms': 20, 'recovering': 8}
+   kh: samples=34 links min/max=103/153 cpu% med/max=214/585 lb mbit med/max=2185/4131 path-samples lowered=0 {}
+   proc: cpu ir=302% kh=295% (avg cores*100) rss max ir=693 kh=636 MB
+== g6G  crowd p50/p95/p99=92/201/828 call p99=5736 late%=51.5 game p99=174 echo p99=144 conn p95=307 ping p99=156.0 fail=30/4
+   users=40 sum_mbps=4176 | fast n=23 min/med/max=1/115/488 jain=0.49 per-stream jain=0.68 | lte %cap min/med/max=18/50/89 | up n=6 3/21/164 | starved(<5M)=[17, 40]
+   heavy users own new-conn loaded p90 ms min/med/max=246/1052/2542
+   ir: samples=28 links min/max=81/152 cpu% med/max=349/554 lb mbit med/max=2473/3136 path-samples lowered=60 {'lower: loss #%': 60}
+   kh: samples=28 links min/max=103/152 cpu% med/max=343/584 lb mbit med/max=2638/3299 path-samples lowered=0 {}
+   proc: cpu ir=348% kh=356% (avg cores*100) rss max ir=659 kh=605 MB
+== h10  crowd p50/p95/p99=93/155/191 call p99=323 late%=14.0 game p99=191 echo p99=188 conn p95=223 ping p99=167.0 fail=0/0
+   users=20 sum_mbps=5218 | fast n=10 min/med/max=40/269/911 jain=0.64 per-stream jain=0.85 | lte %cap min/med/max=92/92/93 | up n=5 8/88/748 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=192/209/457
+   ir: samples=27 links min/max=78/155 cpu% med/max=425/658 lb mbit med/max=2840/4459 path-samples lowered=80 {'lower: loss #%': 65, 'recovering': 15}
+   kh: samples=27 links min/max=103/154 cpu% med/max=438/628 lb mbit med/max=2798/4320 path-samples lowered=0 {}
+   proc: cpu ir=446% kh=424% (avg cores*100) rss max ir=735 kh=492 MB
+== h20  crowd p50/p95/p99=93/182/392 call p99=1230 late%=15.4 game p99=216 echo p99=111 conn p95=225 ping p99=124.0 fail=9/1
+   users=20 sum_mbps=4120 | fast n=9 min/med/max=41/204/837 jain=0.67 per-stream jain=0.74 | lte %cap min/med/max=8/52/90 | up n=3 58/204/472 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=283/1114/2610
+   ir: samples=28 links min/max=72/150 cpu% med/max=437/632 lb mbit med/max=2656/3258 path-samples lowered=155 {'lower: loss #%': 104, 'cut: loss #%': 30, 'lower: loss #%, queue #ms': 11, 'recovering': 10}
+   kh: samples=28 links min/max=102/150 cpu% med/max=428/662 lb mbit med/max=2677/3251 path-samples lowered=0 {}
+   proc: cpu ir=418% kh=427% (avg cores*100) rss max ir=643 kh=605 MB
+== h30  crowd p50/p95/p99=94/176/226 call p99=260 late%=21.0 game p99=256 echo p99=163 conn p95=182 ping p99=135.0 fail=0/0
+   users=20 sum_mbps=5005 | fast n=8 min/med/max=119/322/1324 jain=0.57 per-stream jain=0.96 | lte %cap min/med/max=50/90/93 | up n=1 277/277/277 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=211/343/482
+   ir: samples=27 links min/max=75/154 cpu% med/max=472/606 lb mbit med/max=3512/5069 path-samples lowered=78 {'lower: loss #%': 78}
+   kh: samples=27 links min/max=102/153 cpu% med/max=512/676 lb mbit med/max=3296/4990 path-samples lowered=0 {}
+   proc: cpu ir=449% kh=472% (avg cores*100) rss max ir=777 kh=602 MB
+== h1G  crowd p50/p95/p99=93/148/189 call p99=212 late%=10.4 game p99=191 echo p99=165 conn p95=295 ping p99=179.0 fail=0/0
+   users=20 sum_mbps=5348 | fast n=10 min/med/max=156/295/976 jain=0.70 per-stream jain=0.64 | lte %cap min/med/max=86/92/93 | up n=5 21/92/730 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=195/241/474
+   ir: samples=28 links min/max=83/152 cpu% med/max=483/640 lb mbit med/max=2976/4364 path-samples lowered=85 {'lower: loss #%': 64, 'recovering': 21}
+   kh: samples=28 links min/max=103/152 cpu% med/max=456/603 lb mbit med/max=3170/4380 path-samples lowered=0 {}
+   proc: cpu ir=462% kh=447% (avg cores*100) rss max ir=883 kh=539 MB
+== h2G  crowd p50/p95/p99=95/175/209 call p99=187 late%=3.3 game p99=132 echo p99=173 conn p95=236 ping p99=211.0 fail=0/0
+   users=20 sum_mbps=6103 | fast n=9 min/med/max=39/401/1248 jain=0.70 per-stream jain=0.78 | lte %cap min/med/max=28/78/92 | up n=3 190/385/475 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=208/264/499
+   ir: samples=27 links min/max=78/152 cpu% med/max=539/621 lb mbit med/max=3664/5038 path-samples lowered=105 {'lower: loss #%': 87, 'recovering': 18}
+   kh: samples=27 links min/max=102/152 cpu% med/max=540/641 lb mbit med/max=3850/5039 path-samples lowered=0 {}
+   proc: cpu ir=488% kh=496% (avg cores*100) rss max ir=625 kh=553 MB
+== h3G  crowd p50/p95/p99=94/168/210 call p99=245 late%=29.1 game p99=171 echo p99=130 conn p95=205 ping p99=136.0 fail=0/0
+   users=20 sum_mbps=4675 | fast n=8 min/med/max=106/186/1317 jain=0.52 per-stream jain=0.95 | lte %cap min/med/max=31/89/92 | up n=1 179/179/179 | starved(<5M)=[]
+   heavy users own new-conn loaded p90 ms min/med/max=202/332/505
+   ir: samples=28 links min/max=71/153 cpu% med/max=470/567 lb mbit med/max=2917/4535 path-samples lowered=118 {'lower: loss #%': 78, 'recovering': 24, 'lower: loss #%, queue #ms': 16}
+   kh: samples=28 links min/max=103/153 cpu% med/max=513/624 lb mbit med/max=2908/4587 path-samples lowered=0 {}
+   proc: cpu ir=424% kh=438% (avg cores*100) rss max ir=509 kh=605 MB
+
+== findings (hv83, 2026-11-13)
+1. Light users ARE behind heavy as N grows (prod binaries): N=0 -> 10 -> 20 -> 40: call late% 3.5 -> 13 -> 28 -> 38-51,
+   call p99 192 -> 214 -> 284 -> 1500-5500 ms, crowd p99 159 -> 182 -> 190 -> 511-1207, crowd conn fails 0,0,0 -> 34-99.
+2. N=40: the link pool is the bottleneck, not the paths: links at max 150 (sat), 30-50 links "pressed" (at their limit,
+   ~10 Mbit/s each), total 3.1-4.4 Gbit/s while 10 x 1 Gbit paths each ran < 0.7 Gbit and the emulator dropped only the
+   configured loss. Light subs share pressed links with heavy subs -> obs_ctrl_rtt_light_p99 2.9-3.4 s on the edge.
+   Throughput falls N=20 -> N=40 (5117 -> 4168), Jain over fast users 0.8 -> 0.4-0.5, 2-3 users starved (<5 Mbit/s).
+3. LB mis-judgement under own load: in every N=40 run (never at N<=20) auto2 cut ~5 of 10 paths in ONE reading on both
+   sides (0.2 % path read 3.9 %, 0.8 % read 10.6 %) while emu drops stayed at the configured 0.2 %. The resends are the
+   hosts' own (spurious / local), cuts drain ~30 links (serving 150 -> 120) and pile users on the rest.
+   HS2_LB_COMMON_GUARD=1 (lb_common.go, default off) holds such readings: N=40 n=6 cuts 13.2 -> 0.8 (p=0.002), crowd
+   conn fails 99 -> 16.5 (p=0.013), game p99 1068 -> 418, ping p99 425 -> 179, crowd p99 1207 -> 919 (n.s., heavy tails);
+   call late% 51 -> 56 and conn p95 944 -> 1234 n.s. N=20 n=3: no light regression seen.
+4. Diagnostics: smaller autowin share (W, 8 MB) worse (call p99 4946, cfail 52); lane 8 (L, n=1) no gain.

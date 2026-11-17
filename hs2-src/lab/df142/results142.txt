@@ -1,0 +1,31 @@
+df142 — rel62k3 = rel62k2 + HS2_MCONN_STRIPE_DL_FAIR default on (edge); lab2, exit rel61h2 (4a3abdf9)
+
+Code: envdef row {"HS2_MCONN_STRIPE_DL_FAIR","1",Edge} (table 64), envdef_test, README (changes table, rollback
+line, defaults table), CHANGELOG rel62k3 (commit 92c6d286). Binary C:\h2w\bin62k3\hs2-linux-amd64 sha256 96fbccba
+(CGO_ENABLED=0 -trimpath -ldflags="-s -w", go on lab2, from git archive of 92c6d286; later commits are lab only).
+
+A/B n=4 (d142.sh = cs141 d141 harness, bg sets q00-q03 of cs141 j2, K = rel62k2 edge 5d95d5c7, N = rel62k3 no env):
+ K test mean 333 / med 360 / min 142, new conn striped @ median 11.9 s;  N 636 / 577 / 409, striped @ 1.6 s (4/4)
+ paired N-K +303 mean, +236 median, N wins 4/4; background users' sum equal (+0).
+ p99 medians: crowd 170.0 vs 170.3, call 263 vs 212, echo 121 vs 145, game 110 vs 165 (N higher in 4/4 pairs,
+ a01 nearly tied 154/155; cs141 n=10 had game 5 higher / 5 lower -> watch game p99 in production).
+ crowd fails K 0, N 4 (a01N only).  0 panics.  "dlfair:" lines in every N run.  Table: sum_ab.txt.
+
+Soak (soak142.sh, TT=2100 s = 35 min, NOT 60: agent time budget): rel62k3 edge + rel61h2 exit, crowd 3000
+(40 s life) + call + game, 9 bg slots (iperf3 30-150 s, 20-200 Mbit/s, 70 % down; 3-9 at once, mean 7.1),
+test download -R P1 12 s every 120 s, soak139 events (blackholes / flap / loss / queue / loss_all, 30 % RST windows).
+ RSS edge 31 -> max 579 -> 466 MB (2nd half 432-567, no trend); exit 35 -> 892 -> 874 (2nd half 779-889);
+ goroutines edge ~26.5k flat, fds ~3250 flat; 1 pid each, 0 panics.
+ stripe_active (10 s): max 9, mean 3.4, p90 6, >8 in 1 sample, never near 12; refused 4920, subs 293.
+ dlfair lines 21 (20 lease releases, 1 past the cap); 13 "download stripe at"; 268 "striped over".
+ test downloads n=17: mean 164, median 61, striped 4/17. The soak139 events cover almost the whole run
+ (only 2 tests outside a window: 434, 49). 12/17 tests show a slow single-link ramp 4 -> ~150 Mbit/s; stripe_active
+ was 3-5 (the 8-slot cap was not binding), so this is the degraded-path start of the test conn, not the slot rule;
+ no K soak for comparison (NOT DONE).
+ bg delivered/target: down 0.93, up 0.96; 5 bg iperf3 ERR of 167.
+ crowd fails 895, 892 inside windows, 3 outside; crowd p99/min median 124, call 175, game 106.
+ 2 leaked iperf3 holding a lab lock killed by exact PID at the end (soak cleanup); none left.
+
+Tests (lab2, nice, 4 cores next to the soak — not idle): gofmt clean except third_party/utls (pre-existing,
+vendored fork), go vet rc=0, go test ./...: all ok except engine TestStripeAllDieGraceRejoins (counter check; 4/4
+pass alone, also the only failure under -race; no DATA RACE). TestStripeDlFair* pass.

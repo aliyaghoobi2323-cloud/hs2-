@@ -312,7 +312,7 @@ func printPinHint(unit string, fc fileConfig) {
 // realityPinCodeCmd: hs2 reality pin-code -u U (listening side).
 func realityPinCodeCmd(args []string) int {
 	fs := flag.NewFlagSet("reality pin-code", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	lang := langFlag(fs)
 	parseInterleaved(fs, args)
 	setLang(*lang)
@@ -336,7 +336,7 @@ func realityPinCodeCmd(args []string) int {
 // reloads the tunnel (a dialer waiting with no key picks them up at once).
 func realityPinCmd(args []string) int {
 	fs := flag.NewFlagSet("reality pin", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	noReload := fs.Bool("no-reload", false, "only write the file")
 	lang := langFlag(fs)
 	pos := parseInterleaved(fs, args)

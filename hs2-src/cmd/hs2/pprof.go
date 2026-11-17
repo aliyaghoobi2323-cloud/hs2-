@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 )
 
 // startPprof serves Go's CPU and memory profiles when HS2_PPROF names a
@@ -41,6 +44,20 @@ func startPprof() {
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	// mem69 (HS2_MEM_OBJS diagnosis): heap dump with object labels, written
+	// to a fixed place (/tmp/hs2heap-<pid>.dump and .labels)
+	mux.HandleFunc("/debug/hs2heapdump", func(w http.ResponseWriter, _ *http.Request) {
+		p := fmt.Sprintf("/tmp/hs2heap-%d", os.Getpid())
+		if err := engine.MemHeapDump(p); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintln(w, p)
+	})
+	// hc183: half-close counters (halfCloses, halfCloseIdles, halfOpen now)
+	mux.HandleFunc("/debug/hs2halfclose", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, engine.HalfCloseStats())
+	})
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Printf("pprof: %v", err)

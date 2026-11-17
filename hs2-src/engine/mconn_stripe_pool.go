@@ -37,10 +37,20 @@ func (m *LinkManager) stripeAdoptLocked(ml *managedLink, now time.Time) {
 		return
 	}
 	if now.After(m.stripeWantUntil) {
-		m.stripeWant = 0
+		m.stripeWant, m.stSteerOut = 0, 0
+		return
+	}
+	if m.stripeCutLocked(ml) {
+		// ou180: a link on a path the steering has cut is not set aside —
+		// the want (the steering's own ask among it) waits for a link on a
+		// healthy path; the cut one serves as an ordinary pool link.
+		stripeSteerStat.adoptSkipCut.Add(1)
 		return
 	}
 	m.stripeWant--
+	if m.stSteerOut > 0 {
+		m.stSteerOut-- // ou180: the steering's ask is answered
+	}
 	ml.stripeRes = now
 	stripeHold(ml, 1)
 	if ml.mtr != nil && ml.mtr.heavyN.Load() < 1 {
@@ -86,7 +96,7 @@ func (m *LinkManager) stripeExtra() int {
 		}
 	}
 	if now.After(m.stripeWantUntil) {
-		m.stripeWant = 0
+		m.stripeWant, m.stSteerOut = 0, 0 // ou180: the steering's link lapses with it
 	}
 	// No hold: a pool kept larger after the stripe let go spread the new
 	// light connections over more, emptier links, where a lost segment has

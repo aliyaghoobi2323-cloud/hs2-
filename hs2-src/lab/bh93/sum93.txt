@@ -1,0 +1,46 @@
+m1bLM1    M1 bL  kh low=1.7 cut=6.7 out=6.7 held=6.7 rec=0 | ir cut=7.7 out=17.7 | silF=0+0 silE=2 false=1+6 | crowd99=296.385 fail=339 call99=5223.469 game99=294.777 mbps=3111
+m1bLM2    M2 bL  kh low=2.5 cut=miss out=miss held=miss rec=0 | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=2+7 | crowd99=290.452 fail=230 call99=3199.247 game99=277.936 mbps=3575
+m1sLM1    M1 sL  kh low=1.9 cut=11.9 out=11.9 held=11.9 rec=0 | ir cut=0.0 out=0.0 | silF=0+0 silE=1 false=6+8 | crowd99=369.539 fail=728 call99=3536.012 game99=414.971 mbps=2615
+r1bLS0    S0 bL  kh low=2.0 cut=miss out=miss held=miss rec=0 | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=2+5 | crowd99=311.631 fail=124 call99=5443.68 game99=1107.951 mbps=3689
+r1bLS1    S1 bL  kh low=2.3 cut=7.3 out=7.3 held=7.3 rec=2 PRE | ir cut=14.3 out=22.3 | silF=0+0 silE=2 false=6+6 | crowd99=334.524 fail=128 call99=6233.536 game99=190.675 mbps=3814
+r1qS0     S0 q   kh low=- cut=- out=- held=- rec=0 | ir cut=- out=- | silF=0+0 silE=0 false=2+5 | crowd99=506.661 fail=27 call99=4215.007 game99=1067.395 mbps=3820
+r1qS1     S1 q   kh low=- cut=- out=- held=- rec=0 | ir cut=- out=- | silF=0+0 silE=0 false=3+3 | crowd99=396.263 fail=73 call99=2078.401 game99=164.03 mbps=3551
+r1sLS0    S0 sL  kh low=0.0 cut=0.0 out=0.0 held=miss rec=1 PRE | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=3+4 | crowd99=359.406 fail=35 call99=3044.211 game99=330.511 mbps=3729
+r1sLS1    S1 sL  kh low=7.7 cut=7.7 out=7.7 held=7.7 rec=0 | ir cut=12.7 out=12.7 | silF=0+0 silE=1 false=6+6 | crowd99=347.695 fail=464 call99=5508.108 game99=1808.685 mbps=3447
+r1sQS1    S1 sQ  kh low=4.8 cut=9.8 out=9.8 held=9.8 rec=0 | ir cut=11.8 out=11.8 | silF=0+0 silE=1 false=0+0 | crowd99=180.759 fail=21 call99=177.527 game99=118.021 mbps=0
+r2bLS0    S0 bL  kh low=1.9 cut=miss out=miss held=miss rec=0 | ir cut=miss out=miss | silF=0+0 silE=0 false=3+5 | crowd99=842.074 fail=308 call99=5163.298 game99=196.846 mbps=3155
+r2bLS1    S1 bL  kh low=0.0 cut=0.0 out=0.0 held=0.0 rec=0 PRE | ir cut=14.2 out=22.2 | silF=0+0 silE=2 false=3+8 | crowd99=702.243 fail=247 call99=3119.095 game99=177.92 mbps=3431
+r2qS0     S0 q   kh low=- cut=- out=- held=- rec=0 | ir cut=- out=- | silF=0+0 silE=0 false=7+8 | crowd99=1322.674 fail=87 call99=1442.491 game99=1928.164 mbps=2918
+r2qS1     S1 q   kh low=- cut=- out=- held=- rec=0 | ir cut=- out=- | silF=0+0 silE=0 false=7+7 | crowd99=1081.818 fail=176 call99=3439.292 game99=237.987 mbps=3140
+r2sLS0    S0 sL  kh low=0.0 cut=0.0 out=0.0 held=miss rec=1 PRE | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=4+8 | crowd99=555.85 fail=136 call99=4402.875 game99=1293.265 mbps=3585
+r2sLS1    S1 sL  kh low=2.0 cut=12.0 out=12.0 held=12.0 rec=0 | ir cut=14.0 out=14.0 | silF=0+0 silE=1 false=7+7 | crowd99=673.102 fail=172 call99=301.673 game99=909.188 mbps=3553
+r3bLS0    S0 bL  kh low=0.0 cut=0.0 out=0.0 held=0.0 rec=0 PRE | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=7+7 | crowd99=1482.332 fail=203 call99=19165.555 game99=4140.576 mbps=2518
+r3bLS1    S1 bL  kh low=6.7 cut=6.7 out=6.7 held=6.7 rec=0 | ir cut=7.7 out=21.7 | silF=0+0 silE=2 false=4+5 | crowd99=1490.493 fail=1291 call99=7790.335 game99=219.337 mbps=3565
+r3qS0     S0 q   kh low=- cut=- out=- held=- rec=0 | ir cut=- out=- | silF=0+0 silE=0 false=0+2 | crowd99=1737.591 fail=78 call99=2273.523 game99=1084.544 mbps=2572
+r3qS1     S1 q   kh low=- cut=- out=- held=- rec=0 | ir cut=- out=- | silF=0+0 silE=0 false=1+0 | crowd99=1627.717 fail=31 call99=5898.989 game99=211.508 mbps=2863
+r3sLS0    S0 sL  kh low=0.0 cut=0.0 out=0.0 held=0.0 rec=0 PRE | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=3+6 | crowd99=1837.163 fail=164 call99=11715.401 game99=3966.117 mbps=3476
+r3sLS1    S1 sL  kh low=2.3 cut=12.3 out=12.3 held=12.3 rec=0 | ir cut=0.0 out=0.0 | silF=0+0 silE=1 false=5+7 | crowd99=1498.137 fail=232 call99=9549.26 game99=4731.686 mbps=3542
+r4bLS0    S0 bL  kh low=2.3 cut=7.3 out=miss held=miss rec=0 | ir cut=6.3 out=miss | silF=0+0 silE=0 false=6+6 | crowd99=985.77 fail=234 call99=3475.798 game99=329.347 mbps=3452
+r4bLS1    S1 bL  kh low=7.2 cut=7.2 out=7.2 held=7.2 rec=0 | ir cut=12.2 out=12.2 | silF=0+0 silE=2 false=3+3 | crowd99=1599.978 fail=425 call99=3213.618 game99=8764.317 mbps=3015
+r4sLS0    S0 sL  kh low=0.0 cut=0.0 out=0.0 held=0.0 rec=0 PRE | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=4+9 | crowd99=501.049 fail=110 call99=3982.588 game99=3565.038 mbps=3273
+r4sLS1    S1 sL  kh low=0.0 cut=0.0 out=0.0 held=0.0 rec=0 PRE | ir cut=0.0 out=0.0 | silF=0+0 silE=1 false=7+7 | crowd99=1110.471 fail=7 call99=2655.821 game99=1759.173 mbps=3395
+r5bLS0    S0 bL  kh low=2.6 cut=12.6 out=miss held=miss rec=0 | ir cut=10.6 out=0.0 | silF=0+0 silE=0 false=3+8 | crowd99=1269.212 fail=637 call99=299.866 game99=3773.455 mbps=3233
+r5bLS1    S1 bL  kh low=0.0 cut=0.0 out=0.0 held=0.0 rec=0 PRE | ir cut=22.5 out=22.5 | silF=0+0 silE=2 false=6+6 | crowd99=1297.692 fail=122 call99=12705.38 game99=265.886 mbps=3031
+r5sLS0    S0 sL  kh low=12.0 cut=miss out=miss held=miss rec=0 | ir cut=miss out=miss | silF=0+0 silE=0 false=5+5 | crowd99=573.937 fail=613 call99=390.136 game99=388.801 mbps=3422
+r5sLS1    S1 sL  kh low=1.9 cut=12.0 out=12.0 held=12.0 rec=0 | ir cut=0.0 out=0.0 | silF=0+0 silE=1 false=5+6 | crowd99=637.513 fail=184 call99=3530.441 game99=3280.403 mbps=3147
+r6bLS0    S0 bL  kh low=2.2 cut=miss out=miss held=miss rec=0 | ir cut=0.0 out=0.0 | silF=0+0 silE=0 false=1+4 | crowd99=593.512 fail=107 call99=2364.744 game99=239.461 mbps=3269
+r6bLS1    S1 bL  kh low=0.0 cut=0.0 out=0.0 held=0.0 rec=0 PRE | ir cut=22.0 out=0.0 | silF=0+0 silE=2 false=7+8 | crowd99=675.13 fail=114 call99=15363.75 game99=182.042 mbps=2523
+r6sLS0    S0 sL  kh low=21.9 cut=miss out=miss held=miss rec=0 | ir cut=miss out=miss | silF=0+0 silE=0 false=1+7 | crowd99=749.383 fail=114 call99=5149.852 game99=182.582 mbps=2763
+r6sLS1    S1 sL  kh low=2.4 cut=12.4 out=12.4 held=12.4 rec=0 | ir cut=14.4 out=14.4 | silF=0+0 silE=1 false=1+2 | crowd99=358.461 fail=82 call99=3222.132 game99=3325.547 mbps=2848
+-- per scenario/arm (kh = dialing side decides; medians; det med/max)
+sc  arm n | kh low | kh cut | kh out | kh held(out of service to the end) | ir out | rec/run | silF total | false kh+ir mean | crowd99 crowdfail(mean) call99 game99 | Mbit/s
+bL  M1 1 | 1.7/1.7 miss=0 | 6.7/6.7 miss=0 | 6.7/6.7 miss=0 | 6.7/6.7 miss=0 | 17.7/17.7 miss=0 | 0.00 | 0 | 7.00 | 296.4 339 5223.5 294.8 | 3111
+bL  M2 1 | 2.5/2.5 miss=0 | - miss=1 | - miss=1 | - miss=1 | 0.0/0.0 miss=0 | 0.00 | 0 | 9.00 | 290.5 230 3199.2 277.9 | 3575
+bL  S0 6 | 2.1/2.6 miss=0 | 7.3/12.6 miss=3 | 0.0/0.0 miss=5 | 0.0/0.0 miss=5 | 0.0/0.0 miss=2 | 0.00 | 0 | 9.50 | 913.9 269 4319.5 718.6 | 3220
+bL  S1 6 | 1.1/7.2 miss=0 | 3.3/7.3 miss=0 | 3.3/7.3 miss=0 | 3.3/7.3 miss=0 | 21.9/22.5 miss=0 | 0.33 | 0 | 10.83 | 1000.0 388 7011.9 205.0 | 3230
+q   S0 3 | - miss=0 | - miss=0 | - miss=0 | - miss=0 | - miss=0 | 0.00 | 0 | 8.00 | 1322.7 64 2273.5 1084.5 | 3103
+q   S1 3 | - miss=0 | - miss=0 | - miss=0 | - miss=0 | - miss=0 | 0.00 | 0 | 7.00 | 1081.8 93 3439.3 211.5 | 3185
+sL  M1 1 | 1.9/1.9 miss=0 | 11.9/11.9 miss=0 | 11.9/11.9 miss=0 | 11.9/11.9 miss=0 | 0.0/0.0 miss=0 | 0.00 | 0 | 14.00 | 369.5 728 3536.0 415.0 | 2615
+sL  S0 6 | 0.0/21.9 miss=0 | 0.0/0.0 miss=2 | 0.0/0.0 miss=2 | 0.0/0.0 miss=4 | 0.0/0.0 miss=2 | 0.33 | 0 | 9.83 | 564.9 195 4192.7 841.0 | 3375
+sL  S1 6 | 2.1/7.7 miss=0 | 12.0/12.4 miss=0 | 12.0/12.4 miss=0 | 12.0/12.4 miss=0 | 6.3/14.4 miss=0 | 0.00 | 0 | 11.00 | 655.3 190 3376.3 2544.5 | 3322
+sQ  S1 1 | 4.8/4.8 miss=0 | 9.8/9.8 miss=0 | 9.8/9.8 miss=0 | 9.8/9.8 miss=0 | 11.8/11.8 miss=0 | 0.00 | 0 | 0.00 | 180.8 21 177.5 118.0 | 0

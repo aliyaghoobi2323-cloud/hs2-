@@ -107,6 +107,26 @@ func (a *dgFakeAccepter) Accept(ctx context.Context) (Carrier, error) {
 }
 func (a *dgFakeAccepter) Close() error { return nil }
 
+// tLogUntilDone: t.Logf until the test ends, then nothing. A goroutine the
+// test started (a pool's read loop) may log after the test returned: calling
+// t.Logf then is a data race with the testing package (er92 -race run).
+func tLogUntilDone(t *testing.T) func(string, ...any) {
+	var mu sync.Mutex
+	done := false
+	t.Cleanup(func() {
+		mu.Lock()
+		done = true
+		mu.Unlock()
+	})
+	return func(f string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !done {
+			t.Logf(f, a...)
+		}
+	}
+}
+
 // A packet sent into the edge TUN comes out of the exit TUN unchanged, in both
 // directions, over a small direct datagram pool.
 func TestDgPoolRoundTrip(t *testing.T) {
@@ -115,8 +135,9 @@ func TestDgPoolRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go RunDgEdge(ctx, DgConfig{Dev: edgeTUN, Min: 2, Max: 8, PerLink: 8, Dialer: dialer, Log: t.Logf})
-	go RunDgExit(ctx, DgConfig{Dev: exitTUN, Min: 2, Max: 8, PerLink: 8, Listener: accepter, Log: t.Logf})
+	logf := tLogUntilDone(t) // er94: the pools log after the test returned (a -race report)
+	go RunDgEdge(ctx, DgConfig{Dev: edgeTUN, Min: 2, Max: 8, PerLink: 8, Dialer: dialer, Log: logf})
+	go RunDgExit(ctx, DgConfig{Dev: exitTUN, Min: 2, Max: 8, PerLink: 8, Listener: accepter, Log: logf})
 
 	waitTunUp(t, edgeTUN, exitTUN)
 
@@ -406,6 +427,11 @@ func TestDgDialsInFlightCount(t *testing.T) {
 	p := newDgPool(dev, 1, 64, 8, func(string, ...any) {})
 	p.dialer = d
 	p.gate = instantGate()
+	// The autopilot publishes its target before it reconciles to it; a dial
+	// re-checks it (wantsDial) when it gets its turn. Left at the warm size
+	// (8), dials 9 and 10 were dropped whenever their goroutines ran after the
+	// first 8 carriers were up — serving=8 or 9 on a loaded host.
+	p.target.Store(10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for i := 0; i < 5; i++ { // five ticks while the first dials are on their way

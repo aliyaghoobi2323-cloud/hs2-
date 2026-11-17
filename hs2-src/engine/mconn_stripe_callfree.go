@@ -41,7 +41,7 @@ var callLinks struct {
 // callMarkLocked (under m.mu; key on): m is copied as a call now — mark its
 // live subs' links.
 func (m *mConn) callMarkLocked(now time.Time) {
-	if !stripeCallFree || !m.callOn {
+	if !callMarkOn() || !m.callOn { // HS2_MCONN_STRIPE_SHARE_COPIES marks too
 		return
 	}
 	exp := now.Add(callFreeTTL)
@@ -66,7 +66,7 @@ func (m *mConn) callMarkLocked(now time.Time) {
 
 // callLinkOn: the link of meter mtr carries a call's sub now (key on).
 func callLinkOn(mtr *linkMeter, now time.Time) bool {
-	if !stripeCallFree || mtr == nil {
+	if !callMarkOn() || mtr == nil {
 		return false
 	}
 	callLinks.mu.Lock()

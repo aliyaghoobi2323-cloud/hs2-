@@ -1,0 +1,23 @@
+=== RUN   TestMConnRescueCappedRaw
+    lb_rescue_test.go:108: mconn: a sub died holding the only copy of some bytes
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  0.000s sub+ 0 bulk=false key=%!p(int=0) sendOff=0 subs=1
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  1.001s lite: upgrade refused (duplication cap)
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  2.001s lite: upgrade refused (duplication cap)
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.002s sub+ 1 bulk=false key=%!p(int=1) sendOff=0 subs=2
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.002s raw: upgrade, UPGRADE(0) on sub 1 (recvd=0)
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.003s raw: UPGRADE(0) from the peer, first sub open
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.006s raw: reader switched at 0
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.006s sub- 0 cause=read pipe: i/o timeout retired=false bulk=false lost=false subs=1
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.006s subs: s1 ? path= first=0K dup=0K lag=0s q=0 
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.006s dup on -> off (53248 bytes in 0s)
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.007s end err=mconn: reset by peer rst=false sent=49152
+    mconn_rescue_watch_test.go:175: mtrace iran id=5 +  3.007s sub- 1 cause=mconn: reset by peer retired=false bulk=false lost=true subs=0
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  0.000s sub+ 0 bulk=false key=%!p(<nil>) sendOff=0 subs=1
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  3.002s sub+ 1 bulk=false key=%!p(<nil>) sendOff=0 subs=2
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  3.003s raw: UPGRADE(0) on sub 1
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  3.003s raw: UPACK, first sub open
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  3.006s sub- 0 cause=io: read/write on closed pipe retired=false bulk=false lost=true subs=1
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  3.006s end err=mconn: a sub died holding the only copy of some bytes rst=true sent=36864
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  3.007s raw: reader switched at 0
+    mconn_rescue_watch_test.go:175: mtrace kharej id=5 +  3.007s sub- 1 cause=<nil> retired=false bulk=false lost=false subs=0
+--- FAIL: TestMConnRescueCappedRaw (3.01s)

@@ -1,0 +1,90 @@
+edge=exit=1247e20e TT=24000 start=2026-11-13T02:31:28Z IRE=HS2_PPROF=127.0.0.1:6060 HS2_MCONN_RESCUE=1 KHE=HS2_PPROF=127.0.0.1:6060 HS2_MCONN_RESCUE=1 lab=30
+done 2026-11-13T09:12:38Z
+unit: inactive  disk: 24023 85% 2840496  out: 3.1M
+== per hour (RSS MB min/max · gor min/max · fds max · tcp max · rawKB max/last · recKB max/last · rings max)
+h0 ir  rss   30/ 448  gor  1300/26556  fds  3242  tcp 10480  raw    948/576    rec  15092/14804  rings 214  (n=60)
+h0 kh  rss   34/ 855  gor  1191/29078  fds  3230  tcp 10509  raw   1168/452    rec  49152/49152  rings 214  (n=60)
+h1 ir  rss  417/ 474  gor 25332/26583  fds  3240  tcp 10336  raw    924/564    rec  15032/14900  rings 173  (n=59)
+h1 kh  rss  760/ 868  gor 28524/30037  fds  3229  tcp 10529  raw   1144/452    rec  49152/49084  rings 213  (n=59)
+h2 ir  rss  426/ 481  gor 25635/26533  fds  3238  tcp 10395  raw    840/616    rec  15188/14672  rings 179  (n=60)
+h2 kh  rss  763/ 883  gor 28477/30471  fds  3236  tcp 10631  raw   1268/540    rec  49152/49136  rings 179  (n=60)
+h3 ir  rss  440/ 498  gor 25920/26546  fds  3241  tcp 10495  raw    872/536    rec  15044/15020  rings 187  (n=59)
+h3 kh  rss  764/ 850  gor 28594/30764  fds  3249  tcp 10440  raw   1036/536    rec  49152/49152  rings 209  (n=59)
+h4 ir  rss  439/ 537  gor 26036/26566  fds  3240  tcp 10430  raw    804/604    rec  15240/14880  rings 175  (n=59)
+h4 kh  rss  770/ 860  gor 28476/29069  fds  3227  tcp 10505  raw   1112/516    rec  49152/49144  rings 199  (n=59)
+h5 ir  rss  445/ 551  gor 25589/26542  fds  3238  tcp 10511  raw    828/612    rec  15228/14772  rings 180  (n=60)
+h5 kh  rss  766/ 912  gor 28560/30904  fds  3247  tcp 10444  raw    872/448    rec  49152/49132  rings 172  (n=60)
+h6 ir  rss  457/ 502  gor  2754/26541  fds  3240  tcp 10336  raw    816/0      rec  15208/0      rings 173  (n=40)
+h6 kh  rss  764/ 870  gor  2354/28983  fds  3226  tcp 10314  raw    788/0      rec  49152/0      rings 186  (n=40)
+== missing samples: 0   hs2 pids seen: {'ir': 1, 'kh': 1}
+== rescue counters: total (last sample) and per hour added
+ir RAW  triggers=90 started=4322 acked=4322 served=0 nocover=0 failed=0 limited=0 overcap=0 nak=0 nakd=0
+ir REC  started=1666 acked=1609 nakd=27 served=0 nak=0 refused=0 nocover=0 failed=0 lostjoin=28 endwait=30
+   h0 +raw started 663 acked 663 served 0 nocover 0 | +rec started 230 acked 224 served 0 nak 0 nocover 0 failed 0
+   h1 +raw started 770 acked 770 served 0 nocover 0 | +rec started 255 acked 251 served 0 nak 0 nocover 0 failed 0
+   h2 +raw started 579 acked 579 served 0 nocover 0 | +rec started 224 acked 219 served 0 nak 0 nocover 0 failed 0
+   h3 +raw started 651 acked 651 served 0 nocover 0 | +rec started 288 acked 279 served 0 nak 0 nocover 0 failed 0
+   h4 +raw started 570 acked 570 served 0 nocover 0 | +rec started 260 acked 252 served 0 nak 0 nocover 0 failed 0
+   h5 +raw started 653 acked 653 served 0 nocover 0 | +rec started 233 acked 220 served 0 nak 0 nocover 0 failed 0
+   h6 +raw started 436 acked 436 served 0 nocover 0 | +rec started 176 acked 164 served 0 nak 0 nocover 0 failed 0
+kh RAW  triggers=0 started=0 acked=0 served=4322 nocover=0 failed=0 limited=0 overcap=12684622 nak=0 nakd=0
+kh REC  started=0 acked=0 nakd=0 served=1639 nak=27 refused=0 nocover=0 failed=0 lostjoin=0 endwait=0
+   h0 +raw started 0 acked 0 served 663 nocover 0 | +rec started 0 acked 0 served 227 nak 3 nocover 0 failed 0
+   h1 +raw started 0 acked 0 served 770 nocover 0 | +rec started 0 acked 0 served 253 nak 2 nocover 0 failed 0
+   h2 +raw started 0 acked 0 served 579 nocover 0 | +rec started 0 acked 0 served 221 nak 3 nocover 0 failed 0
+   h3 +raw started 0 acked 0 served 651 nocover 0 | +rec started 0 acked 0 served 282 nak 6 nocover 0 failed 0
+   h4 +raw started 0 acked 0 served 570 nocover 0 | +rec started 0 acked 0 served 258 nak 2 nocover 0 failed 0
+   h5 +raw started 0 acked 0 served 653 nocover 0 | +rec started 0 acked 0 served 228 nak 5 nocover 0 failed 0
+   h6 +raw started 0 acked 0 served 436 nocover 0 | +rec started 0 acked 0 served 170 nak 6 nocover 0 failed 0
+== pool trend every 5 min (t: ir rawKB/recKB/recConns  kh rawKB/recKB/recConns)
+== light per hour: crowd fails, crowd p99 (median of per-minute p99 / max), call p99 max, game p99 max
+h0 fails   924  crowd p99 med  114.8 max  160.7  call p99 max  254.4  game p99 max  144.0  (min=60)
+h1 fails   932  crowd p99 med  115.9 max  196.4  call p99 max      -  game p99 max  131.3  (min=60)
+h2 fails   800  crowd p99 med  114.6 max  492.8  call p99 max      -  game p99 max  149.7  (min=60)
+h3 fails   939  crowd p99 med  114.3 max  551.9  call p99 max      -  game p99 max  181.1  (min=60)
+h4 fails   894  crowd p99 med  114.5 max  880.3  call p99 max      -  game p99 max  146.3  (min=60)
+h5 fails   971  crowd p99 med  114.7 max 1403.1  call p99 max      -  game p99 max  174.4  (min=60)
+h6 fails   552  crowd p99 med  112.7 max  164.3  call p99 max      -  game p99 max  138.3  (min=40)
+== fails per event window (window = event + 60 s tail for blackholes); detail for t < 3600
+      90-  210 bhA       fails    58
+     240-  390 loss_c    fails     0
+     390-  540 queue_d   fails     0
+     600-  780 bh_e120   fails    79
+     810-  990 flap_f    fails   225
+     990- 1110 bhB       fails    23
+    1110- 1230 rst_g     fails   113
+    1290- 1440 loss_all  fails     0
+    1890- 2010 bhA       fails    60
+    2040- 2190 loss_c    fails     0
+    2190- 2340 queue_d   fails     0
+    2400- 2580 bh_e120   fails    59
+    2610- 2790 flap_f    fails   158
+    2790- 2910 bhB       fails     6
+    2910- 3030 rst_g     fails   143
+    3090- 3240 loss_all  fails     0
+   bhA       n=14  avg    63.7  min    54  max    74
+   bhB       n=13  avg    24.5  min     1  max    59
+   bh_e120   n=13  avg    69.5  min    59  max    86
+   flap_f    n=13  avg   166.8  min   104  max   225
+   loss_all  n=13  avg     0.0  min     0  max     0
+   loss_c    n=14  avg     0.0  min     0  max     0
+   queue_d   n=14  avg     0.0  min     0  max     0
+   rst_g     n=13  avg   132.9  min    87  max   180
+   fails total 6012, outside any window 0
+== heavy (last 4 of 80)
+22860 22926 down=912 up=513
+23160 23226 down=905 up=416
+23460 23526 down=743 up=313
+23760 23826 down=1058 up=490
+== links (t ir kh, last 3)
+23901 203 203 5864
+23962 202 202 5872
+24023 178 177 0
+== alarms: 0
+h0 n=12 down_avg=966 up_avg=374
+h1 n=12 down_avg=876 up_avg=406
+h2 n=12 down_avg=933 up_avg=409
+h3 n=12 down_avg=938 up_avg=485
+h4 n=12 down_avg=908 up_avg=365
+h5 n=12 down_avg=906 up_avg=418
+h6 n=8 down_avg=916 up_avg=416

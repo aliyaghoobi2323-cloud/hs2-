@@ -34,6 +34,13 @@ import (
 //
 //	ping (edge->exit): [seq:8][edgeNanos:8]
 //	pong (exit->edge): [seq:8][edgeNanos:8][exitRetrans:8]
+//
+// mt135 (lb_pmtu135.go): a newer edge sets ctrlMtuBit in the ping's seq and
+// puts its own path MTU for the link's socket in seq bits 40..55; a newer exit
+// that sees the bit answers with its path MTU in bits 48..63 and its send MSS
+// in bits 32..47 of exitRetrans (the kernel's retransmit counter is 32-bit).
+// An older exit only echoes the seq and leaves those bits 0; an older edge
+// never sets the bit and gets the plain counter. No capability exchange.
 
 const (
 	ctrlPingLen = 16
@@ -143,6 +150,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		}
 		if !pending.full() {
 			seq++
+			seq &= ctrlSeqMask
 			pending.add(seq, ctrlNow())
 			publish()
 			// A ping of its own: smux keeps a timed-out write queued, still
@@ -152,6 +160,10 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			wire := seq
 			if idle {
 				wire |= ctrlIdleBit // an older exit only echoes it
+			}
+			wire |= ctrlMtuBit // mt135: and our path MTU, for the exit's status
+			if ts, ok := linkTCPStatsOf(l); ok {
+				wire |= uint64(min(ts.pmtu, 0xFFFF)) << ctrlMtuShift
 			}
 			sentIdle = idle
 			sentBusy = ctrlLinkBusy(mtr)
@@ -177,7 +189,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				}
 				break // no answer in time: try again next tick
 			}
-			if at, ok := pending.answer(binary.BigEndian.Uint64(pong[0:]) &^ ctrlIdleBit); ok {
+			if at, ok := pending.answer(binary.BigEndian.Uint64(pong[0:]) & ctrlSeqMask); ok {
 				mtr.ctrlAnsweredSent.Store(at) // a whole round trip, and when it started (stuck.go)
 			}
 			publish() // at once: a later ping may still be on its way (one 7 s wait is not three samples)
@@ -186,7 +198,11 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				mtr.rttMicros.Store(uint64(rtt / 1000))
 				observeCtrlRTT(uint64(rtt/1000), sentBusy || ctrlLinkBusy(mtr))
 			}
-			rt := binary.BigEndian.Uint64(pong[16:])
+			rt, pm, ms := ctrlSplitRetrans(binary.BigEndian.Uint64(pong[16:]))
+			if pm > 0 {
+				mtr.peerPmtu.Store(pm)
+				mtr.peerMss.Store(ms)
+			}
 			mtr.peerRetrans.Store(rt)
 			mtr.peerSeen.Store(true)
 			npong++
@@ -258,12 +274,15 @@ func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Ca
 		q = mtr.quiet
 	}
 	defer st.Close()
-	tcp := func() uint64 {
+	tcp := func(mtu bool) uint64 {
 		if car == nil {
 			return 0
 		}
-		n, _ := retransmits(car.TCPConn())
-		return n
+		ts, _ := tcpStats(car.TCPConn())
+		if !mtu {
+			return ts.retrans
+		}
+		return ctrlJoinRetrans(ts.retrans, ts.pmtu, ts.sndMss)
 	}
 	ping := make([]byte, ctrlPingLen)
 	pong := make([]byte, ctrlPongLen)
@@ -271,11 +290,18 @@ func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Ca
 		if _, err := io.ReadFull(st, ping); err != nil {
 			return
 		}
+		wire := binary.BigEndian.Uint64(ping[0:])
 		if q != nil {
-			q.peerIdle.Store(binary.BigEndian.Uint64(ping[0:])&ctrlIdleBit != 0)
+			q.peerIdle.Store(wire&ctrlIdleBit != 0)
+		}
+		mtu := wire&ctrlMtuBit != 0
+		if mtu && mtr != nil {
+			if pm := uint32(wire>>ctrlMtuShift) & 0xFFFF; pm > 0 {
+				mtr.peerPmtu.Store(pm)
+			}
 		}
 		copy(pong[0:], ping[0:16]) // echo seq + edgeNanos
-		binary.BigEndian.PutUint64(pong[16:], tcp())
+		binary.BigEndian.PutUint64(pong[16:], tcp(mtu))
 		if _, err := st.Write(pong); err != nil {
 			return
 		}

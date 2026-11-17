@@ -1,0 +1,57 @@
+# hs131 lab1 (198.51.100.168 only) — HS2_MCONN_STRIPE_KEEPSTALL per-side knock-out (quiet d8) + candidate fix
+# Binary hs2-k128 both sides (same as hs130), key per side via EX_KH / EX_IR; GODEBUG=gctrace=1 on every arm.
+# j2.txt: 24 runs interleaved (A off/off, B exit only, C Iran only, D both), 3 slots, 18:23-18:45 UTC.
+# ana131.py: arm from env.txt, light p99, call episodes (call samples > 500 ms, 1 s grouping), keepstall
+# counters per side (gap_room/gap_fill/hole_sub/ack_stalls/targeted/resend_chunks), gctrace GCs/STW sum.
+
+## hs130 leftovers (collected first; ana130-final.txt)
+u8: ON call99 439/264/330/378 vs off 378/392/248 (qu8off2 void)  -> no light cost
+d1: ON call99 244/251/258 vs off 285/299/224                     -> no light cost; exit RSS ON +75 MB (735 vs 661)
+qd8lz9 void (no heavy); qd8off9 1750 Mbit/s call99 220 (looks like the no-light-impact mode)
+
+## knock-out (n=5 valid per arm; koA2 koB6 koC6 koD3 void = iperf3 gave no heavy result)
+            mbps   call99  crowd99 ping99 slow500 eplen  worst  rss_kh rss_ir cpu_kh
+A off/off   1174   653     465     392    2.0%    3.4 s  1101   904    874    2.5
+B exit      1230   534     396     288    1.2%    2.2 s  884    870    685    2.7
+C Iran      1326   524     426     361    1.2%    2.4 s  905    905    704    2.6
+D both      1080   453     413     339    0.7%    1.8 s  679    834    567    2.4
+(t vs A: D call99 -1.9, worst -2.3, slow500 -1.8; B ping99 -4.4; nothing worse than off at t > +1.5 except cpu_kh B +1.5)
+-> NO arm carries a light cost in this batch; every key arm is equal or better than off.
+Pooled quiet d8 (hs128 + hs130 + hs131 D/A): call99 ON 610 (med 567, n 17) vs off 555 (med 557, n 18) t +0.81;
+crowd99 455 vs 439 t +0.77. The hs130 "call +158 ms t 2.0" was not reproduced: it is within run-to-run noise
+(single runs range 220..1419 ms call99 in both arms; one 3 s lossy-path stall sets a run's p99).
+
+## mechanisms checked
+- GC: ~20-24 GCs per run on each side, 55-135 ms total STW, GC cpu 0-1 %, same in all four arms -> not a cost.
+- exit (B): ack_stalls 0 in every quiet run; targeted/resend_chunks only on ordinary sub deaths (0-22 / 0-440);
+  exit RSS ON lower (870/834 vs 904); exit cpu +0.2 core with the key on the exit only (t 1.5).
+- Iran (C): gap_room fires in quiet runs when the key is on Iran (C: 689, 140, 557, 0, ...; hs130 D: 3241, 794)
+  — the hole rooms open in ordinary 0.5-1.6 s lossy-path stalls (gapRoomAfter 500 ms). In qd8lz3 the counter
+  rose in the 10 s window that holds the 3 s call stall (cause vs consequence not separable at 10 s logging).
+  hole_sub and gap_fill: 0 in every quiet run.
+- resend target: only on sub deaths, rare in quiet; not linked to call episodes.
+
+## candidate fix (rel63 470c4fb6, binary hs2-k131 = rel63 tree + fix): gapRoomAfter 500 ms -> 1.5 s
+The hole rooms (gap room, gap fill, hole sub room) and the gapCheck wake now wait 1.5 s of no progress.
+A resend cannot arrive earlier: ack-stall close needs ackStallAfter 800 ms + TCP frozen max(1 s, 8 x srtt).
+So quiet lossy stalls (< 1.5 s) no longer open rooms; dark recovery keeps them (to be proven by j3 dark runs).
+Targeted engine tests (GapRoom/GapFill/HoleSub/KeepStall/AckStall/KeepLazy/StripeResend/StripeAllDie) ok, vet ok.
+
+## re-test j3 (unit hs131retest on lab1, started 18:45 UTC): dark down/up 2+2 (k131 ON), quiet d8 8+8,
+## d1 4+4, u8 3+3 (k131 ON vs hs2-r63 off). Results: see below / res/ on lab1 (/opt/hs2lab/hs131/res).
+
+## j3 partial at the report (18:57 UTC; unit hs131retest keeps running the rest on lab1)
+dark with the fix (k131 ON both), 49.2->53.1 blackholed 30..90 s:
+  xdfx1 down 764 Mbit/s zero 0 gapRST 0 (3 rto closes; Iran gap_room 3013 gap_fill 9124 hole_sub 764: rooms still engage)
+  xdfx2 down 772 zero 0 gapRST 0;  xufx1 up 584 zero 0;  xufx2 up 475 zero 0   -> 4/4 survive (down 2/2, up 2/2)
+quiet d8 (k131 ON vs r63 off), n=3 vs 2 so far: call99 510 (med 455) vs 494, crowd99 419 vs 399, mbps 1186 vs 1196,
+  worst call sample 942 vs 1178; gap_room 0 on both sides in every fixed quiet run (the fix removes the quiet rooms).
+NOT DONE: d8 n>=8, d1 n>=4, u8 n>=3 of the fix; default ON; README/CHANGELOG; go test ./... and -race ./engine
+(lab busy with j3 — the tests need the idle host); bin63 build + sha256.
+
+## verdict (hs131)
+The quiet light cost of the key is NOT reproducible: per-side knock-out n=5/arm shows every key arm equal or better
+than off, and pooled over hs128+hs130+hs131 (35 runs) call99 ON-off is +55 ms at t +0.8 (noise). GC is not a
+factor. The only quiet-run behaviour the key adds is the Iran hole/gap room in 0.5-1.6 s lossy stalls; the
+candidate fix (gapRoomAfter 1.5 s) removes it in quiet runs and keeps dark survival 4/4. Key stays off until
+j3 completes (next agent: collect /opt/hs2lab/hs131/res with ana131.py/sum131.py, then default-on steps).

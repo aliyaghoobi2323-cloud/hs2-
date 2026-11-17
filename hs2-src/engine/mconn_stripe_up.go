@@ -163,10 +163,12 @@ func stripeUpTrack(mtr *linkMeter, stat func() (tcpStat, bool), path string) fun
 	p := stripeUpPathQ
 	p.mu.Lock()
 	p.links[mtr] = &stripeLinkQ{stat: stat, path: path}
+	p.gen++
 	p.mu.Unlock()
 	return func() {
 		p.mu.Lock()
 		delete(p.links, mtr)
+		p.gen++
 		p.mu.Unlock()
 	}
 }
@@ -267,6 +269,9 @@ func (m *mConn) stripeTargetLocked() time.Duration {
 	target := time.Duration(stripeQTarget.Load())
 	if up := stripeUpQTarget.Load(); m.iran && target > 0 && up > 0 {
 		target = time.Duration(up) // HS2_MCONN_STRIPE_UP_QMS
+	}
+	if m.iran && target > 0 {
+		target = max(target, stripeUpQCtlTarget()) // hl220: under an edge cap (mconn_stripe_upqctl.go)
 	}
 	return target
 }

@@ -49,6 +49,7 @@ type autopilot struct {
 	rnd               func() float64
 
 	T     int           // committed SERVING target
+	hyst  []apFlow      // HS2_AP_SHRINK_HYST: the last apHystWin of active counts (ap_hyst176.go)
 	hist  []apTick      // ring of the last tun.histTicks ticks
 	caps  map[int]apCap // per link: the best sustained rate it showed while pressed
 	pr    *apProbe      // an in-flight growth probe
@@ -614,6 +615,10 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 
 	// ---- 5 SHRINK: demand is below the target ------------------------------
+	// HS2_AP_SHRINK_HYST (ap_hyst176.go): a shrink also needs the last
+	// minute's most active connections a link's worth under the smaller
+	// pattern, and the last grow 3 minutes old — not the grow's own boundary.
+	H, noShrink := a.shrinkNeed(H, now, s.flowing, t.noShrinkAfterGrow)
 	if H < a.T {
 		if a.belowSince.IsZero() {
 			a.belowSince = now
@@ -622,7 +627,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 		a.belowSince = time.Time{}
 	}
 	if H < a.T && now.Sub(a.belowSince) >= t.shrinkDwell && (!shortIn60 || a.T > U) &&
-		now.Sub(a.lastShrinkAt) >= t.shrinkStep && now.Sub(a.lastGrowAt) >= t.noShrinkAfterGrow {
+		now.Sub(a.lastShrinkAt) >= t.shrinkStep && now.Sub(a.lastGrowAt) >= noShrink {
 		old := a.T
 		step := (a.T - H + 1) / 2
 		if step < 1 {

@@ -50,8 +50,8 @@ func linksOn(b *LB, name string) int {
 // no rebalance retire made room, and no dial meant no placement.
 func TestLB2NewPathGetsLinksWithoutIdle(t *testing.T) {
 	v4 := []LBPath{
-		{Local: "91.107.167.67", Remote: "81.12.35.149", Addr: "81.12.35.149:2082", Weight: 50, Primary: true},
-		{Local: "91.107.167.67", Remote: "5.57.38.162", Addr: "5.57.38.162:2082", Weight: 50},
+		{Local: "203.0.113.67", Remote: "203.0.113.41", Addr: "203.0.113.41:2082", Weight: 50, Primary: true},
+		{Local: "203.0.113.67", Remote: "203.0.113.30", Addr: "203.0.113.30:2082", Weight: 50},
 	}
 	b := busyLB(t, v4, 40)
 	var asked atomic.Int32
@@ -63,8 +63,8 @@ func TestLB2NewPathGetsLinksWithoutIdle(t *testing.T) {
 			go func() { defer dials.Done(); dialOne(b) }()
 		}
 	})
-	v6 := LBPath{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2",
-		Addr: "[2a05:9080:0:603:216:3eff:fefe:94d2]:2082", Weight: 8}
+	v6 := LBPath{Local: "2001:db8:1::1", Remote: "2001:db8:5::94d2",
+		Addr: "[2001:db8:5::94d2]:2082", Weight: 8}
 	if err := b.SetPaths(append(append([]LBPath(nil), v4...), v6)); err != nil {
 		t.Fatal(err)
 	}
@@ -284,9 +284,9 @@ func TestEdgeKeepsWantedArrival(t *testing.T) {
 
 // prodPaths is the main tunnel: 6 Iran IPv4 × 2 kharej IPv4, and one IPv6 pair.
 func prodPaths() (ps []LBPath, bad13, mid35 []string, v6 string) {
-	kh := []string{"116.202.5.113", "91.107.167.67"}
-	bad := []string{"81.12.35.149", "37.32.47.180", "5.160.110.230"}
-	mid := []string{"5.57.38.162", "85.133.195.138", "85.133.250.165"}
+	kh := []string{"198.51.100.113", "203.0.113.67"}
+	bad := []string{"203.0.113.41", "203.0.113.10", "203.0.113.20"}
+	mid := []string{"203.0.113.30", "203.0.113.50", "203.0.113.60"}
 	for _, ir := range append(append([]string(nil), bad...), mid...) {
 		for _, k := range kh {
 			ps = append(ps, LBPath{Local: k, Remote: ir, Addr: ir + ":2082", Weight: 7 * 50, Primary: len(ps) == 0})
@@ -297,8 +297,8 @@ func prodPaths() (ps []LBPath, bad13, mid35 []string, v6 string) {
 			}
 		}
 	}
-	v6p := LBPath{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2",
-		Addr: "[2a05:9080:0:603:216:3eff:fefe:94d2]:2082", Weight: 7 * 100}
+	v6p := LBPath{Local: "2001:db8:1::1", Remote: "2001:db8:5::94d2",
+		Addr: "[2001:db8:5::94d2]:2082", Weight: 7 * 100}
 	return append(ps, v6p), bad13, mid35, v6p.Name()
 }
 
@@ -470,17 +470,17 @@ func TestKeepPathMin(t *testing.T) {
 // more than its configured share but at most lb2ShareMax.
 func TestLB2PeakBothSidesAgree(t *testing.T) {
 	withAuto2(t)
-	kh := []string{"116.202.5.113", "91.107.167.67"}
-	iran := []string{"81.12.35.149", "37.32.47.180", "5.160.110.230", "5.57.38.162", "85.133.195.138", "85.133.250.165"}
-	loss := map[string]float64{"81.12.35.149": 0.14, "37.32.47.180": 0.12, "5.160.110.230": 0.10,
-		"5.57.38.162": 0.08, "85.133.195.138": 0.06, "85.133.250.165": 0.045}
+	kh := []string{"198.51.100.113", "203.0.113.67"}
+	iran := []string{"203.0.113.41", "203.0.113.10", "203.0.113.20", "203.0.113.30", "203.0.113.50", "203.0.113.60"}
+	loss := map[string]float64{"203.0.113.41": 0.14, "203.0.113.10": 0.12, "203.0.113.20": 0.10,
+		"203.0.113.30": 0.08, "203.0.113.50": 0.06, "203.0.113.60": 0.045}
 	var ps []LBPath
 	for _, ir := range iran {
 		for _, k := range kh {
 			ps = append(ps, LBPath{Local: k, Remote: ir, Addr: ir + ":2082", Weight: 50, Primary: len(ps) == 0})
 		}
 	}
-	v6 := LBPath{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2", Addr: "[x]:2082", Weight: 100}
+	v6 := LBPath{Local: "2001:db8:1::1", Remote: "2001:db8:5::94d2", Addr: "[x]:2082", Weight: 100}
 	ps = append(ps, v6)
 	b, _ := NewLB(ps, nil)
 	b.SetAuto(true)
@@ -568,14 +568,14 @@ func TestLB2SparePerRound(t *testing.T) {
 	lbSparePerRound = 3
 	defer func() { lbSparePerRound = old }()
 	v4 := []LBPath{
-		{Local: "91.107.167.67", Remote: "81.12.35.149", Addr: "81.12.35.149:2082", Weight: 50, Primary: true},
-		{Local: "91.107.167.67", Remote: "5.57.38.162", Addr: "5.57.38.162:2082", Weight: 50},
+		{Local: "203.0.113.67", Remote: "203.0.113.41", Addr: "203.0.113.41:2082", Weight: 50, Primary: true},
+		{Local: "203.0.113.67", Remote: "203.0.113.30", Addr: "203.0.113.30:2082", Weight: 50},
 	}
 	b := busyLB(t, v4, 40)
 	var asked atomic.Int32
 	b.setSpare(func(n int) { asked.Add(int32(n)) })
-	v6 := LBPath{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2",
-		Addr: "[2a05:9080:0:603:216:3eff:fefe:94d2]:2082", Weight: 40}
+	v6 := LBPath{Local: "2001:db8:1::1", Remote: "2001:db8:5::94d2",
+		Addr: "[2001:db8:5::94d2]:2082", Weight: 40}
 	if err := b.SetPaths(append(append([]LBPath(nil), v4...), v6)); err != nil {
 		t.Fatal(err)
 	}

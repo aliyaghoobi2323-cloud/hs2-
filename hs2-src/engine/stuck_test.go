@@ -641,6 +641,11 @@ func TestControlKeepsWaitingOnAStuckWriter(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-time cadence")
 	}
+	// mem67: the frozen-session guard would close this deliberately stuck
+	// link after HS2_SMUX_STALL_S; this test is about the control loop
+	// waiting on it, so the guard is off here
+	defer func(d time.Duration) { smuxStallTimeout = d }(smuxStallTimeout)
+	smuxStallTimeout = 0
 	a, b := net.Pipe()
 	sc := &stuckConn{Conn: b, release: make(chan struct{})}
 	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}

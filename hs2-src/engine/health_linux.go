@@ -46,9 +46,17 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			backoff:      info.Backoff,
 			caState:      info.Ca_state,
 			rtoUs:        info.Rto,
+			pmtu:         info.Pmtu,
+			sndMss:       info.Snd_mss,
+			advMss:       info.Advmss,
 		}
 		ok = true
 	})
+	if ok {
+		a, _ := tc.LocalAddr().(*net.TCPAddr)
+		st.kpmtu = st.pmtu
+		st.pmtu = effMtu(st.kpmtu, st.sndMss, a != nil && a.IP.To4() == nil)
+	}
 	return st, ok
 }
 

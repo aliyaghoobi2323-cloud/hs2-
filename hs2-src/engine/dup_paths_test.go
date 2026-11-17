@@ -17,6 +17,7 @@ func pathLinks(paths ...string) (*LinkManager, []*mcLink) {
 	m, ls := pickLinks(make([]int, len(paths)), make([]bool, len(paths)))
 	for i, p := range paths {
 		ls[i].mtr.path = p
+		ls[i].mtr.rttMicros.Store(50_000) // cs228: equal quality unless a test says otherwise
 	}
 	return m, ls
 }
@@ -104,6 +105,7 @@ func TestDupPathsMConnFallback(t *testing.T) {
 
 func TestDupPathsMConnOff(t *testing.T) {
 	withDupPaths(t, false)
+	withCs226(t, false) // cs226 runs the same rule with HS2_DUP_PATHS off
 	m, ls := pathLinks("a>x", "a>x", "a>x", "b>y", "b>y")
 	before := Observed()
 	got := pickSecond(t, m, ls, 0, 60)

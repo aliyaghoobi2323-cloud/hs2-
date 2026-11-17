@@ -1,0 +1,10 @@
+580c580,581
+<      src="-s 192.168.49.2"; case $k in a*) k=${k#a}; src="";; esac  # aK: every kharej IP (an Iran IP outage)
+---
+>      dir=i; case $k in r*) dir=r; k=${k#r};; x*) dir=x; k=${k#x};; esac  # bh100: rK Iran->kharej only, xK both ways
+>      src="-s 192.168.49.2"; dst="-d 192.168.49.2"; case $k in a*) k=${k#a}; src=""; dst="";; esac  # aK: every kharej IP (an Iran IP outage)
+582c583,584
+<      ip netns exec $IR iptables $op INPUT $src -d 192.168.5$k.1 -m statistic --mode random --probability $pr -j DROP
+---
+>      if [ $dir != r ]; then ip netns exec $IR iptables $op INPUT $src -d 192.168.5$k.1 -m statistic --mode random --probability $pr -j DROP; fi
+>      if [ $dir != i ]; then ip netns exec $IR iptables $op OUTPUT -s 192.168.5$k.1 $dst -m statistic --mode random --probability $pr -j DROP; fi

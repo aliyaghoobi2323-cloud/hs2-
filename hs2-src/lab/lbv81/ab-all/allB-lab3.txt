@@ -1,0 +1,12 @@
+== allB IRE= HS2_LB_SELFQ=4 KHE= HS2_LB_SELFQ=4 edge=55668b39 exit=55668b39
+  queue-lowerings: 0
+== light latency (ms) by heavy window, clean phases only (finding 2)
+noheavy    c: n880276 p50 92.8 p99 106.5 k: n58250 p50 92.6 p99 162.0 g: n6708 p50 92.2 p99 101.0
+start0-15  c: n226294 p50 93.5 p99 122.3 k: n15000 p50 93.2 p99 166.1 g: n1706 p50 92.9 p99 106.9
+down15-40  c: n377428 p50 93.5 p99 127.6 k: n25000 p50 93.1 p99 156.3 g: n2855 p50 92.8 p99 106.8
+up40-66    c: n392668 p50 93.2 p99 114.0 k: n26000 p50 93.2 p99 167.6 g: n2983 p50 92.6 p99 102.9
+  crowd p50/p99/fail 93.117 113.794 0 | call p99 162.874  | game p99 104.169 | ping p99 99.2
+  heavy hv-d-180.json 773
+  heavy hv-d-300.json 830
+  heavy hv-d-420.json 1046
+  heavy hv-d-60.json 1033

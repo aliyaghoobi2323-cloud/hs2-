@@ -46,7 +46,7 @@ type liveStatus struct {
 	Target    int     `json:"target"`          // links the autopilot wants
 	Min       int     `json:"min"`
 	Max       int     `json:"max"`
-	Users     int     `json:"users"` // open user connections
+	Users     int     `json:"users"` // open user connections (see UsersKind)
 	Mbit      float64 `json:"mbit"`  // aggregate goodput, Mbit/s
 	// Counted: users / flowing / mbit / peak_mbit are this server's own count
 	// (every side of this hs2). Absent in a file from an older hs2, whose
@@ -249,6 +249,20 @@ type liveStatus struct {
 	MConnSubsLight int64 `json:"mconn_subs_light,omitempty"`
 	MConnSubsBulk  int64 `json:"mconn_subs_bulk,omitempty"`
 	MConnSubsExit  int64 `json:"mconn_subs_exit,omitempty"`
+	// fx168/fx170: connections reset (RST, not a FIN) because their data was
+	// cut: exit targets of an mConn, edge users of an mConn, either end of
+	// the one-stream path (ever, since start)
+	MConnTargetRst uint64 `json:"mconn_target_rst,omitempty"`
+	MConnUserRst   uint64 `json:"mconn_user_rst,omitempty"`
+	StreamRst      uint64 `json:"stream_rst,omitempty"`
+	// hc183/hc213 half-close (ever, since start; HalfOpen now): see
+	// engine.MConnSnap
+	HalfCloses      uint64 `json:"half_closes,omitempty"`
+	HalfCloseIdles  uint64 `json:"half_close_idles,omitempty"`
+	HalfCloseOver   uint64 `json:"half_close_over,omitempty"`
+	HalfCloseGone   uint64 `json:"half_close_gone,omitempty"`
+	HalfCloseAborts uint64 `json:"half_close_aborts,omitempty"`
+	HalfOpen        int64  `json:"half_open,omitempty"`
 	// ... by sending state now (two copies, one sub, heavy), and the moves to
 	// heavy in the last minute by rule (standing queue / rate / fast start),
 	// and the primary switches of light connections whose primary was stuck.
@@ -289,6 +303,15 @@ type liveStatus struct {
 	ObsSmuxWinShrinks      uint64  `json:"obs_smux_win_shrinks,omitempty"`
 	ObsSmuxWinQueueCuts    uint64  `json:"obs_smux_win_queue_cuts,omitempty"`
 	ObsSmuxWinNeighborCuts uint64  `json:"obs_smux_win_neighbor_cuts,omitempty"`
+	// HS2_SMUX_SMALL_FIRST: small frames written ahead of an earlier queued
+	// bulk frame since start (lat58).
+	ObsSmuxSmallFirst uint64 `json:"obs_smux_small_first,omitempty"`
+	// HS2_SMUX_SENDBATCH (lk179): batched conn writes and the frames in them.
+	ObsSmuxSendBatches uint64 `json:"obs_smux_send_batches,omitempty"`
+	ObsSmuxSendFrames  uint64 `json:"obs_smux_send_frames,omitempty"`
+	// aw163: smux window updates dropped as older than the stream's last
+	// (before the fix each stalled its stream for good).
+	ObsSmuxStaleUPD uint64 `json:"obs_smux_stale_upd,omitempty"`
 	// HS2_MCONN_STRIPE (همیشه، بی‌کلید): اتصال‌های پخش‌شده الان (ایران /
 	// گیرندهٔ خارج)، از آغاز: subها، بایت‌های قاعدهٔ stripe و بایت‌های روی
 	// subهای غیر primary، تصمیم‌های دروازهٔ فرستنده به تفکیک علت (grow رشد،
@@ -333,6 +356,35 @@ type liveStatus struct {
 	StripeBusyLinks   int64   `json:"stripe_busy_links,omitempty"`
 	StripeStepRebase  uint64  `json:"stripe_step_rebase,omitempty"`
 	StripeJumpHold    uint64  `json:"stripe_jump_hold,omitempty"`
+	// prod73: the queue controllers (kharej HS2_QUEUE_CTL, Iran
+	// HS2_QUEUE_CTL_UP): running, caps set / taken off / moved, lanes capped
+	// now, their caps together (Mbit/s), lane-time capped (ms).
+	QCtlOn        bool    `json:"qctl_on,omitempty"`
+	QCtlStarts    uint64  `json:"qctl_caps_started,omitempty"`
+	QCtlReleases  uint64  `json:"qctl_caps_released,omitempty"`
+	QCtlChanges   uint64  `json:"qctl_cap_changes,omitempty"`
+	QCtlCapped    int32   `json:"qctl_capped_now,omitempty"`
+	QCtlCapMbit   float64 `json:"qctl_cap_mbit,omitempty"`
+	QCtlCappedMs  int64   `json:"qctl_capped_ms,omitempty"`
+	QCtlUpOn      bool    `json:"qctl_up_on,omitempty"`
+	QCtlUpStarts  uint64  `json:"qctl_up_caps_started,omitempty"`
+	QCtlUpRelease uint64  `json:"qctl_up_caps_released,omitempty"`
+	QCtlUpChanges uint64  `json:"qctl_up_cap_changes,omitempty"`
+	QCtlUpCapped  int32   `json:"qctl_up_capped_now,omitempty"`
+	QCtlUpCapMbit float64 `json:"qctl_up_cap_mbit,omitempty"`
+	QCtlUpCapMs   int64   `json:"qctl_up_capped_ms,omitempty"`
+	// prod73: the cut rescue's light raw checks (all marked / on cut paths),
+	// cut copies given to raw conns, refused by the cut bound; stuck-call
+	// triggers by gap / busy, weak gaps (no evidence on the path), triggers
+	// the old path answered first.
+	RescueRawCapped    int64 `json:"rescue_raw_capped,omitempty"`
+	RescueRawCappedCut int64 `json:"rescue_raw_capped_cut,omitempty"`
+	RescueCutRawCopies int64 `json:"rescue_cut_raw_copies,omitempty"`
+	RescueCutRefused   int64 `json:"rescue_cut_refused,omitempty"`
+	CallStuckGap       int64 `json:"call_stuck_gap,omitempty"`
+	CallStuckBusy      int64 `json:"call_stuck_busy,omitempty"`
+	CallStuckGapWeak   int64 `json:"call_stuck_gap_weak,omitempty"`
+	CallStuckOldFirst  int64 `json:"call_stuck_old_first,omitempty"`
 	// smux autowin (HS2_SMUX_AUTOWIN)
 	AWGrows       uint64 `json:"aw_grows,omitempty"`
 	AWQueueCuts   uint64 `json:"aw_queue_cuts,omitempty"`
@@ -343,6 +395,8 @@ type liveStatus struct {
 	AWStreams     int    `json:"aw_streams,omitempty"`
 	AWSubWin      int64  `json:"aw_sub_win,omitempty"`     // HS2_STRIPE_SUB_WIN_MB: stripe subs given the larger window
 	AWHeavySubs   int64  `json:"aw_heavy_subs,omitempty"`  // HS2_STRIPE_AW_HEAVY: subs kept adaptive
+	AWFloorSubs   int64  `json:"aw_floor_subs,omitempty"`  // HS2_STRIPE_HEAVY_FLOOR_MB: subs whose base was raised
+	AWFloorDrops  int64  `json:"aw_floor_drops,omitempty"` // HS2_STRIPE_HEAVY_FLOOR_GATE: floors dropped on a queued probe
 	AWStrictCuts  uint64 `json:"aw_strict_cuts,omitempty"` // HS2_STRIPE_AW_HEAVY: light-neighbour cuts of those subs
 
 	// Reality front counters (authed links, fallback splices, reject reasons).
@@ -351,6 +405,12 @@ type liveStatus struct {
 	// counters) and the dialing side's paths (kind + "both" fallback state).
 	Fronts     []frontIPStatus   `json:"fronts,omitempty"`
 	FrontPaths []frontPathStatus `json:"front_paths,omitempty"`
+
+	// UsersKind (ou180): what Users counts — "connections" on the Kharej
+	// side (the exit's user connections), "streams" on the Iran side (the
+	// pool's streams: with mconn each connection rides 2+ subs; mconn_open
+	// has the connections). Absent in an older file.
+	UsersKind string `json:"users_kind,omitempty"`
 }
 
 // fillAutoWin copies the smux autowin budget counters.
@@ -363,9 +423,21 @@ func fillAutoWin(ls *liveStatus) {
 	ls.AWShareCuts, ls.AWCeilCuts, ls.AWUsedPeakMiB, ls.AWStreams = s.ShareCuts, s.CeilCuts, s.Peak>>20, s.Streams
 	ls.AWSubWin = engine.StripeSubWinN()
 	ls.AWHeavySubs, ls.AWStrictCuts = engine.StripeAWHeavyN(), s.StrictCuts
+	ls.AWFloorSubs = engine.StripeHeavyFloorN()
+	ls.AWFloorDrops = engine.StripeHeavyFloorDrops()
 }
 
 // fillStripe copies the stripe's diagnostics (HS2_MCONN_STRIPE).
+// fillDiag73: the prod73 counters (queue controllers, cut rescue, stuck calls).
+func fillDiag73(ls *liveStatus) {
+	x, u := engine.QueueCtlObserved()
+	ls.QCtlOn, ls.QCtlStarts, ls.QCtlReleases, ls.QCtlChanges, ls.QCtlCapped, ls.QCtlCapMbit, ls.QCtlCappedMs = x.On, x.Starts, x.Releases, x.Changes, x.Capped, x.CapMbit, x.CappedMs
+	ls.QCtlUpOn, ls.QCtlUpStarts, ls.QCtlUpRelease, ls.QCtlUpChanges, ls.QCtlUpCapped, ls.QCtlUpCapMbit, ls.QCtlUpCapMs = u.On, u.Starts, u.Releases, u.Changes, u.Capped, u.CapMbit, u.CappedMs
+	d := engine.Diag73Observed()
+	ls.RescueRawCapped, ls.RescueRawCappedCut, ls.RescueCutRawCopies, ls.RescueCutRefused = d.RawCapped, d.RawCappedCut, d.RawCutCopies, d.CutRefused
+	ls.CallStuckGap, ls.CallStuckBusy, ls.CallStuckGapWeak, ls.CallStuckOldFirst = d.StuckGap, d.StuckBusy, d.StuckGapWeak, d.StuckOldFirst
+}
+
 func fillStripe(ls *liveStatus, s engine.StripeSnap) {
 	ls.StripeActive, ls.StripeRxActive, ls.StripeSubs, ls.StripeBytes, ls.StripeSubBytes = s.Active, s.RxActive, s.Subs, s.Bytes, s.SubBytes
 	ls.StripeRefused, ls.StripePickNone, ls.StripeGrowUnused, ls.StripeGrowRate = s.Refused, s.PickNone, s.GrowUnused, s.GrowRate
@@ -384,6 +456,9 @@ func fillStripe(ls *liveStatus, s engine.StripeSnap) {
 // fillMConn copies the multi-link connection counters (HS2_MCONN).
 func fillMConn(ls *liveStatus, m engine.MConnSnap) {
 	ls.MConnOpen, ls.MConnSubsLight, ls.MConnSubsBulk, ls.MConnSubsExit = m.Open, m.SubsLight, m.SubsBulk, m.SubsExit
+	ls.MConnTargetRst, ls.MConnUserRst, ls.StreamRst = m.TargetRst, m.UserRst, m.StreamRst
+	ls.HalfCloses, ls.HalfCloseIdles, ls.HalfCloseOver = m.HalfCloses, m.HalfCloseIdles, m.HalfCloseOver
+	ls.HalfCloseGone, ls.HalfCloseAborts, ls.HalfOpen = m.HalfCloseGone, m.HalfCloseAborts, m.HalfOpen
 }
 
 // obsWindow turns the engine's ever-growing counters into the last minute's
@@ -438,6 +513,9 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 
 // fillSmuxWin copies the adaptive smux window budget (HS2_SMUX_AUTOWIN).
 func fillSmuxWin(ls *liveStatus) {
+	ls.ObsSmuxSmallFirst = engine.SmuxSmallFirstOvertakes()
+	ls.ObsSmuxSendBatches, ls.ObsSmuxSendFrames = engine.SmuxSendBatchStats()
+	ls.ObsSmuxStaleUPD = engine.SmuxStaleUPDs()
 	st, ok := engine.SmuxAutoWinStats()
 	if !ok {
 		return
@@ -546,16 +624,31 @@ func warmPath(cfgPath string) string {
 	return strings.TrimSuffix(statusPath(cfgPath), ".status.json") + ".warm"
 }
 
-// warmMaxAge: a warm file older than this is ignored — the tunnel was down
-// long enough that the old load says nothing about the next one.
-const warmMaxAge = 15 * time.Minute
+// warmMaxAge: a warm file up to this old gives its full value; up to
+// warmOldAge, half of it (still well above the cold start); older, it is
+// ignored — the tunnel was down long enough that the old load says nothing
+// about the next one.
+//
+// ou180: was 15 min. The file is renewed only while the daemon runs, so an
+// outage longer than that — production: a deploy whose binary was missing
+// kept the unit failing for 22 min — brought the edge back at the cold
+// 8 links in the evening (prod needs ~60-130): every user reconnecting at
+// once onto a pool ~15x too small.
+const (
+	warmMaxAge = time.Hour
+	warmOldAge = 3 * time.Hour
+)
 
 // readWarm returns the link target the edge had before a restart (0: none,
-// or too old).
+// or too old; halved past warmMaxAge).
 func readWarm(cfgPath string) int {
 	p := warmPath(cfgPath)
 	st, err := os.Stat(p)
-	if err != nil || time.Since(st.ModTime()) > warmMaxAge {
+	age := time.Duration(0)
+	if err == nil {
+		age = time.Since(st.ModTime())
+	}
+	if err != nil || age > warmOldAge {
 		return 0
 	}
 	b, err := os.ReadFile(p)
@@ -565,6 +658,9 @@ func readWarm(cfgPath string) int {
 	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	if err != nil || n < 1 {
 		return 0
+	}
+	if age > warmMaxAge {
+		n = max(n/2, 1)
 	}
 	return n
 }
@@ -664,6 +760,10 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.PortsLines = portLines(fc, viewOf(ls, true))
 		}
 		ls.Users, ls.Mbit, ls.Sat = s.Users, round1(s.MbitPerS), s.Saturated
+		ls.UsersKind = "streams"
+		if ls.Role == "Kharej side" {
+			ls.UsersKind = "connections"
+		}
 		ls.Counted, ls.Flowing, ls.PeakMbit = s.Counted, s.Flowing, round1(s.PeakMbit)
 		if s.Phase != "" {
 			ls.Phase = s.Phase
@@ -705,6 +805,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		fillMConn(&ls, engine.MConnObserved())
 		fillSmuxWin(&ls)
 		fillStripe(&ls, engine.StripeObserved())
+		fillDiag73(&ls)
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
@@ -1150,6 +1251,12 @@ func trafficLine(ls liveStatus) string {
 		return "connections and throughput: counted on the Iran server (this hs2 does not count them here — upgrade it to see this server's own numbers)"
 	}
 	s := fmt.Sprintf("%d connections", ls.Users)
+	if ls.UsersKind == "streams" { // ou180: the Iran side counts streams (mconn subs)
+		s = fmt.Sprintf("%d streams", ls.Users)
+		if ls.MConnOpen > 0 {
+			s += fmt.Sprintf(" of %d user connections", ls.MConnOpen)
+		}
+	}
 	if ls.Flowing > 0 || ls.Counted {
 		s += fmt.Sprintf(" (%d active)", ls.Flowing)
 	}

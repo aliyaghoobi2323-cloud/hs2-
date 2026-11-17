@@ -486,7 +486,7 @@ func alertSubCmd(args []string) bool {
 	fs := flag.NewFlagSet("alert "+sub, flag.ExitOnError)
 	conf := fs.String("conf", alertConfPath, "alert settings")
 	stateDir := fs.String("state", alertStateDir, "state directory")
-	unit := fs.String("u", "", "tunnel unit (default: all)")
+	unit := unitFlag(fs, "", "tunnel unit (default: all)")
 	days := fs.Int("days", 7, "history: days")
 	lang := fs.String("lang", "", "fa | en")
 	rest := parseInterleaved(fs, args[1:])

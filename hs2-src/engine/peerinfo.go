@@ -47,6 +47,24 @@ import (
 //	        ext bit1: taken by the UDP fast path (capExtUDPFast, another branch)
 //	        ext bit2: mconn upload stripe — it takes part in a striped
 //	        upload (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
+//	        ext bit3: mconn stripe resend — a sub of a striping connection
+//	        that dies is survived by a resend (HS2_MCONN_STRIPE_RESEND), so
+//	        Iran may close one on purpose (HS2_MCONN_STRIPE_EVAC,
+//	        mconn_stripe_evac.go)
+//	        ext bit4: mconn stripe overlap (mconn_stripe_overlap.go)
+//	        ext bit8/9: mconn rescue / rescue records (mconn_rescue*.go)
+//	        ext bit10: mconn stripe keepstall — its stripe sender keeps and
+//	        resends what a dark sub swallowed, so the receiver may open hole
+//	        rooms (HS2_MCONN_STRIPE_KEEPSTALL, mconn_stripe_keepstall.go)
+//	        ext bit11: mconn rescue rst — it answers RRST after an unclean sub
+//	        death and reads the role-5 rescue-rst join, refusing it with an RST
+//	        when it has no such conn (HS2_MCONN_RESCUE_RST, mconn_rescue_rst.go;
+//	        rr156: checked free on rel65 and mt153, which use bits 0-4 and 8-10)
+//	        ext bit12: mconn rescue rst end notice — it reads Iran's role-6
+//	        end notice for a conn Iran ended with no live sub (rr157, same
+//	        key as bit11, mconn_rescue_rst.go)
+//	        ext bit13: TCP half-close — it relays a FIN one way while the other
+//	        way keeps flowing (HS2_HALF_CLOSE, halfclose.go, hc183)
 //
 // A reader takes the fields it knows from the first n bytes and skips the rest,
 // so the payload can grow compatibly (a v1 reader sees only maxLinks).
@@ -78,6 +96,10 @@ const (
 	infoExtMax = 4
 
 	capExtMConnStripe = 1 << 0 // ext bit0: reads STRIPE records (HS2_MCONN_STRIPE)
+	// rs169 (idempotent rescue, HS2_MCONN_RESCUE_IDEM, mconn_rescue169.go)
+	// needs no bit: it changes only how each side answers records an older
+	// peer already sends (a repeated RESCUE, a late ACK). bit11/12 are rescue-rst
+	// (rr166, mconn_rescue_rst.go), bit13 half-close (hc183).
 )
 
 // peerInfo is one side's kindInfo message.

@@ -114,7 +114,15 @@ traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4 
 
 ### The ceiling — how many links at most (auto, per server)
 
-`max_links` caps the pool. It has three forms:
+`max_links` caps the pool. It is a **soft cap** for live links: the pool
+never *dials* past it, but with `HS2_RETIRE_KEEP_IDLE` (on by default on
+the reverse `l3mtcp` edge) a link that is retiring stays up while it still
+carries live idle user connections (reclaimed after 60 m idle), so for a
+while after a shrink `links:` can show more links up than `max_links`. The
+retiring links above `max_links` with the fewest connections still follow the
+old 5-minute rule, and the reverse listener accepts up to about twice
+`max_links` plus a margin, so the overshoot is bounded and short-lived. It
+has three forms:
 
 | `max_links` | meaning |
 |-------------|---------|
@@ -189,9 +197,9 @@ ceiling is above 64.
 ### Restarts and outages
 
 - **Warm start.** The Iran side keeps its last target in
-  `/run/hs2/<config>.warm`. A restart within 15 minutes comes back at that
+  `/run/hs2/<config>.warm`. A restart within an hour comes back at that
   size (`link pool: coming up at N links, the size it had before this
-  restart`); it only ever raises the start size, and it is written only after
+  restart`), within 3 hours at half of it; it only ever raises the start size, and it is written only after
   a minute of uptime, so a crash loop does not keep a high value alive.
 - **Paced handshakes.** Every new link takes a turn from one gate per
   process: at most 8 handshakes in flight, starts spaced 40–160 ms — a
@@ -266,6 +274,16 @@ adjustable from `hs2-menu` → tunnel → **Tuning** (auto / manual with size
 presets / off, and the congestion control and queue discipline), or in the
 config's `"tuning"` section — nothing is hidden in a stray sysctl file.
 
+**Required: `net.ipv4.tcp_mtu_probing=1`.** A path that drops large packets
+without sending ICMP back (an MTU blackhole) stalls
+every download on it with `0`; with `1` the kernel probes a smaller MSS only
+after such a stall (one stall of 4–13 s per link, then it recovers; mt153).
+`hs2 run` sets it as root together with the rest of the tuning, unless tuning
+is `off` or `HS2_NO_TUNE` is set — then set it yourself
+(`sysctl -w net.ipv4.tcp_mtu_probing=1` and a line in `/etc/sysctl.d/`).
+`hs2 doctor` warns when it is `0` (and when it is `2`: probing on every
+connection costs throughput).
+
 ## Certificate renewal without downtime
 
 Let's Encrypt certificates renew 30 days before expiry (certbot's default,
@@ -330,6 +348,18 @@ started, stopped, edited and deleted on its own.
   asks whether to remove the `hs2` program and `hs2-menu` too — by default
   they stay, so setting up again needs no download. The certificate-renewal hook reloads
   every hs2 tunnel, so no renewal ever points at a deleted service.
+- **Queue control with two reverse `l3mtcp` tunnels on one server.** The queue
+  controller's tc shaper (`HS2_QUEUE_CTL` / `HS2_QUEUE_CTL_UP`, on by default for
+  reverse `l3mtcp` since rel69a) is per network device, not per tunnel: a second
+  tunnel on the same device joins the first one's tree (its own class `1fe1:N`
+  + cake under the same htb), runs tc on that device every 10 s, and leaves its
+  class behind when it stops (no filter points at it, so it is harmless, but it
+  changes the other tunnel's tree). Keep the shaper on one tunnel per server and
+  turn it off on the others with a drop-in, e.g.
+  `/etc/systemd/system/hs2-out.service.d/60-noshaper.conf`:
+  `[Service]` / `Environment=HS2_QUEUE_CTL=0` / `Environment=HS2_QUEUE_CTL_UP=0`
+  (both servers; this is how the reference deployment runs its second tunnel).
+  The installer does not add this drop-in by itself.
 
 ## Several user ports, each to its own panel inbound (per-port targets)
 
@@ -484,6 +514,13 @@ share the carrier by bytes, and a full queue drops from the flow with the
 most queued. On a 20 Mbit/s bottleneck with 8 downloads, ping through the tun
 went from 66 ms (p50) to 12 ms at the same throughput. `HS2_DG_FQ=0` turns it
 off (one FIFO per carrier, as before).
+
+A high ping *on the client* while it downloads (a speedtest's "loaded" or
+"download" ping) is usually the user's own access link — the LTE/Wi-Fi
+router or modem queueing its own download (bufferbloat) — not the tunnel.
+To tell them apart, ping the kharej server from the **Iran server** at the
+same time: if that stays flat while the client's ping climbs, the queue is on
+the client's side of Iran.
 
 **Carriers share the bottleneck.** All carriers of a pool go between the same
 two servers, so they meet at the same bottleneck and each one's delay signal
@@ -699,6 +736,8 @@ the per-connection cap; use `mtcp` there.
 ## Requirements
 
 - Two Linux servers (tested on Ubuntu 22.04+), root access.
+- `net.ipv4.tcp_mtu_probing=1` on both (hs2's tuning sets it when it runs as
+  root; `hs2 doctor` warns when it is not 1).
 - **TLS modes only** (`mtcp` / `l3mtcp` / `tls`, and tun-over-tcp): a domain whose
   A record points to the **kharej** server, and port 80 free on kharej during the
   first install (for the certificate) — or an existing Let's Encrypt certificate.
@@ -787,6 +826,8 @@ What changes for an existing deployment after the upgrade:
 | `HS2_LB_JUDGE_DATA` — the LB judge counts only dials that failed before TCP connected (a front's handshake failure no longer lowers a path) | both sides | off | **on** |
 | `HS2_LB_RESCUE` — a light user whose only sub sits on a lowered / cut path gets a copy on a good path, at once | Iran (edge) | off | **on** |
 | `HS2_LB_RESCUE_CALLFREE` — those rescue copies stay off the links a call is using | Iran (edge) | off | **on** |
+| `HS2_LB_RESCUE_CUT` — a light user on a path the judge holds CUT (not merely lowered) gets its copy past the budget even while raw, and a dual one gives its sub on the cut path up through the close handshake (own bound, `HS2_LB_RESCUE_CUT_PER_SEC`, 600/s; stuck59, default since stuck61) | Iran (edge) | off | **on** |
+| `HS2_LB_RESCUE_CUT_L3` — the TUN lane (ping, games, small packets) and its dup copy leave links on paths this tunnel's judge holds cut (stuck59/60; not a default: with both keys the lab download was 5.5% lower, see CHANGELOG stuck61) | both sides | off | off |
 | `HS2_LB_CALL_LATE` — a call whose copy on one path runs >= 100 ms and twice behind its copy on another gets a fresh sub off that path and gives the late one up (acts only with `HS2_LB_RESCUE` on; since rel51 it also runs the stuck-call trigger: a call whose subs all sit on one path whose sockets stay in loss recovery / backlog for 500 ms, or that receives nothing for 600 ms while sending, gets a fresh sub off that path) | Iran (edge) | off | **on** |
 | `HS2_REFILL_WAIT_MS` / `HS2_REFILL_WAIT_BYTES` — after a link loss the edge holds a new connection up to 300 ms for a link with the fewest bytes (branch start42) | Iran (edge) | off | **300 / 1** |
 | `HS2_START_DIAL` — the first pool, and a pool back after an outage, dial through a start gate (32 at a time) | kharej (exit) | off | **on** |
@@ -795,6 +836,14 @@ What changes for an existing deployment after the upgrade:
 | `HS2_MCONN_STRIPE_FAST_SOLO` — the fast rule only for an upload that stripes alone; while another upload stripes, uploads widen the rel53 way (rel54b) | Iran (edge) | off | **on** |
 | `HS2_MCONN_STRIPE_FAST_EARLY_MS` — in a raw connection's first second the upload rate is sampled every 200 ms, so a fast upload upgrades to stripe in ~400 ms (rel54) | Iran (edge) | off | **200** |
 | `HS2_MCONN_STRIPE_UP_PATHQ` — the upload stripe gate reads the light users' queue per path, not only the overall one (rel54) | Iran (edge) | off | **on** |
+| `HS2_MCONN_STRIPE_UP_SPLIT` — the upload stripe gate grows on the median of 3 samples over the path's learned noise floor (its 30 s lower decile, capped at 10 ms) and cuts on the latest sample alone (10 ms floor, 67 % of the target), so the path's standing 3–7 ms queue no longer holds the stripe narrow while a queue spike still cuts at once (gate74: one upload +31 % in the production-like lab, light users' p99 unchanged). Turn off with `HS2_MCONN_STRIPE_UP_SPLIT=0` on Iran; tuning: `HS2_MCONN_STRIPE_UP_GROW_BASE_MAX`, `HS2_MCONN_STRIPE_UP_CUT_BASE_MAX` (ms), `HS2_MCONN_STRIPE_UP_CUT_PCT` | Iran (edge) | off | **on** |
+| `HS2_LB_SILENT` — a blackholed path (its links have data waiting and get nothing acked while the other paths read) is read as 100 % loss and cut within ~7-12 s, held out while dark (only a byte acked ends the silence), and a path cooled for dials that got no SYN-ACK is probed every 2 s, so it is back 2-8 s after the blackhole clears (bh93-bh101); `HS2_LB_SILENT_REGROW` (lab key, off: no measured gain) lets the rebalance retire more idle links a round while such a path regrows | kharej (exit) | off | **on** |
+| `HS2_MCONN_RESCUE` — a light connection (raw, and records-mode through `HS2_MCONN_RESCUE_REC`) whose path goes silent for 1.5 s is resent on a good path from a bounded per-connection ring (raw 128 KB / 64 MB total, records 32 KB / 48 MB total); blackhole lab: failed connections -74 %, 6.7 h soak memory flat, 0 failed rescues; costs: kharej +~80 MB in the bounded pools, crowd p99 +25 ms only inside blackhole windows (er91-er97, rel61). Both sides must run rel60+ (capability-negotiated: an older peer simply gets no rescue) | both sides | off | **on** |
+| `HS2_MCONN_STRIPE_KEEPSTALL` — a striped heavy stream (download or upload) keeps each sub's chunks until the peer has read them, closes a sub whose link went dark (no ack progress, checked against its TCP state) and resends its chunks on a live sub; the receiver opens hole reorder room only after 1.5 s without progress. Blackhole lab: a heavy download/upload through a path that goes dark for 60 s survives (0 zero-throughput seconds) where it used to stall; quiet light p99 and throughput not worse than off (hs112-hs132, rel63). **Both sides need it** (rel63c+) for the full effect: the receiver opens its hole rooms only toward a peer that announces KEEPSTALL (capability ext bit10, hs133), so with one side on, a dark path behaves as before (r63d: an exit-only pair kept no dark protection, 3/6, and +120 MB exit RSS); a mixed pair is memory-safe either way. Roll out the exit (kharej) first, then Iran right after. `HS2_MCONN_STRIPE_KEEPSTALL_IDLE` (mb174, rel67b, on) frees what quiet connections keep, see the in-code defaults | both sides | off | **on** |
+| `HS2_MCONN_RESCUE_JOINPICK` / `HS2_MCONN_RESCUE_SCALE` — a rescue join goes only to a link with fresh progress, on another Iran IP than the paths it leaves (a whole-IP outage darkens every path of that IP); the rescue ring budgets (records 48 MB, raw 64 MB) grow with the connections keeping a ring, capped at 4 % of MemTotal (`HS2_MCONN_RESCUE_RAMPCT`). Production-topology lab (6 Iran IPs × 2 kharej IPv4 + IPv6, whole-IP outages): JOINPICK cuts lost rescue joins, SCALE takes the exit's NAKs to ~0 for ~+100-270 MB on the exit (rs145, rs146). `HS2_MCONN_RESCUE_RETRY` (rel64): a rescue join lost before its answer (closed, or its link gone silent) is replaced once on another path, records lost joins ~106 -> ~19 a run with JOINPICK (rs146) | JOINPICK and RETRY Iran (edge), SCALE both sides | off | **on** |
+| `HS2_LB_CUT_NONEW` — a path the dialing side reports cut gets no new connections (0 in the steering draw, and its links sort after every other link, before pressure, so a cut path's empty probe links no longer win new connections under a crowd's churn; with every path cut nothing changes). Flapping path lab (dark 25 s / clean 25 s): 0 vs 73-111 failed crowd connections in dark phases 2-5; single blackhole and quiet runs unchanged (fl107/fl108) | Iran (edge) | off | **on** |
+| `HS2_RETIRE_KEEP_IDLE` — a pool shrink no longer resets live idle user connections (SSH, push, long-poll, IM keepalives, xray mux) on retiring links: they are reclaimed only after 60 m idle (`HS2_RETIRE_KEEP_IDLE_MIN`) instead of 5 m, and the 20 m trickle force-close is skipped; above max_links the surplus retiring links with the fewest connections still follow the old rules, cut-path drains unchanged. Production edge closed ~8.7k idle user conns a day this way; lab 0 vs 34 EOF on 900 idle conns (id125/rk127) | Iran (edge) | off | **on** |
+| `HS2_MCONN_STRIPE_DL_FAIR` — the download fast-stripe slot is a 3 s lease taken only by a download's first growth (before, one long background download that once striped fast held it for its whole life), and a download at >= 80 Mbit/s may take one of 4 stripe slots past the 8-connection stripe cap (uploads and slow streams never). A single download among 3-10 background users: lab 427 -> 752 Mbit/s mean, p10 217 -> 393, striped at ~1.5 s in 10/10 runs; background users' throughput and light p99 unchanged (cs141/df142) | Iran (edge) | off | **on** |
 | `hs2-menu` with no argument | installer | classic menu | **new menu** (classic: `c`, `hs2-menu --classic`, `HS2_MENU=classic`, `default_menu=classic` in `/etc/hs2/menu.conf`) |
 
 These keys (eight since rel52, three more Iran-side upload keys in rel54) are part of the production default table, so (like every key
@@ -814,7 +863,7 @@ window is per tunnel; a first lab u8 battery gained (n=6+6) but the
 confirmation round did not replicate it on either lab, so it stays a lab
 key — `docs/reality-architecture.md` §11.11.7), and the lab-only
 trace keys `HS2_MCONN_TRACE`, `HS2_MCONN_TRACE_PORT`, `HS2_MCONN_TRACE_GAME`
-(rel52: also traces game-like light two-way connections); the up54–up57 lab keys `HS2_MCONN_STRIPE_XDIR`, `HS2_MCONN_STRIPE_UP_NOSHARE` (Iran) and `HS2_STRIPE_UP_SUB_WIN_MB` (kharej) stay off.
+(rel52: also traces game-like light two-way connections); the up54–up57 lab keys `HS2_MCONN_STRIPE_XDIR`, `HS2_MCONN_STRIPE_UP_NOSHARE` (Iran) and `HS2_STRIPE_UP_SUB_WIN_MB` (kharej) stay off; fl107's `HS2_LB_CUT_NONEW` is a default since fl108 (see the table).
 
 Behaviour that changed without a key since r31: a whole-peer outage no longer
 cools the non-primary LB paths (rel51); refused dials before the peer listens
@@ -830,18 +879,81 @@ Restore the old behaviour:
   `Environment=HS2_LB_RESCUE=0 HS2_LB_RESCUE_CALLFREE=0 HS2_LB_CALL_LATE=0 HS2_REFILL_WAIT_MS=0 HS2_REFILL_WAIT_BYTES=0`
   (Iran), `Environment=HS2_START_DIAL=0` (kharej), then
   `systemctl restart hs2`;
+- **before rel58** (back to rel54c defaults): `Environment=HS2_MCONN_STRIPE_SHARE_COPIES=0 HS2_LB_RESCUE_CUT=0 HS2_QUEUE_CTL_UP=0 HS2_LB_EDGE_SYNC=0 HS2_RELAY_LAZY=0`
+  (Iran), `Environment=HS2_QUEUE_CTL=0 HS2_RELAY_LAZY=0` (kharej); one at a
+  time: `HS2_MCONN_STRIPE_SHARE_COPIES=0` (share63), `HS2_QUEUE_CTL_UP=0` /
+  `HS2_QUEUE_CTL=0` (qctl63), `HS2_LB_EDGE_SYNC=0` (judge58),
+  `HS2_RELAY_LAZY=0` (mem70, both sides); the mem70 frozen-session guard
+  `HS2_SMUX_STALL_S` is off by default (`=15` turns it on);
+  u8lazy's writeReady is not in rel58 (wr72 reverted it: download in
+  scenario P −6.4 %, u8 call p99 +25 ms); `HS2_QUEUE_CTL_UP` was NOT a rel58 default (rel58v: echo p99
+  +9 ms under 8 uploads); it is one since rel69a together with `_KEEP` (see **before rel69a**);
+- **before stuck61** (light users off cut paths): `Environment=HS2_LB_RESCUE_CUT=0`
+  (Iran);
+- **before bh101** (blackholed paths read as silent): `Environment=HS2_LB_SILENT=0`
+  (kharej);
+- **before fl108** (a cut path gets no new connections): `Environment=HS2_LB_CUT_NONEW=0`
+  (Iran);
+- **before rel61** (silent-path rescue of light connections): `Environment=HS2_MCONN_RESCUE=0`
+- **before rel63** (striped heavy streams survive a dark path): `Environment=HS2_MCONN_STRIPE_KEEPSTALL=0`
+  (both sides);
+  since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
+  are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
+  512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69k** (cross-side call switch, darkcall switch coverage fixes): `Environment=HS2_XS261=0` (both sides;
+  XS records are still parsed; the capability bit is no longer announced), `Environment=HS2_B262_COVER=0` (both sides);
+  `HS2_B262_REPLACE` is off by default; `HS2_B262_WAIT_MS=0` gives back the unbounded darkwait (default 500 ms);
+  `Environment=HS2_B270_TXRES=0` (both sides; stranded call-copy resend), `Environment=HS2_B274_REPAIR=0` (Iran;
+  one-sub call repair), `Environment=HS2_JM271_RST=0` (kharej; missed-join RST);
+  all together: `Environment=HS2_XS261=0 HS2_B262_COVER=0 HS2_B270_TXRES=0 HS2_B274_REPAIR=0 HS2_JM271_RST=0`;
+- **before rel69j** (per-path download gate, stuck raw upload, dc254 send-frozen call switch, call copy hold):
+  `Environment=HS2_DL259_PATHQ=0` (kharej), `Environment=HS2_UL257_STUCK=0` (Iran), `Environment=HS2_DC254=0`
+  (both sides; the dc254 detector counters still run); b255's L7 cap: `Environment=HS2_HALF_CLOSE_MAX=4096`;
+  all together: `Environment=HS2_DL259_PATHQ=0 HS2_UL257_STUCK=0 HS2_DC254=0 HS2_HALF_CLOSE_MAX=4096`;
+- **before rel69h** (storm pacing of lite raw->dual upgrades): `Environment=HS2_ST244_UPG_RATE=0` (Iran);
+  rel69i's grouped shaper filters and the restart adoption of a stale hs2 class have no switch;
+- **before rel69f / rel69g** (young stripe sub's first hole re-sent on an older sub): `Environment=HS2_DL243_RESCUE=0`
+  (kharej); the fx247 shaper self-heal, tc timeouts and the cs228 lock fix have no switch;
+- **before rel69e** (queue-ctl shaper on the last mq child): `Environment=HS2_QUEUE_CTL_SHAPER=root` (both sides; the
+  rel69d root-mode htb). Never run a pre-fx247 (before rel69g) root-mode hs2 on the same device as a mqchild one
+  (its root replace re-grafts the mqchild htb as the root);
+- **before rel69a** (edge upload queue controller, fast onset, kept caps, BBR refresh):
+  `Environment=HS2_QUEUE_CTL_UP=0 HS2_QUEUE_CTL_FAST=0 HS2_QUEUE_CTL_KEEP=0 HS2_LINK_CC_REFRESH=0` (Iran),
+  `Environment=HS2_QUEUE_CTL_FAST=0 HS2_QUEUE_CTL_KEEP=0 HS2_LINK_CC_REFRESH=0` (kharej); one at a time works too;
+- **before rel68e** (call and lite dark-path fixes cs221..cs229, download rank mode):
+  `Environment=HS2_CS221_DARKCALL=0 HS2_CS223_CALLRESEND=0 HS2_CS223_DARKRESEND=0 HS2_CS224_COPYIDLE=0 HS2_CS224_STALESWITCH=0 HS2_CS225_CALLPATH=0 HS2_CS226_LITEPATH=0 HS2_CS229_MINPLACE=0`
+  (both sides; `HS2_CS226_LITEPATH=0` alone turns off LITEVISIT and MINPLACE's lite part),
+  `Environment=HS2_FX212_DL_PRIM=1` (Iran, back to rel68d's refuse rule); one at a time works too;
+- **before rel68d** (fx212 fixes): `Environment=HS2_FX212_DARKCALL=0 HS2_FX212_SUB_RESEND=0 HS2_FX212_AGE_GAP=0` (both sides),
+  `Environment=HS2_FX212_DL_PRIM=0` (Iran); one at a time works too. The half-close fixes (hc213) and the abandoned-sub
+  kept-chunk release (audit211 H2) have no switch;
+- **before rel68c** (small-connection resend): `Environment=HS2_MCONN_SUB_RESEND=0` (both sides);
+- **before rel68b** (dark-call switch, call resend, stripe steering, copy-sharing downloads and raw-upgrade uploads):
+  `Environment=HS2_MCONN_DARKCALL=0 HS2_MCONN_CALL_RESEND=0 HS2_LB_STRIPE_STEER=0` (both sides),
+  `Environment=HS2_MCONN_STRIPE_DL_COPIES=0 HS2_MCONN_STRIPE_UP_RAW_COPIES=0` (Iran); one at a time works too;
+- **before rel64** (lost rescue join replaced once): `Environment=HS2_MCONN_RESCUE_RETRY=0` (Iran);
+- **before rs146** (rescue join pick + scaled rescue rings): `Environment=HS2_MCONN_RESCUE_JOINPICK=0 HS2_MCONN_RESCUE_SCALE=0`
+  (Iran), `Environment=HS2_MCONN_RESCUE_SCALE=0` (kharej);
+- **before rel62k** (idle user connections kept on retiring links): `Environment=HS2_RETIRE_KEEP_IDLE=0`
+  (both sides);
+- **before rel62k3** (download fast-stripe slot as a lease, extra stripe slots for fast downloads): `Environment=HS2_MCONN_STRIPE_DL_FAIR=0`
+  (Iran);
 - **rel54's fast upload** (on by default since rel54c; it costs light users
   about +3 ms crowd / +7.7 ms echo p99 while one heavy upload runs): on Iran
   `Environment=HS2_MCONN_STRIPE_FAST=0` turns FAST, its reserve, SOLO and
   EARLY_MS off; or, keeping it on, one part at a time: `HS2_MCONN_STRIPE_FAST_RESERVE=0`,
-  `HS2_MCONN_STRIPE_FAST_EARLY_MS=0`, `HS2_MCONN_STRIPE_UP_PATHQ=0`;
+  `HS2_MCONN_STRIPE_FAST_EARLY_MS=0`, `HS2_MCONN_STRIPE_UP_PATHQ=0`,
+  `HS2_MCONN_STRIPE_UP_SPLIT=0` (gate74's split gate);
   `HS2_MCONN_STRIPE_FAST_SOLO=0` gives every parallel upload the fast rule
   again (rel54 before rel54b);
 - **the whole default table off** (as before `defaults22`, older than r31):
   `Environment=HS2_DEFAULTS=legacy`;
 - **the classic menu:** `default_menu=classic` (new menu → 9 → 4).
 
-Mixed versions: rel40 and r31 interoperate in both directions (tested: new
+Mixed versions: rel54c and rel69j interoperate in both directions (2-tunnel lab
+rehearsal of the reference tunnel's upgrade: new kharej + old Iran and old kharej + new
+Iran, reverse `l3mtcp` with a Reality front, traffic at every step, config files
+unchanged). rel40 and r31 interoperate in both directions (tested: new
 kharej + old Iran and old kharej + new Iran, reverse `l3mtcp` with lb, 130 s
 of traffic each, 0 loss), so either server may be upgraded first; upgrade the
 other one soon after so both run the same defaults.
@@ -998,29 +1110,185 @@ defaults; ...)`.
 | `HS2_LB_JUDGE_DATA` | `1` | both |
 | `HS2_SMUX_AUTOWIN`, `HS2_SMUX_AUTOWIN_REL` | `1` | both |
 | `HS2_SMUX_AUTOWIN_SHARE_MB` | `32` | both |
+| `HS2_MCONN_RESCUE` (rel61; silent-path rescue of light connections, records-mode included unless `HS2_MCONN_RESCUE_REC=0`; `=0` turns it off) | `1` | both |
+| `HS2_MCONN_STRIPE_KEEPSTALL` (rel63; a striped heavy stream keeps unacked chunks and resends them off a dark sub; `=0` turns it off) | `1` | both |
+| `HS2_MCONN_RESCUE_SCALE` (rs146; rescue ring budgets grow with the ring connections, capped at `HS2_MCONN_RESCUE_RAMPCT`=4 % of MemTotal; `=0` = fixed 48/64 MB) | `1` | both |
+| `HS2_AP_SHRINK_HYST` (sp176; the autopilot shrinks only a link's worth under the grow line, no boundary flap; `=0` turns it off) | `1` | both |
+| `HS2_MCONN_DARKCALL` (cs193/cs194, rel68b; a 200 ms timer finds a call's dark sub — no ack progress, repeated RTO and nothing received for `HS2_MCONN_DARKCALL_MS`, in-code `1000`, clamped 300-5000 — and moves the call's primary to a live sub on another socket and path with a ring resend; Iran starts a records rescue when there is none; each side acts on its own sending direction, no wire change; `HS2_MCONN_DARKCALL_TRACE` stays off; `=0` turns it off) | `1` | both |
+| `HS2_LB_STRIPE_STEER` (st149/st150, rel68b; stripes keep off paths the steering reports cut — Iran: stripe picks and the upload sender, kharej: the judge steers the download sender; never stalls a stripe that has only cut-path subs; in production by drop-in since 2026-11-14; `=0` turns it off) | `1` | both |
+| `HS2_MCONN_SUB_RESEND` (r68fix2..r68fix4, rel68c; a small light connection — at most `HS2_MCONN_SUB_RESEND_SCOPE_KB`, in-code 256, sent — keeps its subs' unacked chunks and resends them on a fresh live sub when one dies instead of a lost-copy reset; keep age max(300 ms, 3 x srtt), per-sub healing gaps, 32 MiB global cap; `=0` turns it off) | `1` | both |
+| `HS2_FX212_DARKCALL` (fx212, rel68d; the DARKCALL in-flight cap applies only on a stalled link — bytes in flight, no ack progress for half the dark time — a call with 2+ live subs never has them all capped, and the cap fits the resend ring; `=0` gives back the rel68c cap) | `1` | both |
+| `HS2_FX212_SUB_RESEND` (fx212, rel68d; SUB/CALL_RESEND light-path cost: a given-up sub of a small connection resends only when it holds undelivered bytes, one shared 1 s keep sweeper instead of per-connection polls, keptMax noted per tick, the resend skips chunks the target sub already holds; `=0` gives back rel68c) | `1` | both |
+| `HS2_FX212_AGE_GAP` (fx212 / audit211 M2, rel68d; a sub-resend age trim on the write path, without TCP proof, opens the sub's gap so a death in that window takes the fast reset instead of a resend with a hole and a 30 s stall; `=0` turns it off) | `1` | both |
+| `HS2_CS221_DARKCALL` (cs221, rel68e; a darkcall switch resends only what the target sub lacks; a call pair never puts both copies of a chunk on one path while another path has room; the darkcall rx rescue waits while a live sub reads; `=0` gives back rel68d) | `1` | both |
+| `HS2_CS223_CALLRESEND` (cs223, rel68e; a given-up call sub's chunks are resent at give-up on a live sub instead of at the sub's death, and every resend skips chunks the target already delivered; `=0` gives back cs221) | `1` | both |
+| `HS2_CS223_DARKRESEND` (cs223, rel68e; a call sub that goes dark while not the primary resends at once the chunks the other subs lack (needs CALLRESEND); `=0` turns it off) | `1` | both |
+| `HS2_CS224_COPYIDLE` (cs224, rel68e; a copy-only sub that moves bytes is not idle for the drain reclaim; `=0` gives back the old rule) | `1` | both |
+| `HS2_CS224_STALESWITCH` (cs224, rel68e; no ring resend off a sub an earlier darkcall switch already left; `=0` gives back the old rule) | `1` | both |
+| `HS2_DC254` (dc254, rel69j; darkcall also switches a call primary whose sends sit frozen in RTO backoff (no ack progress for darkcallAfter, backoff >= 2 or >= 2 retransmits) while its link still receives (call visits only; a cs226 lite visit keeps rel69i's DARK-only switch/rescue), and a copying call keeps both copies while it was call-like within callFreeTTL under mCallMaxRate; the silent-rx / tx-stall / late-tick detector (`dc254` part of the darkcall log line, its own 10 lines/min budget) runs with the key on or off; `HS2_DEFAULTS=legacy` turns it off unless `=1`; `=0` gives back rel69i) | `1` | both |
+| `HS2_XS261` (xs261, rel69k; cross-side call switch: a side that moves a call off a dark/txDark sub, or whose call receive is silent >= 800 ms while another sub's link receives, sends an XS record (kind 0x15 + seq) on the sub the peer should make its primary; the receiver switches through darkcall (resend of what the peer may lack), at most one act per 500 ms, stale seq ignored, never echoed; sent only to a peer announcing ext bit 14 (older peers, incl. r54c, never see the record); also b258's cs224 fix (a sub a darkcall switch chooses loses its "left" mark); `=0` gives back rel69j) | `1` | both |
+| `HS2_B262_COVER` (b262, rel69k; a darkcall switch trusts "the target holds it" only for bytes the target provably wrote or still queues, a ring that misses provably unconsumed bytes is short (not covered), a chunk's only copy never goes to a dark sub, and a call pair (3+ subs) never leaves a chunk on dark subs only (the writer waits, "darkwait"); `=0` gives back b261) | `1` | both |
+| `HS2_B262_WAIT_MS` (b262, rel69k; upper bound in ms of one darkwait episode; at the bound the chunk goes out as b261 sent it (counted "give"); `0` = no bound; default 500 since b266: unbounded, Kharej held sends up to 5 s in lab1) | `500` | both |
+| `HS2_B270_TXRES` (b270; a 2-sub call's copies that went only on a non-primary sub whose link is half dead — dc254 txDark (our sends frozen in RTO), or the link received nothing for darkcallAfter while the conn's receive advances over the other sub (the peer->us direction dead) — are resent on the live sub at the edge and every 300 ms while it lasts, repeats only past what was covered; data-dark lab3 ab270: 7-10 s call stalls on rel69j/b266 gone; `=0` gives back rel69k-pre) | `1` | both |
+| `HS2_B274_REPAIR` (b274, rel69k; a call conn left with one live sub (its second died) re-opens the second at the next manager tick when it was call-like within 5 s, instead of waiting for the lite sampler's two steady call-like windows (lab1 R1: ~48 s on one sub; a data cut on that sole sub had no darkcall candidate, 12.3 s stall); call budget and the 2 s reopen backoff still apply; `=0` gives back the sampler only) | `1` | Iran (edge) |
+| `HS2_B270_RECENT_MS` (b274, rel69k; a b270 resend takes only the half-dead sub's chunks sent within this many ms (plus its queue): lab1 one-direction cuts, the rx edge misfired on subs whose own direction worked and pushed 450-1260 old chunks in front of the live sub's call data; `0`/unset = default 600000 (in effect unbounded = b270); lab1 TH1 with 3000 resent 0 chunks in 15 edges, so turn it down only after a lab3 data-dark check) | `600000` | both |
+| `HS2_JM271_RST` (b271, rel69k; the exit answers a join for a conn it does not know (missed join, e.g. after an exit restart) with an RST record (base record 0x05, understood by every mconn peer since part A, incl. rel69i/rel69j/r54c) so Iran ends the conn at once instead of re-joining it forever; 500/s, burst 2000, over the bucket the sub is closed bare as before; lab3 rs271: 1000 long-lived conns after an exit restart 70-700 hung -> 0, all ended by RST within p50 2 s; `HS2_DEFAULTS=legacy` turns it off unless `=1`; `=0` gives back rel69j) | `1` | kharej (exit) |
+| `HS2_B262_REPLACE` (b262, rel69k; Iran closes (CLOSE-REQ) a call sub a darkcall switch left that has had no TCP ack progress for >= 2 s with >= 16 KB in its socket while the primary is live; its link goes on the dead-key avoid list and the call opens a fresh sub; one per conn per 10 s, 20/s per process; lab1 ABAB not proven, so off; `=1` turns it on) | `0` | Iran (edge) |
+| `HS2_CS225_CALLPATH` (cs225, rel68e; a call's copy/pair sub goes to another healthy path than its other subs first; replaced by `HS2_CS229_MINPLACE` while that is on; `=0` gives back cs224) | `1` | both |
+| `HS2_CS226_LITEPATH` (cs226, rel68e; master switch of the lite dark-path rules (LITEVISIT, MINPLACE's lite part, LITEPLACE); `=0` gives back cs225) | `1` | both |
+| `HS2_CS228_LITEVISIT` (cs228, rel68e; darkcall visits a non-call lite connection only while a live sub has bytes the peer has not consumed and its link is silent while pending or lowered/cut with writes > reads, and moves it off; `=0` turns it off) | `1` | both |
+| `HS2_CS228_LITEPLACE` (cs228; a lite second sub only on another path whose RTT/loss matches the primary's; off in rel68e (MINPLACE replaces it); `=1` turns it on when MINPLACE is `0`) | `0` | both |
+| `HS2_CS229_MINPLACE` (cs229, rel68e; a lite second sub and a call's extra sub keep the original pick and are re-picked on another healthy path only when that pick shares a path with the connection's live subs; replaces LITEPLACE and CALLPATH while on; `=0` turns it off) | `1` | both |
 | `HS2_LINK_PROBATION`, `HS2_PARTIAL_REFILL` | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_SHARE_COPIES` (an upload's stripe may share links that carry lite's copies; uploads only, the game's lane links last — `HS2_MCONN_STRIPE_SHARE_COPIES_LANEQ=0` turns that order off) | `1` | Iran (edge) |
 | `HS2_PICK_LANE` | `on` | Iran (edge) |
+| `HS2_LM_FASTPICK` (fp185; new user connections and mconn subs are placed under the pool's read lock with a CAS-checked placement, so a connection storm no longer queues on the pool's write lock; `=0` turns it off) | `1` | Iran (edge) |
+| `HS2_MCONN_RESCUE_JOINPICK` (rs146; a rescue join only on a fresh link of another Iran IP; `=0` = the old pick) | `1` | Iran (edge) |
+| `HS2_MCONN_RESCUE_RETRY` (rel64; a rescue join lost before its answer is replaced once on another path; `=0` = no retry) | `1` | Iran (edge) |
 | `HS2_STRIPE_AW_SOLO` | `1` | Iran (edge) |
 | `HS2_STRIPE_AW_HEAVY` | `2` | Iran (edge) |
 | `HS2_LB_RESCUE`, `HS2_LB_RESCUE_CALLFREE` | `1` | Iran (edge) |
 | `HS2_LB_CALL_LATE` | `1` | Iran (edge) |
+| `HS2_LB_RESCUE_CUT` (stuck61) | `1` | Iran (edge) |
+| `HS2_LB_EDGE_SYNC` (judge58; the edge keeps a cut the dialing side's fresh report still holds — no ping-pong) | `1` | Iran (edge) |
+| `HS2_LB_SLOW_SKIP_COPY` (lb89; the force close of trickling streams on retiring / cut-drained links skips mconn copy subs, whose rate is never measured) | `1` | Iran (edge) |
+| `HS2_LB_CUT_NONEW` (fl108; a path the dialing side reports cut gets no new connections: 0 in the steering draw, its links sorted after every other link; `=0` turns it off) | `1` | Iran (edge) |
+| `HS2_RETIRE_KEEP_IDLE` (rel62k; a pool shrink keeps live idle user connections on retiring links, reclaimed after 60 m idle; `=0` turns it off) | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_DL_FAST` (dr116/rel62; a single download stripes from its first 200 ms samples — 80 Mbit/s twice in a row — and widens by doubling, solo; `=0` turns it off) | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_DL_FAIR` (rel62k3/cs141; the download fast-stripe slot is a 3 s lease for a download's first growth, fast downloads may take 4 stripe slots past the cap; `=0` turns it off) | `1` | Iran (edge) |
+| `HS2_STRIPE_HEAVY_FLOOR_MB` (dl79; a download's sub windows never under 4 MiB once it proves heavy; `=0` turns the floor off) | `4` | Iran (edge) |
+| `HS2_STRIPE_HEAVY_FLOOR_GATE` (dl79; the floor drops while the stream's own loop shows this many queued probes in a row; `0` = floor without the gate) | `2` | Iran (edge) |
 | `HS2_REFILL_WAIT_MS` | `300` | Iran (edge) |
 | `HS2_REFILL_WAIT_BYTES` | `1` | Iran (edge) |
 | `HS2_MCONN_STRIPE_FAST` (rel54, default again since rel54c; reserve `HS2_MCONN_STRIPE_FAST_RESERVE`, default 3; `0` turns it off) | `1` | Iran (edge) |
 | `HS2_MCONN_STRIPE_FAST_SOLO` (rel54b; acts only while `HS2_MCONN_STRIPE_FAST` is on) | `1` | Iran (edge) |
 | `HS2_MCONN_STRIPE_FAST_EARLY_MS` (rel54; acts only while `HS2_MCONN_STRIPE_FAST` is on) | `200` | Iran (edge) |
 | `HS2_MCONN_STRIPE_UP_PATHQ` (rel54) | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_UP_SPLIT` (gate74) | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_DL_COPIES` (dl186/dl188, rel68b; a download's stripe picks may share links that carry lite's copies, as uploads do under SHARE_COPIES, at most `HS2_MCONN_STRIPE_DL_COPIES_MAX` (in-code `4`, `0` = no bound) such subs; `=0` turns it off) | `1` | Iran (edge) |
+| `HS2_FX212_DL_PRIM` (fx212 rel68d, rank mode dlp217 rel68e; `2`: a download grades the links carrying lite copy-only subs — no open primary first, then idle primaries, then at most `HS2_FX212_DL_PRIM_HOTK` (in-code `1`) sub on a link whose primaries moved bytes in the last `HS2_FX212_DL_PRIM_QUIET_MS` (in-code `1000`); `1` gives back rel68d (refuse any link with a primary), `0` rel68c) | `2` | Iran (edge) |
+| `HS2_MCONN_STRIPE_UP_RAW_COPIES` (ul197, rel68b; an upload's raw upgrade takes the share-copies hint too, so its first stripe sub may share a link with lite's copies; `HS2_MCONN_STRIPE_UPGATE_HYST` stays off; `=0` turns it off) | `1` | Iran (edge) |
 | `HS2_START_DIAL` | `1` | kharej (exit) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
+| `HS2_LB_SPARE_EDGE` (sp176; a spare is asked only where the edge would serve it, with a per-path backoff when it did not stay; `=0` turns it off) | `1` | kharej (exit) |
 | `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
 | `HS2_LB_FLAP_PEN` | `1` | kharej (exit) |
+| `HS2_LB_SILENT` (bh101; a blackholed path — data waiting, nothing acked — reads as 100 % loss, is cut in ~7-12 s and probed back 2-8 s after it clears) | `1` | kharej (exit) |
+| `HS2_QUEUE_CTL` (qctl63; the path-queue controller for what kharej sends) | `1` | kharej (exit) |
+| `HS2_QUEUE_CTL_UP` (qctl63; the path-queue controller for what Iran sends; a default since rel69a with _KEEP; `=0` turns it off) | `1` | Iran (edge) |
+| `HS2_QUEUE_CTL_FAST` (lat58; a controller caps a big queue after `qFastTicks` instead of `qStartTicks`; rel69a; `=0` gives back the slow onset) | `1` | both |
+| `HS2_QUEUE_CTL_KEEP` (hl204..hl232, rel69a; an idle cap is kept at the path's measured rate, a new burst is capped at its onset, the cap probes past the measured rate, Iran's upload stripe gate takes the edge cap's target; `=0` gives back rel68e's controller; sub-switches `HS2_QUEUE_CTL_SEEN=0`, `HS2_QUEUE_CTL_STRIPE=0`, `HS2_QUEUE_CTL_STRIPE_SPIKE=0`) | `1` | both |
+| `HS2_QUEUE_CTL_SHAPER` (pk239, rel69e; where the queue-ctl shaper (htb + cake) lives: `mqchild` = on the last child of a multi-queue NIC's mq root, links steered there only under a cap (clsact skbedit queue_mapping), the mq root kept; a 1-queue NIC, a non-mq root or a kernel < 5.18 falls back to root mode by itself; `root` gives back rel69d (htb as the root qdisc); `ifb` is lab-only, it breaks TSQ) | `mqchild` | both |
+| `HS2_DL243_RESCUE` (dl243/dl244, rel69f; a young stripe sub whose own TCP link has acked nothing for max(300 ms, 2 x srtt) gets its first hole (<= 256 KiB) re-sent on an older sub, 1 per sub, 2 per conn per 10 s; `=0` turns it off) | `1` | kharej (exit) |
+| `HS2_DL259_PATHQ` (dl259, rel69j; the download stripe's 3 ms queue gate is judged per path: a path whose other busy links queue over the target is cut for that download (no chunk, no width slot) until under half the target after 2 s, and the width is judged on the uncut stripe paths only, so a download whose primary loads its own path can still widen onto unloaded paths; `=0` gives back rel69i) | `1` | kharej (exit) |
+| `HS2_ST244_UPG_RATE` (st244..st246, rel69h; the edge paces lite raw->dual upgrades through one token bucket so a connection storm's second-sub upgrades spread over a few seconds; `auto` = max(500, 100 x GOMAXPROCS) a second, burst rate/10; call upgrades and interactive flows (`HS2_ST246_INTERACTIVE_BPS`, in-code 1000 B/s, `0` = off) are not paced; a number sets the rate, `=0` turns it off) | `auto` | Iran (edge) |
+| `HS2_LINK_CC_REFRESH` (us200/cc203, rel69a; a light link whose BBR left STARTUP with a collapsed estimate is re-inited by a reno->bbr toggle; `=0` turns it off) | `1` | both |
+
+The table is `hs2-src/envdef/envdef.go` row for row (105 keys). Not in it on
+purpose: `HS2_MCONN_STRIPE_JUMP_MS` (no proven gain). `HS2_QUEUE_CTL_UP` was
+opt-in until rel69a (rel58v measured echo p99 +10 ms without _KEEP); rel69a
+turns it on together with `_FAST` and `_KEEP` (CHANGELOG rel69a). Opt-in keys, off unless set
+(see CHANGELOG): `HS2_LB_UPLOSS` (Iran; judge of upload-only loss). Off unless set
+since rel68: `HS2_MCONN_RESCUE_RST` (rr166), `HS2_SMUX_SENDBATCH` (lk179),
+`HS2_MCONN_STRIPE_DL_SHARE` / `_HEADROOM` (dl18x); since rel68b:
+`HS2_MCONN_STRIPE_UPGATE_HYST` (ul197), `HS2_MCONN_DARKCALL_TRACE` (cs194). The lab
+key `HS2_MCONN_RESCUE_AGAIN` is not in this build.
+
+**In-code defaults (every carrier and mode, not in the table).** These keys
+are read straight from the environment, so `HS2_DEFAULTS=legacy` does not
+touch them; each acts only while the feature it refines is on (on reverse
+`l3mtcp`, through the table above). `=0` (or the value shown) restores the
+older behaviour.
+
+| key | default | side | what |
+|-----|---------|------|------|
+| `HS2_MCONN_RESCUE_REC` | on (`=0` off) | both | records-mode rescue rides `HS2_MCONN_RESCUE` |
+| `HS2_MCONN_RESCUE_IDEM` (rs169, rel67b) | on (`=0` off) | both | idempotent rescue under `HS2_MCONN_RESCUE_RETRY`: a RESCUE repeated by the edge's retry is answered again (the answer kept 60 s) instead of refused with a reset; a late answer on a replaced join counts; no raw retry when no records ring covers the bytes; a peer that read past this side's raw count needs nothing resent. No wire change |
+| `HS2_MCONN_STRIPE_KEEPSTALL_IDLE` (mb174, rel67b) | on (`=0` off) | both | a striped connection that keeps chunks (KEEPSTALL) is polled every 1 s so what the peer acked is freed; one quiet for 30 s (10 s while the process keeps over half of the 320 MiB global cap) drops its unacked tail. Before, quiet keep-alive connections pinned their last in-flight chunks and filled the global cap, and an active connection then lost its dark-path hole chunk (reset after 30 s) |
+| `HS2_MCONN_RESCUE_KB` / `HS2_MCONN_RESCUE_MB` | `128` / `64` | both | raw rescue ring per connection / total |
+| `HS2_MCONN_RESCUE_MS` | `1500` | both | silence before a rescue starts |
+| `HS2_MCONN_RESCUE_REC_KB` / `HS2_MCONN_RESCUE_REC_MB` | `32` / `48` | both | records ring base size / total for the base rings |
+| `HS2_MCONN_RESCUE_REC_SECS` / `HS2_MCONN_RESCUE_REC_MAXKB` | `3` / `1024` | both | cd152: a records ring holds 3 s of its connection's write rate, at most 1 MB (`MAXKB=32` = the old fixed ring) |
+| `HS2_MCONN_RESCUE_REC_BIGMB` | unset: **sized from RAM** (rel67b; before: `64`) | both | budget for ring growth past 32 KB (a 2 Mbit/s call's ring is ~0.75 MB). Unset, rel67b takes max(min(256 MB, 10 % of RAM), 2 % of RAM), at most 1 GB — RAM is MemTotal or the service's cgroup memory limit when smaller (23 GB → ~470 MB, 4 GB → 256 MB, 1 GB → ~102 MB); the startup log line `mconn rescue-rec: big ring budget N MB (source …)` shows the value, and the `mconn rescue-rec:` counters line shows `big X KB of N MB`. Setting the key (MB) overrides it. mb174: a ring whose rate wants at most half its size for 3 s shrinks back; growth is tiered — calls up to 100 % of the budget, sustained writers 60 %, bursts 40 %. Production (~4.2k connections on rel66b/rel67) sat at the old 64 MB cap. A cap, taken only while used |
+| `HS2_MCONN_RESCUE_RAMPCT` | `4` | both | with `HS2_MCONN_RESCUE_SCALE`, the ring budgets' cap in % of MemTotal |
+| `HS2_HALF_CLOSE` (hc183, rel68) | on (`=0` off) | both | TCP half-close through the tunnel: a user's or target's FIN ends one direction only, the other keeps flowing (curl --data, nc -N, SMTP/RPC clients). Only toward a peer announcing ext bit13; an older peer gets the old full close. A half-closed relay waits at most 2 min (edge) / 3 min (exit) without progress |
+| `HS2_HALF_CLOSE_MAX` (hc183b, rel68; 16384 since rel69j, b255 L7; was 4096) | `16384` (`0` = no cap) | both | at most this many relays wait half-closed per process; over it a relay ends at once with a reset (hc213 abandon mark; before rel69j a FIN) |
+| `HS2_LB_REC_RAMP`, `HS2_LB_LOWER_EVID` (wj178, rel68) | on (`=0` off) | both | a recovered path climbs back to 1.0 on a ramp; a weight is lowered only on evidence (two low readings or real loss) |
+| `HS2_LB_CALL_STUCK_GAP_STRICT` (wj178, rel68) | on (`=0` off) | Iran (edge) | a receive gap alone (talk-spurt pause) no longer counts a call as stuck |
+| `HS2_MCONN_CALL_RESEND` (r68fix, rel68b) | on (`=0` off) | both | a lite call's chunks are kept until TCP acked them and a dead sub's unacked ones are sent again on a live sub (with `HS2_MCONN_STRIPE_RESEND`); on Iran a sub given up by the stuck-call trigger whose close handshake never completed counts as unclean. Before, a call whose subs went dark was reset 10-30 s after the stuck-call give-up ("missing bytes never arrived"; rel67b too). The receiver drops what it already has by offset; no wire change |
+| `HS2_MCONN_DARKCALL_MS` (cs194, rel68b) | `1000` (clamped 300-5000) | both | the dark-evidence window of `HS2_MCONN_DARKCALL` |
+| `HS2_MCONN_STRIPE_DL_COPIES_MAX` (dl188) | `4` (`0` = no bound) | Iran (edge) | the cap of `HS2_MCONN_STRIPE_DL_COPIES` |
+| `HS2_UL257_STUCK` (ul257, rel69j) | on (`=0` off) | Iran (edge) | a raw upload whose writer sat blocked in its first sub's Write for >= 60 % of a full 1 s sample, under 30 Mbit/s, after >= 1 MB, opens its second stripe sub at once instead of waiting for 4 good samples (a sample that moved nothing counts as an upload); app-limited flows never block, so light users never trigger it; logs "ul257 stuck raw upload" |
+
+**Rescue: what it covers and its limits.** `HS2_MCONN_RESCUE` saves a
+*light* connection (web, API, IM, calls) whose path goes silent for 1.5 s
+(`HS2_MCONN_RESCUE_MS`): the edge opens a rescue join on a good path and
+both sides resend, from a bounded per-connection ring, what the other did not
+get. Heavy striped streams are covered by `HS2_MCONN_STRIPE_KEEPSTALL`
+instead. Two kinds: **raw** (a lite connection still in raw mode, ring
+128 KB) and **records** (`HS2_MCONN_RESCUE_REC`, ring 32 KB up to 3 s of the
+connection's rate, at most 1 MB). Limits, by design:
+- **once per connection**: a connection is rescued at most once; a second
+  outage on the same long-lived connection is not rescued (it ends as
+  before);
+- **one retry**: under `HS2_MCONN_RESCUE_RETRY` (edge) a rescue join lost
+  before its answer is replaced **once** on another path; with
+  `HS2_MCONN_RESCUE_IDEM` (rel67b) the exit answers the repeated RESCUE
+  again instead of resetting, and the edge skips a raw retry no records ring
+  could serve;
+- **the ring must cover the gap**: when more was written since the cut than
+  the ring holds (a fast writer, a long silence, or a budget at its cap), the
+  rescue is answered NAK / `nocover` and the connection is reset — the user
+  sees a reset, never wrong or missing bytes;
+- **rare duplicate request**: when the exit had already finished and
+  forgotten a connection whose answer the edge never saw, the rescue join
+  opens it afresh (role 4) and the request bytes reach the target a second
+  time (a repeated POST is possible: at-least-once in this corner case). It
+  needs a path to die exactly between the target's answer and its arrival.
+
+What to watch: the service log prints, whenever they change,
+`mconn rescue:` (started / acked / served, `nocover`, `failed`, `lostjoin`,
+`refused`, `nak`), `mconn rescue-rec:` (the same for records rings, plus
+`big` / `call` KB, `bigno`, `shrunk`), `mconn rescue145:` (`retry`,
+`retryfail`, `retrysilent`, ring caps) and `mconn rescue169:` (`repeat`,
+`lateans`, `noring`, `overread`, `fresh`). Rising `nocover` / `failed` /
+`refused` mean resets users saw; `big` near the cap with `bigno` growing
+means the budget is too small (raise `HS2_MCONN_RESCUE_REC_BIGMB`).
+
+**A cut connection ends with a reset, not a clean close (rel66b, rel67b).**
+When the tunnel loses part of a connection's data (every sub died, a rescue
+that could not cover, a relay error), the program at the other end now gets a
+TCP reset (RST) instead of a FIN, so a truncated upload or download is never
+taken as complete: the exit resets the target (fx168, rel66b), the edge
+resets the user (fx170, rel67b), and a link's EOF in smux reads as `io.ErrUnexpectedEOF`, not as
+the stream's end. The live status file (`/run/hs2/<config>.status.json`) counts
+them since start (rel67b): `mconn_target_rst`
+(exit targets of a multi-link connection), `mconn_user_rst` (edge users of
+one) and `stream_rst` (either end of the one-stream path). A steady trickle
+follows path outages; a jump without one is worth a look. Known gap: a
+*target's* own reset on the one-stream path and on a raw lite connection
+still reaches the user as a FIN (smux has no reset frame; needs a protocol
+change).
 
 `HS2_LB_CALL_LATE` (since 8.12): a call whose copy on one path runs >= 100 ms
 and twice behind its copy on another (socket srtt, 1 s) gets a fresh sub off
 that path and no more copies on the late one, which is then given up: call
 p99 after a path degrades -29% (c) and -69% (k), never fired on equal/steady
 paths; `=0` turns it off.
+
+The queue controller (since qctl63): each side measures the queue its own
+links build on the path (TCP_INFO, each tick) and, only while a heavy flow
+keeps that queue big, caps this server's egress on that path a little under
+the rate it gets (a tc shaper that exists only while the cap does), so light
+users are not stuck behind the heavy one's queue. Lab (8 uploads, n=13 per
+arm): call p99 -34%, game p99 -11%, crowd/call/game p50 -5/-20/-14%, heavy
+-2%; no change in 1 upload, 1 or 8 downloads (where it does not cap) or idle
+(`docs/reality-architecture.md` 11.16). It is local to the server (no wire
+change), so it works against any peer version. Off: `HS2_QUEUE_CTL_UP=0`
+(Iran) and/or `HS2_QUEUE_CTL=0` (kharej). Since rel69a `HS2_QUEUE_CTL_UP`,
+`HS2_QUEUE_CTL_FAST` and `HS2_QUEUE_CTL_KEEP` are defaults too (CHANGELOG rel69a). Since rel69e
+the shaper sits on the last mq child (`HS2_QUEUE_CTL_SHAPER=mqchild`, CHANGELOG rel69e-pre).
 
 The start window (since 8.13, branch start42): after a start the kharej dials
 its first pool through a start gate (`HS2_START_DIAL`, 32 at a time, 10-35 ms
@@ -1098,6 +1366,42 @@ used to be a fixed 2 MiB, which caps one connection at ~200 Mbit/s at 80 ms.
   744–1090 Mbit/s. (`=1` adds a strict neighbour cap — rejected, no gain.)
 - `HS2_MCONN_STRIPE_JUMP_MS=1500` — kharej. Harmless; no measurable gain in
   production. Kept for parity with the lab.
+- `HS2_STRIPE_HEAVY_FLOOR_MB=4`, `HS2_STRIPE_HEAVY_FLOOR_GATE=2` — **Iran**
+  only (dl79). Once a download proves heavy its sub windows never go under
+  4 MiB, while its own probes show no queue; 2 queued probes in a row drop
+  the floor (0.5–8 s hold). Lab: single download +53 %, d8 +51 %, crowd
+  p99 within noise.
+
+**How the adaptive window (autowin) behaves.** smux's window is the most a
+sender may have unread at the receiver; at 80 ms a fixed 2 MiB caps one
+connection at ~200 Mbit/s. With `HS2_SMUX_AUTOWIN` the *receiving* side
+sizes each heavy stream's window on its own:
+- **grows** while the stream's probes show no standing queue (the path is
+  not yet full), in steps, up to what the budget allows;
+- **shrinks at once** (`HS2_SMUX_AUTOWIN_REL`) when probes show a queue or a
+  light user starts receiving on the same link, so a download never builds
+  a queue that games, calls or web pages wait behind;
+- **shares one budget**: all grown windows of the process together stay
+  under `HS2_SMUX_AUTOWIN_SHARE_MB` (32 MiB); a stream past the base window
+  takes from it and gives it back when it shrinks or ends. This bounds the
+  memory heavy users can pin (the receiver must be able to buffer a whole
+  window per stream); 16 trades single-download speed for less queueing,
+  64 is the experimental `max-throughput` preset;
+- the Iran-side keys (`HS2_STRIPE_AW_SOLO`, `HS2_STRIPE_AW_HEAVY`, the heavy
+  floor) only choose *which* streams use it and how low it may fall.
+
+Every window change goes to the sender as a window update (UPD). Since rel66
+(aw163) the updates are numbered and sent in order, and the sender ignores an
+update older than the last one it took: before, a shrink's update could
+overtake a newer one, the sender's limit went backwards and a heavy stream
+could stall for good with healthy links (no watchdog saw it). Each dropped
+stale update is counted in the live status file
+(`/run/hs2/<config>.status.json`, read by `hs2 status`) as `obs_smux_stale_upd`; a non-zero
+value is a stream that would have hung before the fix, not an error.
+rel66b (fx168) also lets a reader blocked on that update lock give up at its
+deadline or close. Either half (receiver ordering, sender guard) alone
+prevents the stall, so one rel66+ side already protects both directions;
+the counter grows only on a rel66+ sender.
 
 **Load balancing (lb auto2, several IPs).**
 
@@ -1119,6 +1423,21 @@ used to be a fixed 2 MiB, which caps one connection at ~200 Mbit/s at 80 ms.
   A path that is really still bad stays cut. Production: a cut path that took
   45 min to come back now returns in 30–80 s once its loss is gone.
   (`HS2_LB_REC_DEBUG=1` logs every reading of a cut path.)
+- `HS2_LB_REC_RAMP` — both sides, **on by default** (`0` = old rule). A cut
+  path that recovers climbs back to full weight in steps all the way (+0.15 a
+  reading, +0.30 when the reading is clean; a path cut 2+ times within
+  `HS2_LB_FLAP_WIN_S` climbs ≥0.07 a reading, ~65 s to full). Before, the
+  climb ended with a jump from ~0.55 to 1.00 the moment the path's verdict
+  turned "ok".
+- `HS2_LB_LOWER_EVID` — both sides, **on by default** (`0` = old rule). A
+  healthy path is not lowered on noise: the judge counts loss above 0.3 % and
+  queue above 20 ms only, and a path at "ok" is lowered on its second reading
+  in a row under the bar (at once when the reading's loss is ≥ 2 %).
+- `HS2_LB_CALL_STUCK_GAP_STRICT` — Iran, **on by default** since wj178 (`0` =
+  old rule). A call's receive gap triggers the stuck-call move only with
+  evidence on its path (a socket in loss recovery / backlog, or a lowered
+  link): a pause between talk spurts no longer opens a fresh sub and gives up
+  the call's subs.
 - `HS2_LB_FLAP_PEN=1` — kharej (the side whose judge decides; on by default
   since build `rel29`). A *flapping* path — one local→remote IP pair that
   reads clean while cut and breaks again as soon as its users return — is
@@ -1568,6 +1887,12 @@ hs2 perf speedtest --port P [--secs 5] [--gap 3s]
   (`iperf3 -c 127.0.0.1 -p P [-R] [-P 8]`, 5 s each, 3 s apart). It only
   ever connects to `127.0.0.1:P`, i.e. through the tunnel — never a raw
   multi-Gbit test to another host.
+  A user's own speedtest (speedtest.net, fast.com) through the tunnel shows
+  a "loaded ping" (ping during the download/upload) that mostly measures
+  the client's access link — an LTE modem or home router queueing its own
+  traffic (bufferbloat) — not the tunnel: the tunnel serves light flows
+  ahead of downloads. Compare with a ping from the Iran server to kharej at
+  the same moment; if that one is flat, the extra delay is client-side.
 
 ### Alerts (Telegram, optional)
 
@@ -1707,6 +2032,8 @@ servers); the tunnel port must differ from the panel port on the kharej server.
 
 - The installer applies BBR/fq kernel tuning system-wide
   (`/etc/sysctl.d/99-hs2.conf`); hs2 also sets BBR on its own sockets.
+- `net.ipv4.tcp_mtu_probing=1` is required on both servers (see "Automatic
+  kernel tuning"); `hs2 doctor` warns otherwise.
 - Building from source, the architecture, and the test lab: `hs2-src/BUILD.md`.
 
 ### Single-queue virtio NIC (one rx interrupt core)

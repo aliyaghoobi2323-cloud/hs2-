@@ -46,7 +46,7 @@ func TestQShaperOnKernel(t *testing.T) {
 	var logs []string
 	s := newQShaper(func(f string, a ...any) { logs = append(logs, f) })
 	peer := netip.MustParseAddrPort("10.9.0.2:443")
-	if !s.apply(12.5e6/qWire, []netip.AddrPort{peer}) { // 100 Mbit/s on the wire
+	if !s.apply(12.5e6/qWire, qDsts(peer)) { // 100 Mbit/s on the wire
 		t.Fatalf("apply refused: %q", logs)
 	}
 	q, c, f := show("qdisc"), show("class"), show("filter")
@@ -56,7 +56,7 @@ func TestQShaperOnKernel(t *testing.T) {
 	if !strings.Contains(q, "cake") && !strings.Contains(q, "fq_codel") {
 		t.Fatalf("no flow-queueing leaf: %s", q)
 	}
-	s.apply(6.25e6/qWire, []netip.AddrPort{peer})
+	s.apply(6.25e6/qWire, qDsts(peer))
 	if c := show("class"); !strings.Contains(c, "50Mbit") {
 		t.Fatalf("cap not changed to 50 Mbit: %s", c)
 	}
@@ -65,7 +65,7 @@ func TestQShaperOnKernel(t *testing.T) {
 	// own on the same root, its own filters; either can go first.
 	s2 := newQShaper(func(f string, a ...any) { logs = append(logs, f) })
 	peer2 := netip.MustParseAddrPort("10.9.0.2:8443")
-	if !s2.apply(3e6/qWire, []netip.AddrPort{peer2}) {
+	if !s2.apply(3e6/qWire, qDsts(peer2)) {
 		t.Fatalf("the second shaper was refused: %q", logs)
 	}
 	if s2.minor == s.minor {
@@ -81,7 +81,7 @@ func TestQShaperOnKernel(t *testing.T) {
 	if f := show("filter"); strings.Contains(f, "flowid "+qClassID(s.minor)) {
 		t.Fatalf("the first's filters left behind: %s", f)
 	}
-	s.apply(6.25e6/qWire, []netip.AddrPort{peer}) // back, beside the second
+	s.apply(6.25e6/qWire, qDsts(peer)) // back, beside the second
 	if c := show("class"); !strings.Contains(c, qClassID(s.minor)) {
 		t.Fatalf("not back: %s", c)
 	}
@@ -92,14 +92,14 @@ func TestQShaperOnKernel(t *testing.T) {
 	}
 
 	// A class left by a process that is gone (its lock free) is cleaned up.
-	if !s.apply(6.25e6/qWire, []netip.AddrPort{peer}) {
+	if !s.apply(6.25e6/qWire, qDsts(peer)) {
 		t.Fatal("apply refused")
 	}
 	stale := s.minor
 	s.slot.Close() // as if the process died: the class stays, its lock goes
 	s.slot, s.installed = nil, false
 	s3 := newQShaper(func(string, ...any) {})
-	if !s3.apply(6.25e6/qWire, []netip.AddrPort{peer2}) {
+	if !s3.apply(6.25e6/qWire, qDsts(peer2)) {
 		t.Fatal("apply refused beside a stale class")
 	}
 	if c := show("class"); strings.Count(c, "class htb "+qHandle+":") != 2 || s3.minor != stale {
@@ -115,10 +115,79 @@ func TestQShaperOnKernel(t *testing.T) {
 		t.Skipf("tbf: %s", out)
 	}
 	s4 := newQShaper(func(string, ...any) {})
-	if s4.apply(12.5e6, []netip.AddrPort{peer}) {
+	if s4.apply(12.5e6, qDsts(peer)) {
 		t.Fatal("apply replaced a root qdisc set up by hand")
 	}
 	if q := show("qdisc"); !strings.Contains(q, "tbf") {
 		t.Fatalf("the operator's qdisc is gone: %s", q)
+	}
+}
+
+// hl233: park keeps the shaper in place with no cap (class at qParkRate, no
+// root swap later); a cap after it only changes the class; drops while parked
+// are not the cap's.
+func TestQShaperParkOnKernel(t *testing.T) {
+	if os.Getenv(qNetnsEnv) != "1" {
+		if os.Geteuid() != 0 {
+			t.Skip("needs root (a private network namespace)")
+		}
+		unshare, err := exec.LookPath("unshare")
+		if err != nil {
+			t.Skip("no unshare")
+		}
+		cmd := exec.Command(unshare, "-n", "--", "sh", "-c",
+			`ip link add d0 type dummy && ip addr add 10.9.0.1/24 dev d0 && ip link set d0 up && exec "$0" -test.run '^TestQShaperParkOnKernel$' -test.v`, os.Args[0])
+		cmd.Env = append(os.Environ(), qNetnsEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		t.Logf("in a private netns:\n%s", out)
+		if err != nil {
+			t.Fatalf("the test in its own netns failed: %v", err)
+		}
+		return
+	}
+	if _, err := exec.LookPath("tc"); err != nil {
+		t.Skip("no tc")
+	}
+	defer func(k bool) { queueCtlKeep = k }(queueCtlKeep)
+	queueCtlKeep = true
+	show := func(what ...string) string {
+		out, _ := exec.Command("tc", append(what, "show", "dev", "d0")...).CombinedOutput()
+		return string(out)
+	}
+	qLockDir = t.TempDir()
+	var logs []string
+	s := newQShaper(func(f string, a ...any) { logs = append(logs, f) })
+	peer := netip.MustParseAddrPort("10.9.0.2:443")
+	if !s.park(nil) || s.placed() {
+		t.Fatalf("park with no peer and nothing in place: placed %v", s.placed())
+	}
+	if !s.park(qDsts(peer)) || !s.placed() || !s.parked {
+		t.Fatalf("park refused: %q", logs)
+	}
+	if c := show("class"); !strings.Contains(c, "40Gbit") || !strings.Contains(show("filter"), "flowid "+qHandle+":2") {
+		t.Fatalf("not parked at 40 Gbit: %s", c)
+	}
+	root := show("qdisc")
+	if !s.apply(12.5e6/qWire, qDsts(peer)) || s.parked {
+		t.Fatal("cap after park refused")
+	}
+	if c := show("class"); !strings.Contains(c, "100Mbit") {
+		t.Fatalf("cap not set: %s", c)
+	}
+	if !s.park(nil) {
+		t.Fatal("park again refused")
+	}
+	if c := show("class"); !strings.Contains(c, "40Gbit") || !strings.Contains(show("filter"), "flowid "+qHandle+":2") {
+		t.Fatalf("not parked again (filters kept): %s %s", c, show("filter"))
+	}
+	if s.drops() != 0 {
+		t.Fatal("drops while parked")
+	}
+	if q := show("qdisc"); !strings.Contains(q, "htb "+qHandle+":") || !strings.Contains(root, "htb "+qHandle+":") {
+		t.Fatalf("root not ours throughout: %s", q)
+	}
+	s.remove()
+	if q := show("qdisc"); strings.Contains(q, "htb") {
+		t.Fatalf("shaper left behind: %s", q)
 	}
 }

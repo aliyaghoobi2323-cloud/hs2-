@@ -200,7 +200,7 @@ func (m *mConn) stripeUpCountLocked(up bool) {
 
 // stripeRetryLocked: when the next stripe open may be tried after a failed one.
 func (m *mConn) stripeRetryLocked(now time.Time) time.Time {
-	if m.stGrowUp && m.stripeFastOnLocked(true) {
+	if m.stripeFastRetryOnLocked() {
 		m.stFastMore = 0
 		return now.Add(stripeFastBackoff + rand.N(stripeFastBackoffJit))
 	}
@@ -227,7 +227,7 @@ func (m *mConn) stripeFastNextLocked() bool {
 		return false
 	}
 	m.stFastMore--
-	if m.ended || m.closing || m.peerFin || m.wclosed || m.stOpening || m.callOn || m.callUp || !m.stripeFastSoloLocked() {
+	if m.ended || m.closing || m.peerFin || m.wclosed || m.stOpening || m.callOn || m.callUp || !m.stripeChainSoloLocked() {
 		m.stFastMore = 0
 		return false
 	}
@@ -236,12 +236,15 @@ func (m *mConn) stripeFastNextLocked() bool {
 		m.stFastMore = 0
 		return false
 	}
-	if m.stUp && n >= 2 && !m.stripeUpRoomLocked() {
+	if m.stUp && m.stGrowUp && n >= 2 && !m.stripeUpRoomLocked() {
 		m.stFastMore = 0
 		return false
 	}
 	m.stOpening = true
 	stripeFastStat.chained.Add(1)
+	if !m.stGrowUp {
+		stripeDlStat.chained.Add(1)
+	}
 	return true
 }
 
@@ -271,7 +274,7 @@ func (m *mConn) stripeFastRetry(try int) bool {
 		return false
 	}
 	m.mu.Lock()
-	ok := m.stGrowUp && m.stripeFastOnLocked(true) && !m.ended && !m.closing && !m.peerFin && !m.wclosed && !m.callOn && !m.callUp
+	ok := m.stripeFastRetryOnLocked() && !m.ended && !m.closing && !m.peerFin && !m.wclosed && !m.callOn && !m.callUp
 	m.mu.Unlock()
 	if !ok {
 		return false

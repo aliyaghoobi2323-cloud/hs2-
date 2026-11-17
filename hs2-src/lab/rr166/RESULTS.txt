@@ -1,0 +1,62 @@
+rr166 = fn164 (c7adaaf5) + rr158's rescue-rst commits (f07fe277..b6931fc7, cherry-picked clean; rr159's
+notice changes NOT included). Question: does HS2_MCONN_RESCUE_RST still help once fn164 is in?
+
+Build (lab1, /opt/hs2lab/rr166): hs2-fn164 sha 15d4ba3c, hs2-rr166 sha b577652f; go vet ./engine ok.
+
+A/B on lab1 alone, 2026-11-14 19:13-19:40 UTC (ab.sh + drive.sh; rep.sh = rr159 rep.sh unchanged: crowd 3000,
+30 byte-checked calls, game, 5 heavy bg, rst/ip1/ip2x/flap/loss_all events per 500 s cycle, 13 paths).
+slot1 held idle, arms in slot0 / slot2. HS2_MCONN_TRACE off everywhere.
+  F = fn164, key off.   R = rr166, HS2_MCONN_RESCUE_RST=1 both sides.
+  rotation 1: TT 1000, F slot0, R slot2, rescue trace off.
+  rotation 2: TT 500,  R slot0, F slot2, HS2_MCONN_RESCUE_TRACE=1 in R (1094 rst trace lines, budget not hit).
+Analysis: an166.py (an157 + teardown cut from TT), deaths.py (per death: window, error, rx stalled or
+flowing, rst trace lines on both sides within -1.5..+0.3 s), secp99.py (probe call/game per-second p99 per
+window). Full output: an-out.txt.
+
+                               r1 F    r1 R    r2 F    r2 R    sum F   sum R
+  calls DIED in-run            20      6       10      10      30      16
+    flowing (rx < 3 s before)  9       1       6       0       15      1     <- RST-window deaths
+    stalled (rx idle 10-40 s)  11      5       4       10      15      15    <- link-stuck, key-independent
+    by window ip1/rst/flap     4/9/7   2/1/3   3/6/1   0/0/10
+  CORRUPT                      0       0       0       0
+  crowd fails                  1425    912     486     464     1911    1376
+  crowd p99 ms                 331.6   332.2   325.6   325.4
+  probe call p99 ms            684*    1390    728     576*         (* that arm's probe call died early)
+  probe game p99 ms            584     901     522     534
+  exit alldied = hold          -       53      -       29
+  holdexp/holdrsc/holdend      -       18/32/3 -       11/17/0
+  Iran enddue = endsent        -       62      -       29
+  Iran endskip / exit endnoconn -      217/14  -       116/10
+  RSS max ir/kh MB             617/1036 695/1040 627/1032 580/1019
+
+vs rr158 on rel65 (rr159 clean A/B, same harness): exit holds 861 (r1) / 411 (r2) -> 53 / 29 now; Iran end
+notices sent 4029 / 1992 -> 62 / 29. fn164 removed the own-close-without-FIN holds, as predicted: the
+rr157/rr158 notice machinery is now nearly idle (and rr159's notice trimming is not needed).
+
+Death classification (rotation 2 R trace, mconn_rescue_rst.go lines in rr166):
+ - RST window (rst, 30 % RST on Iran IP2): F lost 15 flowing calls (reset/EOF within 0-4 s of RST onset,
+   rx 0.0-0.6 s before). R lost 1 (r1 el 91.4) - the rescue (asked/served/acked ~ 450/140/435 Iran side
+   in r1) carries the rest. This is the feature's whole gain.
+ - Stalled deaths (flap and ip1 windows, both arms, 15 each): rx stops at the dark onset and the call dies
+   10/20/30/40 s later. Example r2R i=9 (el 251.9): conn 851ea9c42b1ee87e, exit trace
+   "ACK(54960001,50258817) nocover ... ring n=cap=1048576" (mconn_rescue_rst.go:522): Iran's ACK asks for
+   download offset 50258817 = the call's rx exactly, but the exit had already sent 4.7 MB past it into the
+   dead path and the 1 MiB ring cannot cover it -> end. The others: Iran ends the conn with no rescue-rst
+   line on Iran (link-stuck close outside rescue-rst), and the exit's "every sub died: held"
+   (mconn_rescue_rst.go:294) comes AFTER the user already saw the death (e.g. deaths 19:35:44.01-.07,
+   hold 19:35:44.147), then "no ACK in 3s nosub=true" ends it (mconn_rescue_rst.go:427-429). The hold is a
+   consequence, not the cause; F ends the same conns at once (errMConnSubsDied). Not a rescue-rst problem:
+   the stalled-call problem (keepstall / rescue145 territory) is equal in both arms.
+
+p99: crowd p99 equal in both rotations (332/332, 326/325). Probe call/game p99 are one connection each and
+are confounded by whether that probe died: r1 F's probe call died at ~el 100 (so its p99 covers only
+calm seconds), R's survived 1000 s incl. flap/ip2x stalls (max 6-7 s); r2 the reverse (R's probe call died
+at flap: lost 7588, p99 576 vs F 728). Per-window medians of the per-second p99 follow the slot, not the
+arm (r1 pre-event window: R 227 vs F 162 in slot2; r2 pre: R 212 vs F 306 with R in slot0). r1 game p99
+901 (R) vs 584 (F) did not repeat in r2 (534 vs 522). No arm-driven p99 regression seen; a survivor-only
+call p99 comparison would settle the r1 call/game numbers.
+
+Verdict: R is clearly better on deaths (16 vs 30; RST-window deaths 1 vs 15) with equal crowd p99, fewer
+crowd fails, CORRUPT 0, and ~15x fewer holds/notices than rr158 on rel65. Recommend HS2_MCONN_RESCUE_RST
+(the rr158 variant, without rr159) for a later release; keep it default off in rel66. Caveats: 2 rotations,
+30 calls per arm; the remaining deaths are the stalled-call (link-stuck) class, which the key does not touch.

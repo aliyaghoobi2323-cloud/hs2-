@@ -1,0 +1,24 @@
+rk127 (lab3 198.51.100.235, rel62k hs2K 4fed62dd = rel62 675f6e0e + id125 F4; key via env; INTERIM at 2026-11-13 17:22Z)
+Runs started detached (systemd rk127chain, then rk127chainb): P1off|P1on|PR1 concurrent (own slots/cores),
+then P2on|P2off, then go test ./... + -race ./engine (idle host), then MX1 (rel62k-on edge hs2ON 0aa9e21d + rel61 exit,
+30 min), then final hs2-linux-amd64 build from rel62k-on. Summaries: /opt/hs2lab/rel62k/sum127.sh RUN...
+Results: /opt/hs2lab/rel62k/res/{P1off,P1on,PR1,P2on,P2off,MX1}; tests test.txt race.txt; chain.log.
+
+Pair 1 at t~2150 s of 3900 (runs still going; g55/g30/g15/g5 checks are at t 3290-3330):
+                         P1off (key off)        P1on (key on)
+edge idle closes (retiring)  232 conns / 18 lines   0
+g5b  (5 min idle, 300)       0 fail                 0 fail
+g10  (10 min idle, 300)      3 EOF                  0
+12k storms st200/st1200      0/0 fail               0/0 fail
+up / retiring max (per 5m)   150 / 37               149 / 40   (max_links 150: total never above max)
+ir RSS/fds/goroutines after storm (t~1850)  381MB/930/8.0k   368MB/1036/8.9k
+ir at storm peak (t~2150)    945MB/12.9k/102k       986MB/13.0k/103k
+heavy Mbps 100/700/1300/1900 1043/1320/649/1607     1008/1240/841/1000, all stall_s=0
+panics                       0                      0
+
+PR1 (key on, max_links 110, 12k storms every 300 s held 150 s; 30 min) DONE:
+  over-max rule engaged: "retire keep: 4 retiring link(s) kept for 6 open connection(s) ... 114 up, max 110, 4 on old rules";
+  49 idle conns closed on surplus retiring links (8 lines, "over 5m above max_links"); up max 118 (max 110), retiring <= 15,
+  falls back as links rejoin/close; g25 (25 min idle) 10/300 fail, g20 6/300 fail ("burst:other"), g5 0/300:
+  i.e. above max the old 5 m rule still closes conns on the fewest-conn retiring links, as designed.
+  crowd 300: 676k req, fail 0, p99 116 ms; echo p99 96 ms; 5 storms 60k/60k ok; ir RSS 1.0 GB at storms -> 669 MB; 0 panics.

@@ -48,7 +48,7 @@ var rescueCallLinks struct {
 // rescueCallMarkLocked (under m.mu, Iran): m is call-like now — mark its live
 // subs' links.
 func (m *mConn) rescueCallMarkLocked(now time.Time, like bool) {
-	if !lbRescue || !lbRescueCallFree || !m.iran || !(like || m.callOn || m.callUp) {
+	if !lbRescue.Load() || !lbRescueCallFree || !m.iran || !(like || m.callOn || m.callUp) {
 		return
 	}
 	exp := now.Add(callFreeTTL)
@@ -85,7 +85,7 @@ func rescueCallLinkOn(mtr *linkMeter, now time.Time) bool {
 // rescueAvoidLocked adds the mark when this upgrade is a rescue copy: the one
 // live sub (key) is on a lowered link.
 func (m *mConn) rescueAvoidLocked(avoid []any, key any) []any {
-	if lbRescue && lbRescueCallFree && rescueLowKey(key) && !m.callUp && !m.callOn {
+	if lbRescue.Load() && lbRescueCallFree && rescueLowKey(key) && !m.callUp && !m.callOn {
 		return append(avoid, rescueAvoidMark{})
 	}
 	return avoid

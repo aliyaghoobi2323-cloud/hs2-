@@ -1,0 +1,24 @@
+== selfA IRE=  KHE=  edge=55668b39 exit=55668b39
+  queue-lowerings: 0
+== light latency (ms) by heavy window, clean phases only (finding 2)
+noheavy    c: n440314 p50 92.4 p99 108.3 k: n58250 p50 91.9 p99 161.2 g: n6650 p50 91.5 p99 98.9
+start0-15  c: n113146 p50 93.4 p99 135.3 k: n15000 p50 93.0 p99 179.2 g: n1721 p50 92.2 p99 125.5
+down15-40  c: n187507 p50 95.5 p99 146.0 k: n25000 p50 94.9 p99 184.2 g: n2861 p50 93.8 p99 131.6
+up40-66    c: n196263 p50 93.0 p99 111.2 k: n26000 p50 92.4 p99 142.1 g: n2999 p50 91.8 p99 99.5
+  crowd p50/p99/fail 93.063 124.501 0 | call p99 165.937  | game p99 117.799 | ping p99 123.0
+  heavy hv-d-180.json 1707
+  heavy hv-d-300.json 900
+  heavy hv-d-420.json 920
+  heavy hv-d-60.json 1124
+== selfB IRE= HS2_LB_SELFQ=4 KHE= HS2_LB_SELFQ=4 edge=55668b39 exit=55668b39
+  queue-lowerings: 0
+== light latency (ms) by heavy window, clean phases only (finding 2)
+noheavy    c: n440210 p50 92.5 p99 109.6 k: n58251 p50 91.9 p99 135.3 g: n6659 p50 91.9 p99 101.1
+start0-15  c: n112869 p50 94.0 p99 159.6 k: n15000 p50 93.9 p99 197.3 g: n1725 p50 93.2 p99 168.6
+down15-40  c: n187365 p50 95.8 p99 163.1 k: n25000 p50 96.2 p99 195.7 g: n2858 p50 94.8 p99 144.7
+up40-66    c: n196054 p50 93.3 p99 115.6 k: n26000 p50 93.1 p99 167.6 g: n2989 p50 93.1 p99 106.1
+  crowd p50/p99/fail 93.264 132.333 0 | call p99 171.304  | game p99 129.795 | ping p99 130.0
+  heavy hv-d-180.json 960
+  heavy hv-d-300.json 732
+  heavy hv-d-420.json 1204
+  heavy hv-d-60.json 1744

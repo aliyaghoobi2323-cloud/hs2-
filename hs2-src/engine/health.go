@@ -129,7 +129,14 @@ type linkMeter struct {
 	tcp     *net.TCPConn
 	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
 	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
-	stalls  atomic.Uint64 // write errors / timeouts
+	// er92 (HS2_MCONN_RESCUE): ctrlNow of the last read / write with bytes,
+	// kept only while the key is on (mconn_rescue_watch.go).
+	lastRd atomic.Int64
+	lastWr atomic.Int64
+	// pendSince: ctrlNow of the first write after the last read (bytes sent
+	// that nothing has answered since).
+	pendSince atomic.Int64
+	stalls    atomic.Uint64 // write errors / timeouts
 	// users: user connections riding this link on the exit; the LB
 	// rebalance retires only a link with none (lb_auto.go, lbRetirable).
 	users atomic.Int32
@@ -160,6 +167,10 @@ type linkMeter struct {
 	// HS2_MCONN_STRIPE: the TUN lane counts the link heavy while there is
 	// one, used or not, and leaves it at once.
 	stripeN atomic.Int32
+	// steerCut: the link's path is cut by the steering (HS2_LB_STRIPE_STEER,
+	// Iran; set each steer tick): the stripe sender puts nothing new on it
+	// while a stripe sub on a path not cut can take the chunk.
+	steerCut atomic.Bool
 	// laneAt: the TUN lane (HS2_L3_LANE) last sent an interactive packet
 	// (ping, game, call) over this link (ctrlNow ns); a shared stripe sub
 	// (HS2_MCONN_STRIPE_SHARE) keeps off such a link.
@@ -193,6 +204,10 @@ type linkMeter struct {
 	quiet *quietState
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
+	// peerPmtu / peerMss: the peer's path MTU and send MSS for this link's
+	// socket as its control messages carried them (0: none yet, or an older
+	// peer); mt135, lb_pmtu135.go.
+	peerPmtu, peerMss atomic.Uint32
 	// peerLoss is what the last pong said and what this side had received
 	// when it came: the download loss rule judges the window between two
 	// pongs, its retransmits against the segments (or bytes) that came in
@@ -231,6 +246,9 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.m.rdBytes.Add(uint64(n))
+		if rescueOn.Load() {
+			c.m.lastRd.Store(ctrlNow())
+		}
 	}
 	return n, err
 }
@@ -243,6 +261,13 @@ func (c *meteredConn) Write(p []byte) (int, error) {
 	}
 	if n > 0 {
 		c.m.wrBytes.Add(uint64(n))
+		if rescueOn.Load() {
+			now := ctrlNow()
+			if c.m.lastWr.Load() <= c.m.lastRd.Load() {
+				c.m.pendSince.Store(now) // first write since the last read
+			}
+			c.m.lastWr.Store(now)
+		}
 	}
 	if err != nil {
 		c.m.stalls.Add(1)
@@ -273,6 +298,11 @@ type tcpStat struct {
 	bytesRcvd        uint64
 	backoff, caState uint8
 	rtoUs            uint32
+	// The effective path MTU of this socket's sends (effMtu: the kernel's
+	// PMTU, or less when MTU probing lowered the send MSS after a blackhole),
+	// the kernel's PMTU itself, the send MSS and the MSS this side advertised
+	// (mt135, lb_pmtu135.go).
+	pmtu, kpmtu, sndMss, advMss uint32
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

@@ -68,3 +68,55 @@ func tcpSRTT(tc *net.TCPConn) (time.Duration, bool) {
 	})
 	return d, ok
 }
+
+// tcpAckState (HS2_MCONN_STRIPE_KEEPSTALL, hs115): the socket's smoothed RTT,
+// its cumulative bytes acked, the bytes it has in flight and whether it is in
+// RTO loss recovery (ok=false: unknown). A path dark from this side keeps
+// unacked>0 with bytes_acked frozen. (last_ack_recv is no proof: with only
+// the forward direction dark the peer's own segments keep arriving and
+// refresh it — hs115 lab D1.) A sub that is slow only because the peer does
+// not read it has nothing in flight, or its window probes are acked.
+func tcpAckState(tc *net.TCPConn) (srtt time.Duration, acked uint64, unacked uint32, rtoLoss, ok bool) {
+	rc, err := tc.SyscallConn()
+	if err != nil {
+		return 0, 0, 0, false, false
+	}
+	rc.Control(func(fd uintptr) {
+		if i, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO); e == nil {
+			srtt, acked, unacked, ok = time.Duration(i.Rtt)*time.Microsecond, i.Bytes_acked, i.Unacked, true
+			rtoLoss = i.Ca_state == 4 && i.Backoff > 0 // TCP_CA_Loss after an RTO
+		}
+	})
+	return
+}
+
+// tcpDarkInfo (HS2_MCONN_DARKCALL, mconn_darkcall.go): cumulative bytes
+// acked, bytes in flight, the RTO backoff exponent and the socket's total
+// retransmits (ok=false: unknown).
+func tcpDarkInfo(tc *net.TCPConn) (acked uint64, unacked uint32, backoff uint8, retrans uint32, ok bool) {
+	rc, err := tc.SyscallConn()
+	if err != nil {
+		return
+	}
+	rc.Control(func(fd uintptr) {
+		if i, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO); e == nil {
+			acked, unacked, backoff, retrans, ok = i.Bytes_acked, i.Unacked, i.Backoff, i.Total_retrans, true
+		}
+	})
+	return
+}
+
+// tcpOutq (dl243): the bytes the link socket holds unacked + unsent
+// (SIOCOUTQ); ok=false: unknown.
+func tcpOutq(tc *net.TCPConn) (n uint64, ok bool) {
+	rc, err := tc.SyscallConn()
+	if err != nil {
+		return 0, false
+	}
+	rc.Control(func(fd uintptr) {
+		if v, e := unix.IoctlGetInt(int(fd), unix.TIOCOUTQ); e == nil && v >= 0 {
+			n, ok = uint64(v), true
+		}
+	})
+	return
+}

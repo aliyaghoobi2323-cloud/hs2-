@@ -1,0 +1,39 @@
+up148: HS2_LB_UPLOSS=1 (edge) — upload-only path loss lowers / cuts the path for new connections
+lab2 (198.51.100.234), 2026-11-14, one binary (up148) both sides, arms differ only in the edge's env.
+Runner: df142/run141.sh + run148.patch (per-direction netem on one path). 5 paths, 45 ms, 1 Gbit,
+base loss 0.2/0.5/0.3/0.4/0.3 %, crowd 1000 + call 2 Mbit + game + echo + hs0 ping from 40 s.
+  U: path 1 (192.168.51.1) 3 % loss Iran->kharej only; 6 upload streams (iperf3 -P 6) 45..85 s
+  L: same loss; 4 upload streams at 4 Mbit each the whole run (light load)
+  D: path 1 3 % loss kharej->Iran only (download); U's upload streams
+  N / M: no extra loss (N with U's streams, M with L's)
+Files: summary.txt (per run), qdshare.txt (Iran->kharej packets on path 1 / all paths, from 40 s on,
+middle namespace qdisc counters, d148c runs only).
+
+Per arm, mean/median (n runs):
+sc arm n  upload Mb/s  min stream  ping p50  ping p99  echo p99  call p99  game p99  upload cuts
+U  OFF 5  1277/1275    146/143     91.7      108/107   145/152   206/180   123/111   0/5
+U  ON  5  1294/1310    167/164     91.4      102/97    123/121   236/224   146/136   5/5
+L  OFF 6  16           -           91.3      96/96     99/98     251/235   100/99    0/6
+L  ON  6  16           -           91.4      98/97     99/99     198/188   101/100   5/6 (6th: lowered to 0.19)
+D  OFF 2  1276         174         91.6      99        118       181       106       0/2 (exit cut it 2/2)
+D  ON  2  1394         181         91.6      100       105       180       109       0/2 (exit cut it 2/2)
+N  OFF 1  1284         174         91.7      108       187       198       106       0
+N  ON  1  1265         166         91.5      103       108       167       104       0
+M  OFF 2  16           -           91.2      95        96        180       97        0
+M  ON  2  16           -           91.0      102       96        213       97        0
+
+Share of upload packets on the lossy path 1 (qdshare.txt, from 40 s):
+  L OFF 14.7 / 17.5 / 22.9 %   L ON 6.1 / 2.2 / 9.6 %      (fair share 20 %)
+  U OFF  6.0 / 15.4 %          U ON 8.5 / 9.5 %            (striped heavy streams dominate U)
+  M OFF 20.6 %                 M ON 18.7 %                 (no loss: unchanged)
+Exit (kharej) judge: 0 cuts in every U/L run (it only sees the download), 1 cut in every D run.
+Edge upload judge: cut ~10 s after start in U/L (logged "lb auto2 upload: path ... cut (loss 3.1%)"),
+never acted in D, N, M. 0 panics.
+
+Reading: the key does what it should (the path is cut, new connections and upload packets leave it,
+no false verdict under download-only loss or no loss). The user-visible gain in this lab is small:
+the tunnel's link TCP (bbr) carries 3 % random loss with little throughput cost (min upload stream
+146 -> 167 Mb/s, echo p99 145 -> 123 ms in U; call p99 251 -> 198 ms in L), and the light p99s
+swing +-30 ms between identical arms (M: the key never acts, call p99 180 vs 213). U's call/game p99
+rose (206 -> 236, 123 -> 146 ms): within that noise, but 4 paths carrying the 1.3 Gbit upload
+instead of 5 may queue more; not proven either way at n=5.

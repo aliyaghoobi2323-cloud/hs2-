@@ -1,0 +1,15 @@
+u121K K u1
+u121N N u1
+u121P P u1
+u122K K u1
+u122N N u1
+u122P P u1
+u123K K u1
+u123N N u1
+u123P P u1
+u124K K u1
+u124N N u1
+u124P P u1
+u125K K u1
+u125N N u1
+u125P P u1

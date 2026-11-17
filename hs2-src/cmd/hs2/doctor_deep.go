@@ -176,6 +176,8 @@ func runDeep(env *deepEnv) []finding {
 	out = append(out, setCat(checkPressure(env, procs1, procs2, elapsed, stat1, stat2), "cpu")...)
 	out = append(out, setCat(checkBudget(env, sq1, sq2), "cpu")...)
 	out = append(out, setCat(hs2F, "tunnel")...)
+	out = append(out, setCat(lbPmtuFindings(statuses), "network")...) // mt135
+	out = append(out, setCat(mtuProbingFindings(env.proc), "network")...)
 	out = append(out, setCat(monF, "tunnel")...)
 	out = append(out, setCat(checkCerts(env, time.Now()), "tunnel")...)
 	out = append(out, setCat(pathF, "network")...)
@@ -1415,4 +1417,24 @@ func uniq(s []string) []string {
 		}
 	}
 	return out
+}
+
+// mtuProbingFindings is the deep report's view of checkMTUProbing: a WARN
+// when net.ipv4.tcp_mtu_probing is not 1, nothing when it is (or unreadable).
+func mtuProbingFindings(proc string) []finding {
+	v, ok := readMTUProbing(proc)
+	if !ok || v == "1" {
+		return nil
+	}
+	why := tr("with 0 a path that drops large packets without ICMP (an MTU blackhole) stalls every download on it: the kernel never lowers the MSS",
+		"با مقدار 0 مسیری که بسته‌های بزرگ را بدون ICMP دور می‌ریزد (سیاه‌چاله MTU) همه دانلودها را متوقف می‌کند: کرنل هرگز MSS را کم نمی‌کند")
+	if v != "0" {
+		why = tr("probing on every connection starts each one at a small MSS and costs throughput on good paths",
+			"پروب روی همه اتصال‌ها هر اتصال را با MSS کوچک شروع می‌کند و سرعت مسیرهای سالم را کم می‌کند")
+	}
+	return []finding{{Sev: "WARN", Area: "tcp_mtu_probing",
+		What: fmt.Sprintf(tr("net.ipv4.tcp_mtu_probing is %s, not 1", "net.ipv4.tcp_mtu_probing برابر %s است، نه 1"), v),
+		Why:  why,
+		Do: tr("sysctl -w net.ipv4.tcp_mtu_probing=1 (hs2 sets it at each start as root unless tuning is off or HS2_NO_TUNE is set)",
+			"sysctl -w net.ipv4.tcp_mtu_probing=1 (hs2 هنگام هر اجرا با root آن را تنظیم می‌کند مگر tuning خاموش باشد یا HS2_NO_TUNE تنظیم شده باشد)")}}
 }

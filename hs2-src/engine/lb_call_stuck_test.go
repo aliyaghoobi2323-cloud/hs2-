@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -12,17 +13,22 @@ import (
 // busy reading for a test.
 func withCallStuck(t *testing.T, paths map[any]string, busy func(*msub) bool) {
 	t.Helper()
-	oldOn, oldBusy := lbCallStuck, callStuckBusy
-	lbCallStuck = true
-	callStuckBusy = busy
+	oldOn, oldBusy := lbCallStuck.Load(), callStuckBusyFn.Load()
+	lbCallStuck.Store(true)
+	setCallStuckBusy(busy)
 	for k, p := range paths {
 		callLinkPath.Store(k, p)
 	}
 	t.Cleanup(func() {
-		lbCallStuck, callStuckBusy = oldOn, oldBusy
+		waitConnLoops(t.Logf, mCloseLinger+mRSTWait+2*time.Second)
+		lbCallStuck.Store(oldOn)
+		callStuckBusyFn.Store(oldBusy)
 		callLinkPath.Range(func(k, _ any) bool { callLinkPath.Delete(k); return true })
 	})
 }
+
+// setCallStuckBusy replaces the busy hook (restored by withCallStuck).
+func setCallStuckBusy(f func(*msub) bool) { callStuckBusyFn.Store(&f) }
 
 func onKeys(keys ...any) func(*msub) bool {
 	return func(s *msub) bool { return containsAny(keys, s.key) }
@@ -48,7 +54,7 @@ func TestMConnCallStuckBusy(t *testing.T) {
 		return liveSubs(iran) == 2 && liveSubs(exit) == 2
 	})
 	o0, m0 := callStuckOpened.Load(), callStuckMoved.Load()
-	callStuckBusy = onKeys(0, 1) // path B goes bad: both sockets busy (not lowered)
+	setCallStuckBusy(onKeys(0, 1)) // path B goes bad: both sockets busy (not lowered)
 	var zero atomic.Bool
 	watch := make(chan struct{})
 	go func() {
@@ -124,7 +130,7 @@ func TestMConnCallStuckNoFalse(t *testing.T) {
 			setCall(t, "1")
 			withCallStuck(t, tc.paths, tc.busy)
 			if tc.off {
-				lbCallStuck = false
+				lbCallStuck.Store(false)
 			}
 			before := runtime.NumGoroutine()
 			n, iran, exit := newLitePair(t)
@@ -200,6 +206,29 @@ func TestCallStuckLocked(t *testing.T) {
 	live2[0].lastRecv.Store(now.Add(-time.Second).UnixNano())
 	live2[0].lastPush = now.Add(-10 * time.Millisecond)
 	g0 := callStuckGapN.Load()
+	w0 := callStuckGapWeak.Load()
+	// prod73 strict (default): no evidence on the path (no socket busy, no
+	// lowered link) — a one-sided call; counted as weak, no trigger
+	oldStrict := lbCallStuckGapStrict
+	t.Cleanup(func() { lbCallStuckGapStrict = oldStrict })
+	lbCallStuckGapStrict = true
+	m2.callStuckLocked(live2, now)
+	if callStuckGapN.Load() != g0 || callStuckGapWeak.Load() != w0+1 {
+		t.Fatalf("strict: gap %d weak %d", callStuckGapN.Load()-g0, callStuckGapWeak.Load()-w0)
+	}
+	// strict, one socket in recovery: the gap counts
+	setCallStuckBusy(onKeys(10))
+	m2b, live2b := newM()
+	m2b.open = m.open
+	live2b[0].lastRecv.Store(now.Add(-time.Second).UnixNano())
+	live2b[0].lastPush = now.Add(-10 * time.Millisecond)
+	m2b.callStuckLocked(live2b, now)
+	if callStuckGapN.Load() != g0+1 {
+		t.Fatal("strict: no trigger on a gap with a busy socket")
+	}
+	setCallStuckBusy(func(*msub) bool { return busy })
+	g0 = callStuckGapN.Load()
+	lbCallStuckGapStrict = false // the old rule: the gap alone triggers
 	m2.callStuckLocked(live2, now)
 	if callStuckGapN.Load() != g0+1 {
 		t.Fatal("no trigger on a receive gap while sending")
@@ -265,5 +294,14 @@ func TestCallStuckUnderCallLateAlone(t *testing.T) {
 	}
 	if !run(true) {
 		t.Fatal("no stuck trigger under HS2_LB_CALL_LATE alone")
+	}
+}
+
+// wj178: the strict gap rule is the default (HS2_LB_CALL_STUCK_GAP_STRICT
+// unset): a call resuming after a talk-spurt pause (nothing received for 1 s,
+// a push just now, sockets fine) is no trigger.
+func TestCallStuckGapStrictDefault(t *testing.T) {
+	if os.Getenv("HS2_LB_CALL_STUCK_GAP_STRICT") == "" && !lbCallStuckGapStrict {
+		t.Fatal("strict gap rule is not the default")
 	}
 }

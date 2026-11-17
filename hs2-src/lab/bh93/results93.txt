@@ -1,0 +1,46 @@
+== bh93 results (lab1 whole lab, 2026-11-13 00:52-01:24 UTC). fc90 cg86 mesh (5 Iran IPs x 2 kharej = 10 paths, pair
+51.1<-49.2 lossy 2.5 %), N=40 heavy (start 1-10 s) + crowd/call/game; reverse l3mtcp, kharej = dialing side (exit).
+Binary bin93 (commit 832f2876 code) on both sides unless M*. Interleaved per rep (random arm order), seeds 931-966.
+Arms: S0 key off | S1 HS2_LB_SILENT=1 both sides | M1 rel58 Iran edge + bin93 kharej with key | M2 bin93 edge with key
++ rel58 kharej. Scenarios: bL = Iran IP 52.1 blackhole at 30 s (after the burst), sL = path 49.2->53.1 blackhole at
+30 s, q = quiet 30 s (lossy pair only), sQ = path blackhole at 12 s with no heavy users (N=0).
+bh93sum.py (kh = dialing side): low = first factor <=0.5, cut = first cut, out = all event paths cut, held = the cut
+that lasts to the end of the run (miss = the blackholed path is back IN SERVICE at the end), silF = silent readings or
+silent cuts on NON-event paths (false triggers), false = fc90 false cuts (all reasons, kh+ir).
+Note: go test ./... and -race ./engine ran on lab1 during runs 1-27 (CPU shared by both arms alike).
+
+sc  arm n | kh low      | kh cut              | kh held (to end)    | ir out          | silF | false/run | crowd99 med | crowd fail mean | call99 med | game99 med | Mbit/s
+bL  S0  6 | 2.1/2.6     | 7.3/12.6 miss=3     | 0.0(pre) miss=5/6   | miss=2          | 0    | 9.50      | 914         | 269             | 4320       | 719        | 3220
+bL  S1  6 | 1.1/7.2     | 3.3/7.3  miss=0     | 3.3/7.3  miss=0     | 21.9/22.5       | 0    | 10.83     | 1000        | 388 (one 1291)  | 7012       | 205        | 3230
+sL  S0  6 | 0.0/21.9    | 0.0(pre) miss=2     | miss=4/6            | miss=2          | 0    | 9.83      | 565         | 195             | 4193       | 841        | 3375
+sL  S1  6 | 2.1/7.7     | 12.0/12.4 miss=0    | 12.0/12.4 miss=0    | 6.3/14.4        | 0    | 11.00     | 655         | 190             | 3376       | 2545       | 3322
+q   S0  3 | -           | -                   | -                   | -               | 0    | 8.00      | 1323        | 64              | 2274       | 1085       | 3103
+q   S1  3 | -           | -                   | -                   | -               | 0    | 7.00      | 1082        | 93              | 3439       | 212        | 3185
+bL  M1  1 | 1.7         | 6.7                 | 6.7                 | 17.7            | 0    | 7         | 296         | 339             | 5223       | 295        | 3111
+sL  M1  1 | 1.9         | 11.9                | 11.9                | 0.0(pre)        | 0    | 14        | 370         | 728             | 3536       | 415        | 2615
+bL  M2  1 | 2.5         | miss                | miss                | 0.0(pre)        | 0    | 9         | 290         | 230             | 3199       | 278        | 3575
+sQ  S1  1 | 4.8         | 9.8                 | 9.8                 | 11.8            | 0    | 0         | 181         | 21              | 178        | 118        | 0
+(sQ S0 and reps 2-3 of sQ not run: stopped at the time budget.) Per-run lines: sum93.txt.
+
+FINDINGS
+ + Blackhole: S0 leaves the blackholed path/IP IN SERVICE at the end of the run in 5/6 (bL) and 4/6 (sL) runs: it was
+   cut by the burst before the event, then "recovered" 2-15 s after the blackhole began (no countable reading, quiet or
+   fast-recovery) and never cut again. S1: 12/12 held out of service; IP blackhole cut 3.3/7.3 s (IP verdict on the
+   first silent reading), single path lowered at the first full reading (~2-7.7 s), cut on the second (12.0/12.4 s).
+ + False triggers: silF = 0 in all 33 runs (S1 sees the heavy start burst, lossy pair, quiet runs). Only 3 x 30 s q runs
+   per arm (+ ~18 S1 runs' pre-event time, roughly 12 min in all): NOT the 30 min-equivalent asked for.
+ = false cuts (all reasons): no change (S1 10.8/11.0/7.0 vs S0 9.5/9.8/8.0 per run; noise as in fc90).
+ ? light classes: medians mixed and noisy (call99 seconds in every arm); crowd fail is per whole run (burst included),
+   not per event; bL S1 mean 388 vs 269 is driven by one run (1291). No per-event crowd figure: NOT measured.
+ = mixed: M1 (rel58 edge, new kharej) works fully (bL 6.7 s, sL 11.9 s held); M2 (new edge only) does nothing (miss).
+   => the KHAREJ (dialing side / exit) must run bin93 with the key; the edge mirrors its cuts.
+
+VERDICT: default stays OFF (not in envdef). Detection is clearly better (12/12 vs 3/12 held), 0 false triggers seen,
+but the 30 min quiet run and a per-event crowd-failure comparison were not done and bL S1 crowd fail mean is higher.
+Next: a q soak of >= 30 min with S1 (count "silent:" lines on clean paths), per-event crowd failures (probe per-second
+data), then envdef {"HS2_LB_SILENT","1",Exit}.
+
+tests: gofmt clean (engine envdef), go vet ./engine ./envdef ./cmd/... OK, go test ./... -timeout 30m EXIT 0 (engine
+701 s), go test -race ./engine: FAIL on one DATA RACE in TestDgPoolRoundTrip (dgpool.go:1528 t.Logf from a dial goroutine
+after the test ended; untouched code, test harness race), everything else passed. Unit: TestSilent* (6) PASS.
+build: C:\h2w\bin93\hs2-linux-amd64 sha256 43412db4c63a1f522870eab5b8113d297e8c3bcf2eb5485b7ea39fef032f76c4.

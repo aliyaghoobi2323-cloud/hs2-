@@ -1,0 +1,103 @@
+er92 — RESEND early rescue, phase 2 (branch er91, new commits on edc228fd), 2026-11-13, lab3 only (198.51.100.235).
+Scripts: lab/er92/er92.sh (lb84.sh copy: 4 paths rtt ~90 ms, base loss 0.1/0.2/0.3/0.8 %, crowd 1500,
+2 Mbit call, game, heavy down x4 at 212 s, 250 s runs, RSS of hs2/hs2kh every 5 s), q92.sh, an92.py.
+Arms: A = keys off; B = HS2_MCONN_RESCUE=1 both sides; blackhole plan BH: path b 100 % loss 40-80 s,
+path c 100 % loss 160-200 s (2 events per run). L = key on, lossy plan (no blackhole): path a 3 % 40-120 s,
+path b 10 % 130-210 s, path d steady 0.8 % (the judge cut both lossy paths, 2 cuts per run).
+M = mixed: edge with key on + exit rel58 (C:\h2w\bin58, 5d87000d), BH plan.
+fB / fC = crowd failures in 40-100 s / 160-220 s; per event = (fB+fC)/2.
+
+== First: er91's full go test (/root/er91/test-all.txt) was NOT a code result: "go: module cache not
+found" (unit had no HOME/GOPATH). Rerun with HOME/GOPATH: one real failure,
+TestNoWallClockNanosInEngine — er91's rescue ring used time.Now().UnixNano() (3 sites) -> monoNano. Fixed.
+er91 also was not gofmt clean (mconn_rescue.go alignment) -> fixed.
+
+== Binaries during the A/B (code changed between rounds — each row says which)
+  3a99b487 er91 phase 1 + counter log line       (A1-A3 off, B1-B3)
+  fa96c247 + 250 ms watcher (pend 750 ms, judge-cut trigger) + join avoids the raw1 path   (B4 B5 B7, L1 L2)
+  eec6c01e + no cut trigger, quiet links count alive, pend 1500 ms, join avoids every silent link (B6, A4, L3)
+  24ab34d6 + diagnostic counters joins/samepath/silentjoin (no behaviour change)          (B8, B9, L4, M2)
+  key off: A arm code path is identical in all of them (no rings, no watcher).
+
+== Blackhole A/B
+  run  bin   fB   fC  fail/ev  crowd99  c99ev  echo99  call99  game99  ping99  RSS edge max  RSS exit max  rescue edge: started/acked, exit: served
+  A1   er91  263  380  321.5   133.7   152.9  105.8   202.1   140.0   104     238 MB        372 MB        -
+  A2   er91  277  351  314.0   137.3   149.1  106.3   194.3   160.7   116     265           371           -
+  A3   er91  277  397  337.0   172.6   167.6  124.8   189.6   157.7   130     280           378           -
+  A4   eec6  261  380  320.5   140.4   156.4  101.4   215.8   108.0   120     271           389           -
+  B1   er91  276  393  334.5   142.3   157.9  126.8   194.3   112.4   122     289           398           228/0, 0
+  B2   er91  233  381  307.0   143.7   155.7  150.6   195.1   108.5   117     287           376           183/0, 0
+  B3   er91  252  407  329.5   137.6   159.9  107.5   139.0   121.2   105     250           372           168/0, 0
+  B4   fa96  342  393  367.5   141.9   154.7  153.1   188.5   159.8   132     221           380           258/11, 14 (edge nocover 3)
+  B5   fa96  217  345  281.0   171.5   170.7  162.9   201.5   152.2   181     282           373           183/10, 10
+  B7   fa96  282  361  321.5   144.0   155.7  107.9   125.5   127.7   111     305           392           243/11, 11
+  B6   eec6  353  436  394.5   150.0   154.4  101.2   250.6   147.7   145     205           368           331/9, 9
+  B8   24ab  239  432  335.5   154.7   155.0  116.4   159.6   132.1   149     212           366           250/3, 7 (edge nocover 4)
+  B9   24ab  302  422  362.0   142.1   156.2  154.6   145.3   115.1   132     206           393           296/8, 8
+  OFF (n=8 events): 323.3 fails/event, crowd p99 mean 146.0, echo 109.6, call 200.5, game 141.6, ping 117.5
+  ON  (n=18 events, all bins): 337.0 fails/event (+4 %), crowd p99 147.5, echo 131.2, call 177.7, game 130.7, ping 132.7
+  -> NO reduction of crowd failures. The mechanism engages (150-330 rescues started per run) but the exit
+     answers only 0-6 % of them: served 0 of 579 (er91), 35 of 684 (fa96), 9 of 331 (eec6), 15 of 546 (24ab).
+  Diagnosis so far (24ab34d6 counters, B8): rescue joins are opened OFF the silent path (samepath 0,
+  silentjoin 0), the exit attaches joins to ring conns (joins 2296+, incl. normal lite copies), the exit
+  never blocks in onRescue/cutRaw (goroutine dumps, 3 slots), exit "failed" 0 — i.e. the RESCUE record
+  of ~95 % of rescues is never read by the exit, and nothing counts why. ROOT CAUSE NOT FOUND. In-memory
+  tests (live and dead first sub) work every time (TestRescueDeadSubNeverAnswers etc., 200x).
+  Next step: per-rescue trace (edge: conn id + join link + time RESCUE written; exit: join id seen,
+  first record kind) on one B run, HS2_MCONN_TRACE_PORT for the crowd port.
+
+== False triggers (lossy-alive paths, key on, no blackhole): crowd fails 0 in all four runs
+  L1 fa96 (pend 750 + judge-cut trigger): 8 rescues started (all served: no harm, but FALSE)
+  L2 fa96: 4 rescues started (all served)
+  L3 eec6 (no cut trigger, pend 1500, quiet = alive): 0 rescues; detector episodes 2 (silent set non-empty,
+     no eligible conn on it)
+  L4 24ab: 0 rescues; detector episodes 1
+  -> after the tightening: 0 rescues on lossy paths in 2 runs, but the detector itself still fires 1-2
+     times per run on 3 %/10 % loss: not 0 at the detector level.
+
+== Light p99 / memory
+  crowd p99 ON 148.2 vs OFF 146.0 (+2 ms, run spread 133-172); ping p99 +15 ms on (two noisy runs B5 181,
+  B8 149). Not significant, but no improvement either.
+  RSS: edge max 205-305 MB on vs 238-280 off; exit max 366-398 on vs 371-389 off -> flat. Ring memory
+  in "mconn rescue:" lines: 0.1-0.8 MB per side (rings 28-144 x 4 KB typical). Memory OK.
+
+== Mixed (edge key on + exit rel58 5d87000d, BH plan)
+  M1 invalid (rel58 copied without +x: exit never started; rerun as M2).
+  M2: 575 fails (287.5/event, same as off), crowd p99 127.7, call 107.6, game 275.6 (one game outlier),
+      edge opens no role 3 (no "mconn rescue:" line on either side), 0 panics -> silent fallback PASS.
+
+== Code (commits 45878247 .. on er91)
+  - health.go: linkMeter.lastRd / lastWr / pendSince (ctrlNow) kept by meteredConn only while the key is on.
+  - mconn_rescue_watch.go: LinkManager.rescueWatch every HS2_MCONN_RESCUE_TICK_MS=250 ms (started in Run
+    when the key is on); silent = no read for HS2_MCONN_RESCUE_MS (1500) AND bytes unanswered for
+    HS2_MCONN_RESCUE_PEND_MS (1500); quiet links with nothing pending count as alive; 80 % of >=3 links
+    of a path while another path hears. The 2 s health-tick trigger (rescueSilentMark) is removed.
+    Judge-cut trigger was tried (fa96) and REMOVED: it rescued conns on lossy-alive paths (L1/L2).
+  - rescue join avoids raw1's whole path (callStuckMark, meter path fallback) and every silent link.
+  - rescueStart keeps lightOpening set until rawW is off (an upgrade could start between the check and
+    the switch: TestRescueVsUpgradeRace).
+  - counters: "mconn rescue:" log line every 10 s when changed (rings, KB, triggers, started, acked,
+    served, nocover, failed, limited, overcap, resent, joins, samepath, silentjoin). Not in hs2 status JSON.
+  - tests: TestRescueLinkState, TestRescueSilentSet, TestRescueThenStripe (raw1 stays out of subs while
+    the conn stripes after a rescue, all bytes once), TestRescueVsUpgradeRace (20 rounds).
+  NOT DONE: NAK when the ring cannot cover the gap (the conn still ends, "nocover" 3-4 per run on the
+  edge in B4/B8). A real NAK needs Iran to resume reading raw1 up to the exit's boundary (it is in effect
+  an UPGRADE answer); not started.
+
+== Checks
+  gofmt clean (engine), go vet ./... ok.
+  go test ./... -p 2 (tree before the monoNano fix): all packages ok except TestNoWallClockNanosInEngine
+  (fixed; rerun of TestNoWallClock|TestRescue|TestMConnRaw|TestPathSilent|TestApplyDefaults ok).
+  -race: TestRescue|TestMConnRaw|TestPathSilent -count=2 ok; TestRescueVsUpgradeRace -race -count=20:
+  1 failure ("a sub died holding the only copy") after the lightOpening fix (2 before); 0 in 100 runs
+  without -race. Not resolved (may be the plain upgrade under -race timing).
+  go test -race -count=1 ./engine (full, 844 s, lab3 during the A/B): rc=1, 0 "--- FAIL" lines; the ONLY
+  report is 1 DATA RACE in dgpool.go:604 (newDgPool log hook -> testing t.Log from the pool read loop after
+  its test returned, via burstLog / onCloseFrame) — a test-harness logging race in code er92 does not touch.
+  Not rerun.
+  bin92: C:\h2w\bin92\hs2-linux-amd64 sha256 bc39e29cfdb7d8b912a6650161a73abe92dd3b76040b8159258caf07d75b8b90
+  (= 24ab34d6 code + monoNano fix, CGO_ENABLED=0 -trimpath -ldflags="-s -w", Go on lab3).
+
+== Verdict: NOT ready for default ON. Failures per event 337.0 on (n=18) vs 323.3 off (n=8) (no reduction; needs >= 50 %),
+   because ~95 % of started rescues are never answered by the exit (cause open). Rescues on lossy paths
+   0 after the tightening, detector episodes 1-2 per lossy run. p99 no gain; memory flat. Key stays OFF.

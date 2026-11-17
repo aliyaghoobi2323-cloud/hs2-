@@ -78,6 +78,11 @@ type LBPathView struct {
 	// the sender's figure replaced it.
 	LossSrc    string   `json:"loss_down_src,omitempty"`
 	LossDownRx *float64 `json:"loss_down_rx_pct,omitempty"`
+	// mt135 (lb_pmtu135.go): the path MTU of its links per direction (down:
+	// what the Kharej side sends) and the lower minimum of the two.
+	PmtuMin  int     `json:"pmtu_min,omitempty"`
+	PmtuDown *LBPmtu `json:"pmtu_down,omitempty"`
+	PmtuUp   *LBPmtu `json:"pmtu_up,omitempty"`
 
 	key string // the view's path key (not in JSON)
 }
@@ -99,6 +104,9 @@ type pathLink struct {
 	suspect       bool
 	retiring      bool
 	picks         uint64 // edge: new user connections placed on it, all told
+	// peerPmtu / peerMss: the peer's path MTU and send MSS for this link, as
+	// its control messages carried them (0: none); mt135.
+	peerPmtu, peerMss uint32
 }
 
 type pathCounters struct{ rx, tx, rt, so, prt, si, np uint64 }
@@ -131,6 +139,8 @@ type pathView struct {
 	acc  map[string]*pathAcc
 	tot  pathAcc
 	now  func() time.Time
+	mt   *pmtuTrack           // mt135: MTU history per path and direction
+	logf func(string, ...any) // mt135: MTU drops (nil: not logged)
 }
 
 type linkPrev struct {
@@ -139,7 +149,7 @@ type linkPrev struct {
 }
 
 func newPathView(exit bool) *pathView {
-	return &pathView{exit: exit, prev: map[any]linkPrev{}, acc: map[string]*pathAcc{}, now: time.Now}
+	return &pathView{exit: exit, prev: map[any]linkPrev{}, acc: map[string]*pathAcc{}, now: time.Now, mt: newPmtuTrack()}
 }
 
 func linkCounters(l pathLink) pathCounters {
@@ -195,6 +205,7 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 		minRTT  float64
 		remotes []string
 		peer    bool
+		own, pm []pmtuReading // mt135: this side's / the peer's MTU per link
 	}
 	ag := make([]agg, len(rows))
 	seen := make(map[any]bool, len(links))
@@ -264,6 +275,12 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 		if l.peerOK {
 			ag[i].peer = true
 		}
+		if l.tsOK && l.ts.pmtu > 0 {
+			ag[i].own = append(ag[i].own, pmtuReading{l.key, l.ts.pmtu, l.ts.sndMss})
+		}
+		if l.peerPmtu > 0 {
+			ag[i].pm = append(ag[i].pm, pmtuReading{l.key, l.peerPmtu, l.peerMss})
+		}
 		if l.remote != "" && !hasStr(ag[i].remotes, l.remote) {
 			ag[i].remotes = append(ag[i].remotes, l.remote)
 		}
@@ -283,6 +300,7 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 	}
 	var nps []uint64
 	tot := &LBPathView{State: "ok"}
+	mtKeep := map[string]bool{}
 	for i := range rows {
 		r := &rows[i]
 		a := v.acc[r.key]
@@ -300,6 +318,7 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 			sort.Strings(ag[i].remotes)
 			r.Remote = strings.Join(ag[i].remotes, ",")
 		}
+		v.pmtuRow(r, ag[i].own, ag[i].pm, mtKeep)
 		tot.SharePct += r.SharePct
 		tot.Target += r.Target
 		tot.Links += r.Links
@@ -311,6 +330,7 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 		tot.Retiring += r.Retiring
 		tot.FailsAll += r.FailsAll
 	}
+	v.mt.forget(mtKeep)
 	d, dt := v.tot.push(now)
 	v.fill(tot, v.tot.cum, d, dt, peerAny)
 	if d.np > 0 {
@@ -322,6 +342,36 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 	tot.SharePct = round1pct(tot.SharePct)
 	tot.RTTp50, tot.RTTp99, tot.MinRTT = pctl(allRTT, 50), pctl(allRTT, 99), round1pct(allMin)
 	return rows, tot
+}
+
+// pmtuRow fills a row's MTU view from its links' readings (mt135).
+func (v *pathView) pmtuRow(r *LBPathView, own, peer []pmtuReading, keep map[string]bool) {
+	if v.mt == nil {
+		return
+	}
+	ko, kp := r.key+"|own", r.key+"|peer"
+	keep[ko], keep[kp] = true, true
+	o, dropO := v.mt.observe(ko, own)
+	p, dropP := v.mt.observe(kp, peer)
+	if v.exit {
+		r.PmtuDown, r.PmtuUp = o, p
+	} else {
+		r.PmtuDown, r.PmtuUp = p, o
+	}
+	r.PmtuMin = pmtuMinOf(o, p)
+	if v.logf == nil {
+		return
+	}
+	for _, x := range []struct {
+		drop bool
+		v    *LBPmtu
+		who  string
+	}{{dropO, o, "this side's"}, {dropP, p, "the peer's"}} {
+		if x.drop {
+			v.logf("lb pmtu: path %s>%s: %s links lowered their path MTU (min %d, median %d, usual %d, %d of %d below)",
+				r.Local, r.Remote, x.who, x.v.Min, x.v.Med, x.v.Usual, x.v.Low, x.v.Links)
+		}
+	}
 }
 
 // fill sets a row's rates, totals and loss from its counters.
@@ -436,6 +486,7 @@ func meterLinks(ms []*linkMeter, keyOf func(*linkMeter) string) []pathLink {
 		if m.tcp != nil {
 			pl.ts, pl.tsOK = tcpStats(m.tcp)
 		}
+		pl.peerPmtu, pl.peerMss = m.peerPmtu.Load(), m.peerMss.Load()
 		out = append(out, pl)
 	}
 	return out
@@ -511,6 +562,7 @@ func (b *LB) viewLinks() []pathLink {
 		if x.h.stats != nil {
 			pl.ts, pl.tsOK = x.h.stats()
 		}
+		pl.peerPmtu, pl.peerMss = m.peerPmtu.Load(), m.peerMss.Load()
 		out = append(out, pl)
 	}
 	return out
@@ -542,13 +594,14 @@ func (m *LinkManager) viewLinks(keyOf func(ml *managedLink) string) []pathLink {
 		}
 		pl := pathLink{key: ml, users: int(ml.users.Load()), serving: ml.serving(), degraded: ml.degraded,
 			draining: ml.draining, suspect: ml.suspect, retiring: ml.retiring && !ml.degraded && !ml.draining,
-			picks: ml.steer.picksAll}
+			picks: ml.steer.picksAll + uint64(ml.fpPicks.Load())}
 		if ml.mtr != nil {
 			pl.local, pl.remote = pathIPs(ml.mtr.path)
 			pl.path = ml.mtr.path
 			pl.rx, pl.tx = ml.mtr.rdBytes.Load(), ml.mtr.wrBytes.Load()
 			pl.peerOK = ml.mtr.peerSeen.Load()
 			pl.peerRt = ml.mtr.peerRetrans.Load()
+			pl.peerPmtu, pl.peerMss = ml.mtr.peerPmtu.Load(), ml.mtr.peerMss.Load()
 		}
 		ss = append(ss, snap{ml, pl})
 	}

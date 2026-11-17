@@ -14,11 +14,11 @@ cat > "$T/bin/ip" <<'IP'
 #!/bin/bash
 cat <<'OUT'
 1: lo    inet 127.0.0.1/8 scope host lo
-2: eth0    inet 5.57.38.163/24 scope global eth0
-2: eth0    inet 81.12.35.145/24 scope global eth0
-2: eth0    inet 85.133.250.174/24 scope global eth0
-3: eth1    inet 206.1.97.84/24 scope global eth1
-3: eth1    inet 153.52.92.119/24 scope global eth1
+2: eth0    inet 203.0.113.31/24 scope global eth0
+2: eth0    inet 203.0.113.40/24 scope global eth0
+2: eth0    inet 203.0.113.62/24 scope global eth0
+3: eth1    inet 203.0.113.84/24 scope global eth1
+3: eth1    inet 198.51.100.119/24 scope global eth1
 4: hs0    inet 10.77.0.1/30 scope global hs0
 OUT
 IP
@@ -40,7 +40,7 @@ echo "ALL=\$(local_ips | tr '\n' ',')"
 RUN
 out=$(bash "$T/run.sh" 2>&1); rc=$?
 check "first_public_ip succeeds on a 6-IP server (no SIGPIPE abort)" '[ $rc = 0 ]'
-check "first_public_ip returns the first address" 'echo "$out" | grep -qx "FIRST=5.57.38.163"'
+check "first_public_ip returns the first address" 'echo "$out" | grep -qx "FIRST=203.0.113.31"'
 check "local_ips lists all six public IPs" 'echo "$out" | grep -qx "COUNT=6"'
 check "local_ips excludes lo" '! echo "$out" | grep -q 127.0.0.1'
 [ $rc = 0 ] || echo "  output: $out"

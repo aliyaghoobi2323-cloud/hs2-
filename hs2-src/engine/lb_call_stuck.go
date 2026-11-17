@@ -34,7 +34,26 @@ import (
 // A healthy path does not hold every socket of a call in recovery or backlog
 // for half a second, nor leave it a receive gap of callStuckGap while it
 // sends; the lab counts the triggers on equal and steady paths (8.11).
-var lbCallStuck = os.Getenv("HS2_LB_CALL_STUCK") != "0"
+var lbCallStuck atomic.Bool
+
+func init() { lbCallStuck.Store(os.Getenv("HS2_LB_CALL_STUCK") != "0") }
+
+// lbCallStuckGapStrict: HS2_LB_CALL_STUCK_GAP_STRICT (prod73; wj178: ON by
+// default, "0" = the old rule). Production (tunnel 1, rel58, ~25 min) fired
+// 349 triggers, every one by the receive gap alone (busy 0); rel66b still
+// fires one every ~25 s (gap N = weak gaps N, busy 0): a call that is
+// one-sided for 600 ms (a muted side, a listener, the pause between talk
+// spurts with voice-activity detection) on a healthy path looks the same.
+// Each such trigger opens a fresh sub and gives up the call's two subs for
+// nothing. A path that really stopped carrying the call also stops carrying
+// the ACKs of what this side keeps sending (the gap needs a push within
+// 2*callStuckPoll), so within an RTO at least one of the call's sockets goes
+// into loss recovery or holds a backlog (callStuckBusy) — or a sub sits on a
+// link the rescue already lowered. Strict: the gap counts only with that
+// evidence; a gap without it is counted (callStuckGapWeak) and left alone.
+// (The lab, calls both ways, healthy and cut paths, 17 runs, fired no gap
+// trigger at all: the dark-path cases trigger by busy or by a strict gap.)
+var lbCallStuckGapStrict = os.Getenv("HS2_LB_CALL_STUCK_GAP_STRICT") != "0"
 
 const (
 	callStuckPoll   = 100 * time.Millisecond
@@ -50,6 +69,12 @@ const (
 // stuck calls; subs given up once the fresh one read; triggers refused by the
 // process rate bound. callStuckBusyN / callStuckGapN: triggers by signal.
 var callStuckOpened, callStuckMoved, callStuckRefused, callStuckBusyN, callStuckGapN atomic.Int64
+
+// prod73 diagnostics: callStuckGapWeak — receive gaps without the strict
+// rule's evidence (left alone under it, triggers under the old rule);
+// callStuckOldFirst — triggers after which an old sub read from the peer
+// before any fresh one did (the stall ended by itself: a false trigger).
+var callStuckGapWeak, callStuckOldFirst atomic.Int64
 
 var (
 	callStuckSec atomic.Int64
@@ -104,7 +129,13 @@ func callPathOf(key any) string {
 
 // callStuckBusy: s's socket is in loss recovery or holds a backlog (a var
 // for tests).
-var callStuckBusy = func(s *msub) bool {
+var callStuckBusyFn atomic.Pointer[func(*msub) bool]
+
+func init() { f := callStuckBusyTCP; callStuckBusyFn.Store(&f) }
+
+func callStuckBusy(s *msub) bool { return (*callStuckBusyFn.Load())(s) }
+
+func callStuckBusyTCP(s *msub) bool {
 	tc := subTCP(s)
 	if tc == nil {
 		return false
@@ -140,7 +171,7 @@ func (m *mConn) callStuckOnLocked(now time.Time) bool {
 // gave: subs were given up (the caller refreshes the primary); poll: look
 // again within it (0: no need).
 func (m *mConn) callStuckLocked(live []*msub, now time.Time) (gave bool, poll time.Duration) {
-	if !lbCallStuck || !m.callStuckOnLocked(now) || m.peerFin || m.wclosed || m.handshaking {
+	if !lbCallStuck.Load() || !m.callStuckOnLocked(now) || m.peerFin || m.wclosed || m.handshaking {
 		m.stuckSince = time.Time{}
 		m.stuckKeys = nil
 		return false, 0
@@ -175,14 +206,27 @@ func (m *mConn) callStuckLocked(live []*msub, now time.Time) (gave bool, poll ti
 		return false, 0
 	}
 	gap := lastRecv != 0 && now.Sub(monoTime(lastRecv)) >= callStuckGap && now.Sub(lastPush) <= 2*callStuckPoll
-	busy := true
+	busy, anyBusy, low := true, false, false
 	for _, s := range live {
 		if s.retired || s.dead || s.closeHS {
 			continue
 		}
-		if !callStuckBusy(s) {
+		if rescueLowKey(s.key) {
+			low = true
+		}
+		if callStuckBusy(s) {
+			anyBusy = true
+		} else {
 			busy = false
-			break
+		}
+	}
+	if gap && !anyBusy && !low {
+		if m.stuckWeakAt.IsZero() || now.Sub(m.stuckWeakAt) >= callStuckEvery {
+			m.stuckWeakAt = now
+			callStuckGapWeak.Add(1)
+		}
+		if lbCallStuckGapStrict {
+			gap = false // a one-sided call on a healthy path
 		}
 	}
 	switch {
@@ -211,16 +255,17 @@ func (m *mConn) callStuckLocked(live []*msub, now time.Time) (gave bool, poll ti
 	}
 	m.callStuckAt = now.Add(callStuckEvery)
 	m.stuckOpenedAt = now
+	m.stuckJudged = false
 	m.stuckSince = time.Time{}
 	m.stuckKeys = make([]any, 0, len(live))
 	avoid := make([]any, 0, len(live)+len(m.deadKeys)+1)
 	for _, s := range live {
 		if !s.retired && !s.dead && !s.closeHS {
-			m.stuckKeys = append(m.stuckKeys, s.key)
+			m.stuckKeys = append(m.stuckKeys, avoidKey(s.key))
 		}
-		avoid = append(avoid, s.key)
+		avoid = append(avoid, avoidKey(s.key))
 	}
-	avoid = append(append(avoid, m.deadKeys...), callStuckMark{path: path})
+	avoid = append(append(avoid, m.deadAvoidLocked()...), callStuckMark{path: path})
 	m.lightOpening = true
 	callStuckOpened.Add(1)
 	m.tr.ev("call: stuck on path %s (gap %v busy %v): open a fresh sub off it", path, gap, busy)
@@ -233,14 +278,32 @@ func (m *mConn) callStuckLocked(live []*msub, now time.Time) (gave bool, poll ti
 func (m *mConn) callStuckMoveLocked(live []*msub, now time.Time) bool {
 	var bad []*msub
 	fresh := false
+	var to *msub // cs223: the fresh sub that read, shortest queue
 	for _, s := range live {
 		if s.retired || s.dead || s.closeHS {
 			continue
 		}
-		if containsAny(m.stuckKeys, s.key) {
+		if containsAny(m.stuckKeys, avoidKey(s.key)) {
 			bad = append(bad, s)
 		} else if s.lastRecv.Load() >= monoNano(m.stuckOpenedAt) {
 			fresh = true
+			if to == nil || s.qBytes < to.qBytes {
+				to = s
+			}
+		}
+	}
+	if !m.stuckJudged && len(bad) > 0 {
+		for _, s := range bad {
+			if s.lastRecv.Load() >= monoNano(m.stuckOpenedAt) {
+				m.stuckJudged = true
+				if !fresh {
+					callStuckOldFirst.Add(1) // the old path came back first
+				}
+				break
+			}
+		}
+		if fresh {
+			m.stuckJudged = true
 		}
 	}
 	switch {
@@ -263,6 +326,7 @@ func (m *mConn) callStuckMoveLocked(live []*msub, now time.Time) bool {
 			m.closeReqLocked(s)
 			callStuckMoved.Add(1)
 			gave = true
+			m.cs223GiveUpResendLocked(s, to) // cs223: its bytes ride the fresh sub now, not at its death
 		}
 	}
 	return gave
@@ -275,4 +339,21 @@ func containsAny(l []any, k any) bool {
 		}
 	}
 	return false
+}
+
+// Diag73 (prod73, hs2 status): the cut rescue's raw checks and the stuck-call
+// trigger's signals.
+type Diag73 struct {
+	RawCapped, RawCappedCut, RawCutCopies, CutRefused int64
+	StuckGap, StuckBusy, StuckGapWeak, StuckOldFirst  int64
+}
+
+// Diag73Observed: the counters so far.
+func Diag73Observed() Diag73 {
+	return Diag73{
+		RawCapped: rescueDiagRawCapped.Load(), RawCappedCut: rescueDiagRawCappedCut.Load(),
+		RawCutCopies: rescueCutRaw.Load(), CutRefused: rescueCutRefused.Load(),
+		StuckGap: callStuckGapN.Load(), StuckBusy: callStuckBusyN.Load(),
+		StuckGapWeak: callStuckGapWeak.Load(), StuckOldFirst: callStuckOldFirst.Load(),
+	}
 }

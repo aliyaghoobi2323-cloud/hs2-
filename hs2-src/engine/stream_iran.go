@@ -157,6 +157,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = newL3Set()
+		lm.setL3Cut(&l3.cut) // HS2_LB_RESCUE_CUT_L3: this tunnel's cut paths (l3_cutavoid.go)
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}
@@ -166,7 +167,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// link also carries the pool-control stream that tells the exit the desired
 	// link count.
 	lm.OnLink = func(l Link) {
-		trackEdgeLink(ctx, l) // HS2_QUEUE_CTL_UP (a no-op without it)
+		trackEdgeLink(ctx, l, reverse) // the reverse edge accepted it (m4f251); HS2_QUEUE_CTL_UP (a no-op without it)
 		go openControl(ctx, l, logf)
 		go openStats(ctx, l, logf)
 		go func() { // tell the exit our ceiling and user ports, learn its own
@@ -201,6 +202,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	if cfg.OnStart != nil {
 		if lb := lbOf(cfg.Dialer); lb != nil && !reverse {
 			view := newPathView(false)
+			view.logf = logf
 			keyOf := func(ml *managedLink) string { return lb.pathOf(ml.link) }
 			cfg.OnStart(func() PoolStats {
 				st := lm.Stats()
@@ -215,6 +217,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 			// The reverse edge holds no balancer: a row per address it is
 			// reached on, its share from this side's announced list.
 			view := newPathView(false)
+			view.logf = logf
 			pairView := newPathView(false)
 			keyOf := func(ml *managedLink) string {
 				if ml.mtr == nil {
@@ -410,7 +413,9 @@ func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int)
 		return
 	}
 	defer release()
-	relayStream(user, st, guardOf(st))
+	if relayStreamHC(user, st, guardOf(st), hcIf(halfCloseStream(st), hcEdge)) { // hc183
+		streamLocalRst.Add(1) // fx170: the download was cut; the user got an RST
+	}
 }
 
 // udpFlow is one client address on a UDP user port: its datagrams wait in q

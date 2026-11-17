@@ -1,0 +1,22 @@
+rel62 = rel61 (cfe30280) + dr116/dr118 cherry-picked clean (DL_FAST default ON edge; RES_GUARD code in, default OFF).
+Lab: lab2 d118 design (dl79 prod-like, 10 paths, crowd 3000 + call/game/echo/ping), 70 interleaved runs 15:25-15:55 UTC, 1 retry, 1 iperf3 segv run.
+Arms: G0 rel62 defaults, G1 rel62 + HS2_MCONN_STRIPE_RES_GUARD=1 (edge), R61 rel61 both, ME rel62 edge + rel61 exit, MX rel61 edge + rel62 exit.
+Full table: sum62.txt (Welch/MWU p; ref G1<-G0, G0<-R61, ME/MX<-G0).
+
+(2) RES_GUARD G1 vs G0 (n 8/8, d8 G1 n 7):
+  d1 1154 vs 930 Mbit/s (+24 %, p .046/.038); d8 1942 vs 1518 (+28 %, p .001); u1 392 vs 437 (-10 %, p .26 n.s.)
+  call p99: d1 -28.6, d8 +1.3, u1 +1.8 ms (none worse). crowd +2.1/+1.4/-0.8, game/echo not worse.
+  ping p99 at d1 +33.2 ms (p .02/.01, 156 vs 123 mean) = a significant light regression; d8 +12 n.s., u1 +0.7.
+  Verdict: gain holds, call fine, but ping p99 worse under one download -> RES_GUARD stays OFF in rel62
+  (operator decision; dr118 saw ping +11.8 n.s. at d1 as well).
+(3) rel62 (G0) vs rel61 (n 8/6): d1 930 vs 426 (+118 %, p .000); d8 +2 % n.s.; u1 +18 % n.s.
+  light: d1 all n.s.; d8 call +29.4 (p .07, trend), echo -15, ping -20; u1 crowd -9.3 (p .00, better), rest n.s.
+Mixed (n 2 d1): ME 990 Mbit/s, MX 557 (rel61-edge level), crowd fails 0, light normal -> staged rollout works.
+Release: C:\h2w\bin62\hs2-linux-amd64 sha256 ebbb59f0fbc831268dbda502c17d373a6ef07c6c5f7f8f3e7bacde67bc32034e
+  (CGO_ENABLED=0 -trimpath -s -w, buildTag rel62-2d98df00). gofmt clean, vet rc 0. go test/race/install sh: res/tests on lab2.
+Soak: unit rel62soak (soak62.sh = soak61 design, both sides hs2R62final ebbb59f0, TT 15000 s), start 15:55:20 UTC.
+  Read: bash /opt/hs2lab/rel62/soakview62.sh ; raw /opt/hs2lab/rel62soak/{min,proc,heavy,resc,alarm}.txt
+Soak first 18 min (16:13 UTC check): crowd fails only inside event windows: bhA 79 (min 1), bh_e120 62+71 (min 10,13), flap_f 8+10
+  (rel61 cycle 1: bhA 75, bh_e120 76, flap_f 58); 0 outside windows; heavy 4/4 ok (down 719-1165, up 319-554); same PIDs,
+  no MISSING, no alarm; RSS ir ~412 MB / kh ~767 MB, goroutines ~26.6k/29.2k flat.
+Tests: gofmt clean, vet rc 0, go test ./... rc 0 (12 ok); -race ./engine ./cmd/hs2 + install sh running (res/tests/race.txt, sh.txt, DONE).

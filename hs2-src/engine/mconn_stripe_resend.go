@@ -66,18 +66,24 @@ var stripeResendStat struct {
 
 // sentRec is a chunk a sub wrote, kept for a resend.
 type sentRec struct {
-	c *mchunk
-	t time.Time
+	c      *mchunk
+	t      time.Time
+	w      uint32 // HS2_MCONN_STRIPE_KEEPSTALL: the stream's written mark after it
+	marked bool   // ... w is set
+	sub    bool   // r68fix3: kept by a sub-resend-only connection (subResendStat.kept)
 }
 
 // stripeKeepOnLocked: chunks written on s are kept (under m.mu).
 func (m *mConn) stripeKeepOnLocked(s *msub) bool {
-	return stripeResend.Load() && m.stN > 0 && !m.ended && !s.dead
+	return stripeResend.Load() && (m.stN > 0 || m.anyKeepLocked()) && !m.ended && !s.dead && !s.rrAband && m.subKeepRoomLocked(s) // r68fix: calls too (mconn_call_resend.go); r68fix2: every light conn (mconn_sub_resend.go)
 }
 
 // keepSentLocked takes over the writer's references to the chunks it just
 // wrote on s: sequence chunks are kept, the rest released (under m.mu).
 func (m *mConn) keepSentLocked(s *msub, now time.Time, cs ...*mchunk) {
+	w, marked := m.keepStallMarkLocked(s) // HS2_MCONN_STRIPE_KEEPSTALL
+	added := 0
+	subOnly := m.subOnlyLocked() // r68fix3
 	for _, c := range cs {
 		if c == nil {
 			continue
@@ -86,8 +92,31 @@ func (m *mConn) keepSentLocked(s *msub, now time.Time, cs ...*mchunk) {
 			c.unref()
 			continue
 		}
-		s.sent = append(s.sent, sentRec{c, now})
+		s.sent = append(s.sent, sentRec{c: c, t: now, w: w, marked: marked, sub: subOnly})
 		m.keptBytes += c.n
+		added += c.n
+	}
+	keepStallStat.kept.Add(int64(added)) // hs123: once per write, not per chunk (a shared cache line)
+	if subOnly && added > 0 {
+		subKeptAdd(int64(added))
+	}
+	if keepStallOn.Load() {
+		if marked {
+			s.ks.lastW = now // hs123: the ack-stall rule looks only at subs that write
+		}
+		m.keepStallTrimLocked(s, now)
+		if marked && keepStallLazy.Load() {
+			m.ksLookLocked(now) // hs128
+		}
+		if m.ksSwept && (added > 0 || m.swKept.Load()) {
+			// sw235: already in the sweeper: one hint store when it was quiet,
+			// no re-arm (the sweeper re-checks sweepable on its visit)
+			m.noteSwKeptLocked()
+		} else {
+			m.keepIdleArmLocked() // mb174
+		}
+		m.subKeepBoundAtLocked(now) // r68fix2
+		return
 	}
 	for len(s.sent) > 0 && now.Sub(s.sent[0].t) > stripeKeepAge {
 		m.dropSentLocked(s, 1)
@@ -110,12 +139,31 @@ func (m *mConn) keepSentLocked(s *msub, now time.Time, cs ...*mchunk) {
 	}
 }
 
-// dropSentLocked releases s's k oldest kept chunks (under m.mu).
+// dropSentLocked releases s's k oldest kept chunks (under m.mu), without
+// proof the peer read them (cs223: noted in s.unprovEnd).
 func (m *mConn) dropSentLocked(s *msub, k int) {
 	for _, r := range s.sent[:k] {
-		m.keptBytes -= r.c.n
+		s.noteUnprov(r.c.off + uint64(r.c.n))
+	}
+	m.dropSentRawLocked(s, k)
+}
+
+// dropSentRawLocked releases s's k oldest kept chunks; the caller noted
+// those without proof of delivery.
+func (m *mConn) dropSentRawLocked(s *msub, k int) {
+	gone, subGone := 0, 0
+	for _, r := range s.sent[:k] {
+		gone += r.c.n
+		if r.sub {
+			subGone += r.c.n
+		}
 		r.c.unref()
 	}
+	if subGone > 0 {
+		subResendStat.kept.Add(-int64(subGone))
+	}
+	m.keptBytes -= gone
+	keepStallStat.kept.Add(-int64(gone))
 	clear(s.sent[:k])
 	s.sent = s.sent[k:]
 	if len(s.sent) == 0 {
@@ -125,6 +173,9 @@ func (m *mConn) dropSentLocked(s *msub, k int) {
 
 // resendTargetLocked: the live sub that takes a dead sub's chunks.
 func (m *mConn) resendTargetLocked() *msub {
+	if b := m.ackStallTargetLocked(time.Now()); b != nil { // HS2_MCONN_STRIPE_KEEPSTALL
+		return b
+	}
 	var best *msub
 	for _, x := range m.subs {
 		if x.dead || x.retired || x.closeHS || x.closeAfter || x.gated {
@@ -142,10 +193,41 @@ func (m *mConn) resendTargetLocked() *msub {
 // held, wrote recently or is writing at the front of a live sub and
 // releases s's own references. false: nothing done (the old rule applies).
 func (m *mConn) stripeResendLocked(s *msub) bool {
-	if !stripeResend.Load() || m.stN == 0 || m.ended {
+	call := m.stN == 0 && m.callKeepLocked() // r68fix (mconn_call_resend.go)
+	// r68fix2 (mconn_sub_resend.go); r68fix3/4: a dead sub with an open gap is counted, not resent
+	sub := m.stN == 0 && !call && m.subKeepLocked()
+	if !stripeResend.Load() || m.stN == 0 && !call && !sub || m.ended {
 		return false
 	}
-	b := m.resendTargetLocked()
+	var b *msub
+	if sub && !s.subGapT.IsZero() {
+		subResendStat.noFull.Add(1) // r68fix3: a resend would leave a hole
+		subResendLog()
+		return false
+	}
+	if call || sub {
+		// r68fix3: only a fresh sub on another link (mconn_sub_resend.go)
+		b = m.subResendTargetLocked(s)
+		if b == nil && call {
+			b = m.resendTargetLocked() // a call: the r68fix choice
+		}
+		if b == nil {
+			if sub {
+				subResendStat.noTarget.Add(1)
+				s.noTgt = true // b271 Q5: subGone counts the outcome
+				subResendLog()
+			}
+			return false // no live sub: the old rule (no stripe grace for a call)
+		}
+		if call {
+			callResendStat.Add(1)
+		} else {
+			subResendStat.resends.Add(1)
+		}
+		subResendLog()
+	} else {
+		b = m.resendTargetLocked()
+	}
 	if b == nil && !(m.graceOKLocked() && (len(m.subs) == 0 || m.onlyClosingLocked())) {
 		return false
 	}
@@ -176,6 +258,11 @@ func (m *mConn) stripeResendLocked(s *msub) bool {
 		return 0
 	})
 	cs = slices.CompactFunc(cs, func(a, b *mchunk) bool { return a == b })
+	if (call || sub) && b != nil && fx212SubResend.Load() {
+		cs = fx212SkipHeld(cs, b) // fx212: no duplicate of what b itself sends ahead of b's queue
+		cs = cs223SkipGave(cs, s) // cs223: given to s.gaveTo at the give-up
+		cs = m.cs223SkipDelivered(cs, b)
+	}
 	if b == nil {
 		// HS2_MCONN_STRIPE_GRACE_MS: no live sub; the chunks wait for the
 		// next one (graceFlushLocked)
@@ -229,6 +316,16 @@ func (m *mConn) releaseDeadLocked(s *msub) {
 	s.q, s.qBytes = nil, 0
 }
 
+// abandonSentLocked (fx212, audit211 H2): s left m.subs through a records
+// rescue, which resends from the ring: its kept chunks are released now, or
+// the process-global keep gauges (subResendStat.kept, keepStallStat.kept)
+// would never come down and SUB_RESEND would refuse every keep after ~32 MiB.
+func (m *mConn) abandonSentLocked(s *msub) {
+	if len(s.sent) > 0 {
+		m.dropSentLocked(s, len(s.sent))
+	}
+}
+
 // releaseSentLocked frees every kept chunk and the grace's orphans (the
 // connection ended).
 func (m *mConn) releaseSentLocked() {
@@ -236,6 +333,14 @@ func (m *mConn) releaseSentLocked() {
 		if len(s.sent) > 0 {
 			m.dropSentLocked(s, len(s.sent))
 		}
+	}
+	// fx212 (H2): subs a rescue took out of m.subs (abandoned, replaced
+	// joins) may still hold kept chunks; the global gauges must come down
+	for _, s := range m.rrOld {
+		m.abandonSentLocked(s)
+	}
+	for _, s := range m.rscAband {
+		m.abandonSentLocked(s)
 	}
 	for _, c := range m.orphan {
 		c.unref()
@@ -357,7 +462,7 @@ func (m *mConn) graceOpenLocked(now time.Time) {
 	}
 	m.graceRetryAt = now.Add(graceGap)
 	m.lightOpening = true
-	avoid := append([]any(nil), m.deadKeys...)
+	avoid := append([]any(nil), m.deadAvoidLocked()...)
 	go m.openLight(avoid)
 }
 

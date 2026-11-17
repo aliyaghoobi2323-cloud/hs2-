@@ -48,3 +48,30 @@ func TestShaper2(t *testing.T) {
 		t.Log("sid:", w.frame.sid, "seq:", w.seq)
 	}
 }
+
+// hs2 SmallFirst: a small frame overtakes earlier bulk frames, by at most
+// SmallFirstJump requests.
+func TestShaperSmallFirst(t *testing.T) {
+	var reqs shaperHeap
+	for i := uint32(1); i <= 5; i++ {
+		heap.Push(&reqs, writeRequest{class: CLSDATA, seq: i, frame: Frame{sid: 1}})
+	}
+	heap.Push(&reqs, writeRequest{class: CLSDATA, seq: 6, jump: SmallFirstJump, frame: Frame{sid: 2}})
+	heap.Push(&reqs, writeRequest{class: CLSCTRL, seq: 7, frame: Frame{sid: 3}})
+	if w := heap.Pop(&reqs).(writeRequest); w.frame.sid != 3 {
+		t.Fatalf("first = sid %d, want the control frame", w.frame.sid)
+	}
+	if w := heap.Pop(&reqs).(writeRequest); w.frame.sid != 2 {
+		t.Fatalf("second = sid %d, want the small frame", w.frame.sid)
+	}
+	if !overtook(reqs, writeRequest{class: CLSDATA, seq: 6}) || overtook(reqs, writeRequest{class: CLSDATA, seq: 0}) {
+		t.Fatal("overtook: wrong")
+	}
+	// bounded: a bulk frame queued more than SmallFirstJump requests earlier goes first
+	reqs = nil
+	heap.Push(&reqs, writeRequest{class: CLSDATA, seq: 10 + SmallFirstJump + 1, jump: SmallFirstJump, frame: Frame{sid: 2}})
+	heap.Push(&reqs, writeRequest{class: CLSDATA, seq: 10, frame: Frame{sid: 1}})
+	if w := heap.Pop(&reqs).(writeRequest); w.frame.sid != 1 {
+		t.Fatalf("starved: sid %d first", w.frame.sid)
+	}
+}

@@ -1,0 +1,113 @@
+== ab2/r1I
+   edge=ab719cb9 HS2_MCONN_RESCUE_IDEM=1 cpus=0-6
+  events: 9 cascade first-join lag s: [1.786, 5.028, None, None, None, None, None, None, None] modes: rbrbrbrbr
+  calls DIED in-run: 23 (ev 10) teardown: 30 CORRUPT: 0
+      2 calm live ConnectionResetError('Connection lost')
+      3 calm live ConnectionResetError(104, 'Connection reset 
+      5 calm live EOFError('eof (tunnel FIN)')
+      1 calm live IncompleteReadError('0 bytes read on a total
+      1 calm stalled>3s ConnectionResetError(104, 'Connection reset 
+      1 calm stalled>3s EOFError('eof (tunnel FIN)')
+      3 ev live ConnectionResetError(104, 'Connection reset 
+      5 ev stalled>3s ConnectionResetError(104, 'Connection reset 
+      2 ev stalled>3s EOFError('eof (tunnel FIN)')
+  crowd fails: {'ev': 2027, 'calm': 140} total 2167
+  crowd p50 106.57 p99 1140.374 max 10003.775 fail/lost 2167
+  call  p50 115.218 p99 20548.895 max 20633.587 fail/lost 5533
+  game  p50 106.314 p99 519.116 max 718.507 fail/lost 258
+  rss max MB ir 746.5 kh 1189.5
+   ir mconn rescue: rings 98 (392 KB) · triggers 12 · started 1569 acked 1565 served 0 · nocover 0 failed 13 limited 23 overcap 0 · resent 6919 KB · joins 0 samepath 0 silentjoin 0 · joinended 0 joinmissed 0 lostjoin 5 refused 0 cutslow 0 endwait 4 · fresh 1569 freshnew 0 · nak 0 nakd 0
+   ir mconn rescue-rec: conns 2842 (15628 KB, big 22793 KB) · started 6544 acked 6497 nakd 7 · served 0 nak 0 refused 0 · nocover 7 failed 501 lostjoin 17 endwait 18 · resent 6763 KB · gap 0 fin 1
+   ir mconn rescue145: pick fresh 8640 freshsameip 0 old 0 · retry 36 retryfail 0 retrysilent 35 · recmem cap 88 MB rawmem cap 64 MB
+   ir mconn rescue169: repeat 0 repeatsw 0 stale 0 · lateans 0 dupans 9 laterr 0 · fresh 0 noring 0 overread 0 · held 0 KB
+   ir trace: 1141 rescue-trace iran RREC(N,N) old N join L; 1112 rescue-trace iran RREC answer nak=false (N,N) after Nms covered=true; 207 rescue-trace iran rrec start failed err=<nil>; 48 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNbN/N.N.N.N>N.N.N.N jo; 46 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNedNbN/N.N.N.N>N.N.N.N; 39 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNedN/N.N.N.N>N.N.N.N j; 37 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNecfN/N.N.N.N>N.N.N.N ; 32 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNedcaN/N.N.N.N>N.N.N.N; 32 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNedNeN/N.N.N.N>N.N.N.N; 29 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNfeN/N.N.N.N>N.N.N.N j; 28 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNaN/N.N.N.N>N.N.N.N jo; 23 rescue-trace iran rrec join L retry; 22 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNdaN/N.N.N.N>N.N.N.N j; 15 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNedNdN/N.N.N.N>N.N.N.N; 15 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNeeNdNeN/N.N.N.N>N.N.N; 13 rescue-trace iran rescue retry join L resent N; 13 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNedNfN/N.N.N.N>N.N.N.N; 13 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNfNfcNdbN/N.N.N.N>N.N.
+   kh mconn rescue: rings 104 (152 KB) · triggers 0 · started 0 acked 0 served 1569 · nocover 0 failed 0 limited 0 overcap 0 · resent 8150 KB · joins 63075 samepath 0 silentjoin 0 · joinended 16 joinmissed 2176 lostjoin 0 refused 0 cutslow 0 endwait 0 · fresh 0 freshnew 1398 · nak 0 nakd 0
+   kh mconn rescue-rec: conns 2844 (82832 KB, big 23701 KB) · started 0 acked 0 nakd 0 · served 6528 nak 10 refused 0 · nocover 0 failed 0 lostjoin 0 endwait 0 · resent 8026 KB · gap 0 fin 0
+   kh mconn rescue145: pick fresh 0 freshsameip 0 old 0 · retry 0 retryfail 0 retrysilent 0 · recmem cap 88 MB rawmem cap 64 MB
+   kh mconn rescue169: repeat 12 repeatsw 10 stale 0 · lateans 0 dupans 0 laterr 0 · fresh 1386 noring 0 overread 0 · held 12 KB
+   kh trace: 1714 rescue-trace exit RREC(N,N) ACK(N,N) resent N old N; 51 rescue-trace exit RESCUE(N,N) read; 10 rescue-trace exit RESCUE(N,N) again: answered, resent N+N switched=true; 9 rescue-trace exit RREC(,) ACK(,) resent N old N; 8 rescue-trace exit RREC(N,N) NAK(N,N); 2 rescue-trace exit RESCUE(N,N) again: answered, resent N+N switched=false; 2 rescue-trace exit RREC(,) NAK(,)
+   retried conns by outcome: 12 raw/fresh exit answered again; 1 raw/fresh other; 15 rrec answered; 8 rrec start failed
+== ab2/r1Z
+   edge=ab719cb9 HS2_MCONN_RESCUE_IDEM=0 cpus=13-19
+  events: 9 cascade first-join lag s: [1.871, None, 3.449, None, None, None, None, None, None] modes: rbrbrbrbr
+  calls DIED in-run: 23 (ev 18) teardown: 30 CORRUPT: 0
+      3 calm stalled>3s ConnectionResetError(104, 'Connection reset 
+      2 calm stalled>3s EOFError('eof (tunnel FIN)')
+      2 ev live ConnectionResetError('Connection lost')
+      2 ev live ConnectionResetError(104, 'Connection reset 
+      10 ev stalled>3s ConnectionResetError(104, 'Connection reset 
+      4 ev stalled>3s EOFError('eof (tunnel FIN)')
+  crowd fails: {'ev': 2413, 'calm': 157} total 2570
+  crowd p50 105.627 p99 800.374 max 10020.384 fail/lost 2570
+  call  p50 143.278 p99 22857.067 max 23232.627 fail/lost 1619
+  game  p50 107.099 p99 16780.998 max 20722.967 fail/lost 0
+  rss max MB ir 852.4 kh 1125.4
+   ir mconn rescue: rings 81 (324 KB) · triggers 14 · started 1859 acked 1836 served 0 · nocover 0 failed 64 limited 23 overcap 0 · resent 4530 KB · joins 0 samepath 0 silentjoin 0 · joinended 0 joinmissed 0 lostjoin 23 refused 0 cutslow 0 endwait 23 · fresh 1859 freshnew 0 · nak 0 nakd 0
+   ir mconn rescue-rec: conns 2886 (15796 KB, big 23237 KB) · started 5325 acked 5205 nakd 77 · served 0 nak 0 refused 0 · nocover 6 failed 658 lostjoin 18 endwait 21 · resent 4396 KB · gap 0 fin 2
+   ir mconn rescue145: pick fresh 7923 freshsameip 0 old 0 · retry 42 retryfail 0 retrysilent 42 · recmem cap 90 MB rawmem cap 64 MB
+   ir mconn rescue169: repeat 0 repeatsw 0 stale 0 · lateans 0 dupans 0 laterr 0 · fresh 0 noring 0 overread 0 · held 0 KB
+   ir trace: 1150 rescue-trace iran RREC(N,N) old N join L; 1082 rescue-trace iran RREC answer nak=false (N,N) after Nms covered=true; 164 rescue-trace iran rrec start failed err=<nil>; 64 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNdN/N.N.N.N>N.N.N.N jo; 50 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNaN/N.N.N.N>N.N.N.N jo; 45 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNefN/N.N.N.N>N.N.N.N j; 44 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNcNcN/N.N.N.N>N.N.N.N ; 43 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNcNbN/N.N.N.N>N.N.N.N ; 38 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNddfN/N.N.N.N>N.N.N.N ; 27 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNcNccN/N.N.N.N>N.N.N.N; 26 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNfN/N.N.N.N>N.N.N.N jo; 26 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbN/N.N.N.N>N.N.N.N join; 25 rescue-trace iran rrec join L retry; 24 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNdNaN/N.N.N.N>N.N.N.N ; 21 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNcN/N.N.N.N>N.N.N.N jo; 18 rescue-trace iran RREC answer nak=true (N,N) after Nms covered=true; 17 rescue-trace iran rescue join L retry; 17 rescue-trace iran rescue retry join L resent N
+   kh mconn rescue: rings 83 (152 KB) · triggers 0 · started 0 acked 0 served 1859 · nocover 0 failed 16 limited 0 overcap 0 · resent 6615 KB · joins 58291 samepath 0 silentjoin 0 · joinended 11 joinmissed 2313 lostjoin 0 refused 16 cutslow 0 endwait 0 · fresh 0 freshnew 1612 · nak 0 nakd 0
+   kh mconn rescue-rec: conns 2882 (83260 KB, big 23602 KB) · started 0 acked 0 nakd 0 · served 5230 nak 81 refused 0 · nocover 0 failed 0 lostjoin 0 endwait 0 · resent 6437 KB · gap 0 fin 0
+   kh mconn rescue145: pick fresh 0 freshsameip 0 old 0 · retry 0 retryfail 0 retrysilent 0 · recmem cap 90 MB rawmem cap 64 MB
+   kh mconn rescue169: repeat 0 repeatsw 0 stale 0 · lateans 0 dupans 0 laterr 0 · fresh 0 noring 0 overread 0 · held 0 KB
+   kh trace: 1534 rescue-trace exit RREC(N,N) ACK(N,N) resent N old N; 164 rescue-trace exit RESCUE(N,N) read; 26 rescue-trace exit RREC(N,N) NAK(N,N); 16 rescue-trace exit RESCUE(N,N) refused; 7 rescue-trace exit RREC(,) ACK(,) resent N old N; 3 rescue-trace exit RREC(,) NAK(,)
+   retried conns by outcome: 16 raw/fresh exit refused; 1 raw/fresh other; 1 rrec NAK; 10 rrec answered; 14 rrec start failed
+== ab2/r2I
+   edge=ab719cb9 HS2_MCONN_RESCUE_IDEM=1 cpus=13-19
+  events: 9 cascade first-join lag s: [None, None, None, None, None, None, None, None, None] modes: rbrbrbrbr
+  calls DIED in-run: 24 (ev 13) teardown: 30 CORRUPT: 0
+      3 calm live ConnectionResetError(104, 'Connection reset 
+      1 calm live EOFError('eof (tunnel FIN)')
+      1 calm stalled>3s ConnectionResetError('Connection lost')
+      4 calm stalled>3s ConnectionResetError(104, 'Connection reset 
+      2 calm stalled>3s EOFError('eof (tunnel FIN)')
+      1 ev live EOFError('eof (tunnel FIN)')
+      1 ev stalled>3s ConnectionResetError('Connection lost')
+      9 ev stalled>3s ConnectionResetError(104, 'Connection reset 
+      2 ev stalled>3s EOFError('eof (tunnel FIN)')
+  crowd fails: {'ev': 3985, 'calm': 389} total 4374
+  crowd p50 104.543 p99 476.158 max 9995.524 fail/lost 4374
+  call  p50 115.838 p99 16827.894 max 20752.381 fail/lost 0
+  game  p50 111.453 p99 495.787 max 733.502 fail/lost 509
+  rss max MB ir 728.3 kh 1109.4
+   ir mconn rescue: rings 97 (388 KB) · triggers 14 · started 2399 acked 2397 served 0 · nocover 0 failed 27 limited 16 overcap 0 · resent 5354 KB · joins 0 samepath 0 silentjoin 0 · joinended 0 joinmissed 0 lostjoin 2 refused 0 cutslow 0 endwait 2 · fresh 2398 freshnew 0 · nak 0 nakd 0
+   ir mconn rescue-rec: conns 2830 (15404 KB, big 22119 KB) · started 5151 acked 5108 nakd 8 · served 0 nak 0 refused 0 · nocover 7 failed 666 lostjoin 13 endwait 13 · resent 5158 KB · gap 0 fin 0
+   ir mconn rescue145: pick fresh 8252 freshsameip 0 old 0 · retry 31 retryfail 0 retrysilent 31 · recmem cap 88 MB rawmem cap 64 MB
+   ir mconn rescue169: repeat 0 repeatsw 0 stale 0 · lateans 0 dupans 9 laterr 0 · fresh 0 noring 0 overread 0 · held 0 KB
+   ir trace: 1451 rescue-trace iran RREC(N,N) old N join L; 1410 rescue-trace iran RREC answer nak=false (N,N) after Nms covered=true; 315 rescue-trace iran rrec start failed err=<nil>; 41 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdN/N.N.N.N>N.N.N.N join; 38 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNeN/N.N.N.N>N.N.N.N join; 22 rescue-trace iran rrec join L retry; 17 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfeN/N.N.N.N>N.N.N.N joi; 17 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNbN/N.N.N.N>N.N.N.N jo; 16 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNcN/N.N.N.N>N.N.N.N join; 14 rescue-trace iran RESCUE(N,N) fresh=true rawN NxN/N.N.N.N>N.N.N.N join L; 12 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfN/N.N.N.N>N.N.N.N join; 12 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNbNaN/N.N.N.N>N.N.N.N jo; 11 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNeNcN/N.N.N.N>N.N.N.N jo; 9 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNcebN/N.N.N.N>N.N.N.N jo; 8 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNffNaN/N.N.N.N>N.N.N.N j; 8 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNdNcN/N.N.N.N>N.N.N.N jo; 8 rescue-trace iran RREC(,) old N join L; 8 rescue-trace iran RREC answer nak=false (,) after Nms covered=true
+   kh mconn rescue: rings 115 (168 KB) · triggers 0 · started 0 acked 0 served 2399 · nocover 0 failed 0 limited 0 overcap 0 · resent 6511 KB · joins 53441 samepath 0 silentjoin 0 · joinended 18 joinmissed 2776 lostjoin 0 refused 0 cutslow 0 endwait 0 · fresh 0 freshnew 2241 · nak 0 nakd 0
+   kh mconn rescue-rec: conns 2822 (81952 KB, big 24203 KB) · started 0 acked 0 nakd 0 · served 5135 nak 11 refused 0 · nocover 0 failed 0 lostjoin 0 endwait 0 · resent 6278 KB · gap 0 fin 0
+   kh mconn rescue145: pick fresh 0 freshsameip 0 old 0 · retry 0 retryfail 0 retrysilent 0 · recmem cap 88 MB rawmem cap 64 MB
+   kh mconn rescue169: repeat 9 repeatsw 4 stale 0 · lateans 0 dupans 0 laterr 0 · fresh 2218 noring 0 overread 0 · held 59 KB
+   kh trace: 1678 rescue-trace exit RREC(N,N) ACK(N,N) resent N old N; 84 rescue-trace exit RESCUE(N,N) read; 9 rescue-trace exit RREC(,) ACK(,) resent N old N; 6 rescue-trace exit RREC(N,N) NAK(N,N); 2 rescue-trace exit RESCUE(N,N) again: answered, resent N+N switched=true; 1 rescue-trace exit RESCUE(N,N) again: answered, resent N+N switched=false
+   retried conns by outcome: 3 raw/fresh exit answered again; 1 rrec NAK; 10 rrec answered; 11 rrec start failed
+== ab2/r2Z
+   edge=ab719cb9 HS2_MCONN_RESCUE_IDEM=0 cpus=0-6
+  events: 9 cascade first-join lag s: [None, None, None, None, None, None, None, None, None] modes: rbrbrbrbr
+  calls DIED in-run: 22 (ev 10) teardown: 30 CORRUPT: 0
+      1 calm live ConnectionResetError('Connection lost')
+      2 calm live ConnectionResetError(104, 'Connection reset 
+      2 calm live EOFError('eof (tunnel FIN)')
+      1 calm live IncompleteReadError('0 bytes read on a total
+      2 calm stalled>3s ConnectionResetError(104, 'Connection reset 
+      4 calm stalled>3s EOFError('eof (tunnel FIN)')
+      1 ev stalled>3s ConnectionResetError('Connection lost')
+      7 ev stalled>3s ConnectionResetError(104, 'Connection reset 
+      2 ev stalled>3s EOFError('eof (tunnel FIN)')
+  crowd fails: {'ev': 4068, 'calm': 663} total 4731
+  crowd p50 104.31 p99 512.333 max 9998.93 fail/lost 4731
+  call  p50 127.289 p99 19781.151 max 20602.407 fail/lost 2640
+  game  p50 104.577 p99 446.506 max 1164.891 fail/lost 0
+  rss max MB ir 804.4 kh 1316.5
+   ir mconn rescue: rings 0 (0 KB) · triggers 13 · started 2406 acked 2385 served 0 · nocover 0 failed 17 limited 20 overcap 0 · resent 4660 KB · joins 0 samepath 0 silentjoin 0 · joinended 0 joinmissed 0 lostjoin 23 refused 0 cutslow 0 endwait 21 · fresh 2406 freshnew 0 · nak 0 nakd 0
+   ir mconn rescue-rec: conns 30 (832 KB, big 23574 KB) · started 5753 acked 5516 nakd 162 · served 0 nak 0 refused 0 · nocover 4 failed 482 lostjoin 36 endwait 35 · resent 4466 KB · gap 0 fin 0
+   ir mconn rescue145: pick fresh 8676 freshsameip 0 old 0 · retry 57 retryfail 0 retrysilent 54 · recmem cap 48 MB rawmem cap 64 MB
+   ir mconn rescue169: repeat 0 repeatsw 0 stale 0 · lateans 0 dupans 0 laterr 0 · fresh 0 noring 0 overread 0 · held 0 KB
+   ir trace: 1302 rescue-trace iran RREC(N,N) old N join L; 1235 rescue-trace iran RREC answer nak=false (N,N) after Nms covered=true; 258 rescue-trace iran rrec start failed err=<nil>; 39 rescue-trace iran rrec join L retry; 30 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNcNfN/N.N.N.N>N.N.N.N ; 29 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNbN/N.N.N.N>N.N.N.N jo; 19 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNbNbN/N.N.N.N>N.N.N.N ; 19 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNfNaN/N.N.N.N>N.N.N.N ; 18 rescue-trace iran RREC answer nak=true (N,N) after Nms covered=true; 16 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNdNaN/N.N.N.N>N.N.N.N ; 13 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNbNaN/N.N.N.N>N.N.N.N ; 13 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNdefN/N.N.N.N>N.N.N.N ; 13 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNddN/N.N.N.N>N.N.N.N j; 12 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNaN/N.N.N.N>N.N.N.N jo; 12 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNcNdN/N.N.N.N>N.N.N.N ; 12 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNdaN/N.N.N.N>N.N.N.N j; 11 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNcNfNeN/N.N.N.N>N.N.N.; 11 rescue-trace iran RESCUE(N,N) fresh=true rawN NxNfNbNacdN/N.N.N.N>N.N.N.
+   kh mconn rescue: rings 0 (0 KB) · triggers 0 · started 0 acked 0 served 2404 · nocover 0 failed 10 limited 0 overcap 0 · resent 9121 KB · joins 57256 samepath 0 silentjoin 0 · joinended 63 joinmissed 3257 lostjoin 0 refused 10 cutslow 0 endwait 0 · fresh 0 freshnew 2341 · nak 0 nakd 0
+   kh mconn rescue-rec: conns 30 (832 KB, big 24598 KB) · started 0 acked 0 nakd 0 · served 5563 nak 166 refused 0 · nocover 0 failed 0 lostjoin 0 endwait 0 · resent 9046 KB · gap 0 fin 0
+   kh mconn rescue145: pick fresh 0 freshsameip 0 old 0 · retry 0 retryfail 0 retrysilent 0 · recmem cap 48 MB rawmem cap 64 MB
+   kh mconn rescue169: repeat 0 repeatsw 0 stale 0 · lateans 0 dupans 0 laterr 0 · fresh 0 noring 0 overread 0 · held 0 KB
+   kh trace: 1764 rescue-trace exit RREC(N,N) ACK(N,N) resent N old N; 71 rescue-trace exit RREC(N,N) NAK(N,N); 21 rescue-trace exit RESCUE(N,N) read; 7 rescue-trace exit RREC(,) ACK(,) resent N old N; 4 rescue-trace exit RESCUE(N,N) refused; 1 rescue-trace exit RREC(,) NAK(,)
+   retried conns by outcome: 4 raw/fresh exit refused; 6 raw/fresh other; 32 rrec answered; 7 rrec start failed

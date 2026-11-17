@@ -552,7 +552,7 @@ func keepPrivateKeys(oldRaw []byte, nb []byte) []byte {
 
 func realityFrontCmd(sub string, args []string) int {
 	fs := flag.NewFlagSet("reality "+sub, flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	ip := fs.String("ip", "", "this server's lb IP")
 	all := fs.Bool("all", false, "rotate-key: every reality/both IP")
 	target := fs.String("target", "", "reality/both: the real site host:443")
@@ -907,7 +907,7 @@ func renderFrontState(w io.Writer, st frontState) {
 
 func realityStatusCmd(args []string) int {
 	fs := flag.NewFlagSet("reality status", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	js := fs.Bool("json", false, "machine-readable")
 	lang := langFlag(fs)
 	fs.Parse(args)
@@ -930,7 +930,7 @@ func realityTargetsCmd(args []string) int {
 	add := fs.String("add", "", "more candidates, comma separated")
 	only := fs.Bool("only", false, "check only the --add candidates")
 	js := fs.Bool("json", false, "machine-readable")
-	unit := fs.String("u", "hs2", "tunnel whose listener side decides the candidates")
+	unit := unitFlag(fs, "hs2", "tunnel whose listener side decides the candidates")
 	side := fs.String("side", "", "iran|kharej: where the TLS listener is (default: from the tunnel's config)")
 	offline := fs.Bool("offline", false, "no online ASN lookup (offline table and latency only)")
 	lang := langFlag(fs)
@@ -964,7 +964,7 @@ func realityTargetsCmd(args []string) int {
 func realityCheckTargetCmd(args []string) int {
 	fs := flag.NewFlagSet("reality check-target", flag.ExitOnError)
 	js := fs.Bool("json", false, "machine-readable")
-	unit := fs.String("u", "hs2", "tunnel whose listener side the target must match")
+	unit := unitFlag(fs, "hs2", "tunnel whose listener side the target must match")
 	side := fs.String("side", "", "iran|kharej: where the TLS listener is (default: from the tunnel's config)")
 	offline := fs.Bool("offline", false, "no online ASN lookup (offline table and latency only)")
 	lang := langFlag(fs)

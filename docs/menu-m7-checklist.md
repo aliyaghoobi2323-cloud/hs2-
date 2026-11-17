@@ -1,6 +1,6 @@
 # Menu M7 — lab checklist (2026-11-11, branch int39)
 
-Labs 2 (5.160.110.234) and 3 (5.160.110.235), real servers, real tunnels.
+Labs 2 (198.51.100.234) and 3 (198.51.100.235), real servers, real tunnels.
 Driver: `hs2-src/install/tests/m7/m7drive.py` (pexpect pty; GitHub made
 unreachable so the bundle's binary installs). "Fixed" = failed first, fixed in
 int39, passed on the rerun with the fixed build.
@@ -20,7 +20,7 @@ int39, passed on the rerun with the fixed build.
 | 11 | Two admins at once (lock) | PASS | second admin sees "another admin is editing: root (pid …, /dev/pts/0) since …" and is refused; lock free once the first leaves |
 | 12 | Safe-apply rollback when not confirmed | PASS | `lb add-ip --confirm-within 40s`, not confirmed → `rollback-1 <- current`, "rolledback (not confirmed in time)", tunnel active, links up; also the health gate rolled back an apply whose peer was down |
 | 13 | Confirm a change from the menu | PASS (fixed) | first run: the menu only printed `hs2 apply --confirm`; now "Keep the change? y" in place, waits for the health check → `confirmed` |
-| 14 | M4 add-ip of the only IP on a dialer without bind_local_ip (via the menu) | PASS (fixed) | `bind_local_ip` 5.160.110.235, weight 100, health gate passed, confirmed, `lb show` 8/8 links |
+| 14 | M4 add-ip of the only IP on a dialer without bind_local_ip (via the menu) | PASS (fixed) | `bind_local_ip` 198.51.100.235, weight 100, health gate passed, confirmed, `lb show` 8/8 links |
 | 15 | Upgrade from the old release (rel34 binary + old menu, tunnels running) | PASS | old binary ran both configs; new `install.sh upgrade`: both tunnels restarted, "Tunnel is UP — the other server answered" ×2 |
 | 16 | Old menu still reachable after the upgrade | PASS | bare `hs2-menu` → new menu; `c` → classic; `hs2-menu --classic` → classic |
 | 17 | Classic ↔ new from inside the menus (`c` / `n`) | PASS | |

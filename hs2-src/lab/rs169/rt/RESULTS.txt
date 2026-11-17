@@ -1,0 +1,78 @@
+rs169 retry-heavy A/B (2026-11-14 UTC, lab1 198.51.100.168, single-slot runs: slot0 cores 0-6 / slot2 cores 13-19,
+slot1 held idle). Binary hs2-rs169f = 08d35b12 (sha256 563e2989), built on lab1 from git archive; the same binary in
+both arms: I = HS2_MCONN_RESCUE_IDEM=1 (default), Z = HS2_MCONN_RESCUE_IDEM=0 (rel66 behaviour), both sides.
+go test -run 'Rescue|MConnRescue' ./engine on lab1 (src 08d35b12): ok.
+
+Scenario rt169.sh (TT 420): TOPO146 production topology (6 Iran IPv4 x 2 kharej IPv4 + IPv6), crowd 3000 (life 40 s),
+probe call 2 mbit + game, 5 iperf3 background users, test download every 120 s, 300 idle conns, and 30 BYTE-CHECKED
+calls (rr155 callers.py: every echoed byte checked against a pattern, CORRUPT on loss/dup/reorder). NOTE: the earlier
+rs169 ab.sh and rr166 rep.sh ran cd152 callers.py, which does NOT check bytes - their "CORRUPT 0" proved nothing.
+Events (ev169.py, every 40 s from t30, 9 per run): Iran IP P dark both ways; cascade: 3 more Iran IPs dark - even
+events kharej->Iran only (answers lost: the exit serves, Iran never hears -> silent join -> RETRY), odd events both
+ways; all back at T+15. Rotation 1: cascade at the first rescue join seen in the edge log (reactive; worked for events
+1-2 only, later events missed the log - ev169.py now handles a rotated/truncated log), rotation 2: cascade fixed at
+T+1.3 s (all 9 events). Rotation 1 I slot0 / Z slot2, rotation 2 swapped. Load average 23-30 on the box (two runs).
+
+  run  arm   retry(silent)  raw retried: refused/other  rrec retried: answered/startfail  rescue169 ctrs   DIED in-run (in events)  CORRUPT  crowd fails  crowd p99  call p99   game p99  RSS ir/kh MB
+  r1   I     53 (52)        11 / 7                        25 / 9                             all 0 (held 39K)   13 (11)                  0        2054         471        18069      9888     788 / 1181
+  r1   Z     57 (57)        10 / 11                       18 / 13                            all 0              15 (11)                  0        2294         621        21303      8239     862 / 1113
+  r2   I     30 (29)         3 / 5                        16 / 5                             all 0 (held 27K)   18 (12)                  0        4033         443        19599      5109     963 / 1153
+  r2   Z     25 (24)         4 / 5                        14 / 1                             all 0              30 (16)                  0        4707         515        12445       522     937 / 1240
+  rescue started/acked (raw | rec): r1I 1867/1846 | 5824/5708, r1Z 2123/2094 | 6293/6139,
+                                    r2I 2629/2618 | 6505/6243, r2Z 2357/2346 | 5370/5256. Panics 0 everywhere.
+  Call deaths are mostly "stalled>3s" (rx idle > 3 s before the reset / FIN: a link-stuck close in the outage, not a
+  rescue decision). r2I's probe call died at ~t97 (probe does not reconnect: lost 7931, game lost 312) - one sample.
+  The call p99 (12-21 s) is the same ~20 s stall in event 1 in every arm.
+
+Findings
+1. RETRY fires a lot now (25-57 per run, vs 0 in the earlier rs169 A/B): retrysilent = joins whose answer path died.
+2. NONE of the rs169 paths were exercised: rescue169 repeat/repeatsw/stale/lateans/dupans/laterr/noring/overread = 0 in
+   all 4 runs (only "held" > 0 on the I exit: answers saved, never asked for again). Why:
+   - every RETRIED raw RESCUE was a FRESH one (er94 role 4, ri=0, trace fresh=true: the conn was opened by the
+     rescue join); the non-fresh raw rescues the exit served ("exit RESCUE read" 12-79/run) were never retried;
+   - records rescues (RREC) retried on a new join are answered again by the exit in BOTH arms (pre-rs169 behaviour),
+     and no late answer arrived on a replaced join (laterr 0: in "ret" mode the first answer is lost for good).
+3. GAP in H1 (both arms identical): a retried FRESH RESCUE is refused by the exit -> the conn is reset
+   ("exit RESCUE(Bi,0) refused", 3-11 per run; on Iran "join died before ACK ... ended waiting for the ACK").
+   Trace example (r1I conn 27b57368d5190d94): iran RESCUE(1,0) fresh=true -> exit "served fresh RESCUE(1,0)" (answer
+   lost on the dark return path) -> iran "rescue join silent: retry" -> retry join on 10.60.5.1 -> exit
+   "RESCUE(1,0) refused". Cause: onRescue's er94 fresh branch (mconn_rescue.go ~698) sets rscPhase=2/rscSub but never
+   calls rescueServedLocked, so the rs169 repeat check (rscSrv.set) fails and the request falls to the refusal.
+   Likely fix: in the fresh branch, under rs169Fix, record the answer (rescueServedLocked(bi, 0, sendOff, 0,
+   mRecRescueAck, nil)) so a repeat on a newer join is re-answered (rescueRepeatLocked resends records from that
+   sendOff); needs a unit test (fresh RESCUE, ACK lost, retry on a newer join) and a check that Iran's [0,Bi) resend
+   with the retry is not delivered twice.
+Verdict: IDEM=1 is safe under heavy retry (CORRUPT 0 over 4 x 30 byte-checked calls = 14 call-hours, 0
+   panics, RSS within noise, retryfail 0). Fewer call deaths (31 vs 45) and crowd fails (6087 vs 7001) with IDEM=1,
+   but rescue169 counters are all 0, so the difference is NOT from the rs169 paths (slot/CPU noise, n=2); the
+   lab shows no measured benefit either. The H1 fix as written misses the dominant retried case (fresh RESCUE);
+   extend it before claiming the H1 gain. M3/M5 (noring, overread) also not reached here.
+Files: ev169.py (events), rt169.sh (run), ab.sh / drive.sh (rotations), an169.py (summary), an-out.txt (full
+   summary per run), callers.py (rr155 byte-checked). Lab dirs: /opt/hs2lab/rs169/rt/ab/r{1,2}{I,Z} (traces, gz logs).
+
+==== rs169g: fresh RESCUE fix (commit c456c6c3), same retry-heavy A/B (2026-11-14 21:24-21:40 UTC, lab1) ====
+Binary hs2-rs169g (sha256 ab719cb9), built on lab1 from the working tree of c456c6c3; same binary in both arms,
+I = HS2_MCONN_RESCUE_IDEM=1, Z = =0, both sides. ab2.sh / drive2.sh (= ab.sh / drive.sh with the new binary,
+out dir rt/ab2, units rt169g-*), TT 420, rotation 1 I slot0 / Z slot2, rotation 2 swapped. Full summary an-out2.txt.
+
+  run  arm  retry(silent)  kh rescue169 repeat/repsw/fresh  kh refused  ir dupans  DIED in-run (ev)  CORRUPT  crowd fails  crowd p99  call p99  game p99  RSS ir/kh MB
+  r1   I    36 (35)        12 / 10 / 1386                   0           9          23 (10)           0        2167         1140       20549     519       747 / 1190
+  r1   Z    42 (42)         0 /  0 /    0                  16           0          23 (18)           0        2570          800       22857   16781       852 / 1125
+  r2   I    31 (31)         9 /  4 / 2218                   0           9          24 (13)           0        4374          476       16828     496       728 / 1109
+  r2   Z    57 (54)         0 /  0 /    0                  10           0          22 (10)           0        4731          512       19781     447       804 / 1317
+  Panics 0 in every run. retryfail 0 everywhere. Trace outcome of retried raw (all fresh) conns:
+  I: 12+3 "exit answered again", 1 other (non-fresh exit conn, trace cap); Z: 16+4 "exit refused".
+
+Findings
+1. The gap is closed: with IDEM=1 the exit answers the retried fresh RESCUE again (repeat 21 over 2 runs, 14 of them
+   with the old join abandoned and the records resent from the ring), refused 0 (Z: 26 refusals = 26 conn resets).
+   Iran ignores the second answer when the first arrived late (dupans 18). CORRUPT 0 over 4 x 30 byte-checked calls.
+2. User-visible effect at n=2 is within noise: call deaths 47 vs 45 (the deaths are the ~20 s stall in the
+   outage, not rescue decisions), crowd fails 6541 vs 7301 (-10%), p99s mixed per rotation, RSS within noise
+   (kh 1190/1109 vs 1125/1317). The refused conns were crowd/background conns, not the byte-checked calls.
+3. The exit's records ring is now on for fresh conns (rescue169 "fresh" 1386 / 2218): no RSS growth seen.
+Verdict: fix proven engaged and safe under heavy retry; it removes the H1 reset for the dominant (fresh) case.
+Lab dirs: /opt/hs2lab/rs169/rt/ab2/r{1,2}{I,Z}.
+Tests on lab1 (src = c456c6c3 tree): gofmt -l engine empty, go vet ./engine ok; go test ./engine -timeout 30m: run 1
+(on 6 cores beside the A/B) one failure TestMConnStripeFromRaw "every sub died" (no rescue involved; 20/20 pass alone,
+same 20/20 on the pre-fix tree), run 2 ok (726 s); go test -race -run 'Rescue|RS169' -count=3 ./engine ok (128 s).

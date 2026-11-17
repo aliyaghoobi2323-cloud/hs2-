@@ -1,0 +1,16 @@
+d8Q1 Q d8
+d8P1 P d8
+u1Q1 Q u1
+u1P1 P u1
+d8X1 X d8
+d8P2 P d8
+d8Q2 Q d8
+u1P2 P u1
+u1Q2 Q u1
+d8Y1 Y d8
+d8Q3 Q d8
+d8P3 P d8
+u1Q3 Q u1
+u1P3 P u1
+d8M1 M d8
+u1M1 M u1

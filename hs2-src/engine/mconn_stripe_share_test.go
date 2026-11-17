@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,5 +166,217 @@ func TestPickStripeSharedBounds(t *testing.T) {
 	rel()
 	if m.links[4].stShared.Load() != 0 {
 		t.Fatal("release left the shared count")
+	}
+}
+
+// diag60: the shared pick says why it found no link (production logged
+// "pick: none (free=N chosen=false)" with no reason), and the reason
+// classification picks the same link as before.
+func TestPickStripeSharedWhy(t *testing.T) {
+	old, oldS := stripeK.Load(), stripeShare
+	t.Cleanup(func() { stripeK.Store(old); stripeShare = oldS })
+	stripeK.Store(4)
+	stripeShare = true
+	caps := uint8(capMConn | capMConnRaw)
+	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps)}
+	m := mcManager(ls...)
+	for i, ml := range m.links {
+		ml.users.Store(int32(10 + i))
+		ml.flowing = 1
+		ml.rate10 = float64(1000 * (i + 1))
+	}
+	m.links[0].heavy = 1
+	m.links[1].pressed = true
+	m.mu.Lock()
+	ml, why := m.pickStripeSharedWhyLocked([]any{Link(ls[2])}, m.exitInfo.Load())
+	m.mu.Unlock()
+	if ml != m.links[3] {
+		t.Fatalf("picked %v, want link 3 (the only candidate)", ml)
+	}
+	if why.serving != 4 || why.busy != 1 || why.pressed != 1 || why.avoided != 1 || why.cand != 1 {
+		t.Fatalf("why = %+v", why)
+	}
+	m.links[3].pressed = true
+	m.mu.Lock()
+	ml, why = m.pickStripeSharedWhyLocked([]any{Link(ls[2])}, m.exitInfo.Load())
+	m.mu.Unlock()
+	if ml != nil || why.cand != 0 || why.pressed != 2 {
+		t.Fatalf("got %v why=%+v, want none, two pressed", ml, why)
+	}
+	if s := why.String(); !strings.Contains(s, "refused=no-candidate") || !strings.Contains(s, "pressed=2") {
+		t.Fatalf("String() = %q", s)
+	}
+	// the wrapper gives the same answer
+	m.mu.Lock()
+	got := m.pickStripeSharedLocked([]any{Link(ls[2])}, m.exitInfo.Load())
+	m.mu.Unlock()
+	if got != nil {
+		t.Fatalf("wrapper picked %v", got)
+	}
+}
+
+// TestStripeShareCopies (adopt61): copy-only streams keep every link out of
+// the shared pick with the key off (the production "copies=29 cand=0"); with
+// HS2_MCONN_STRIPE_SHARE_COPIES the fewest copies go first and a call's link
+// stays out.
+func TestStripeShareCopies(t *testing.T) {
+	old, oldS, oldC, oldF := stripeK.Load(), stripeShare, stripeShareCopies.Load(), stripeLinkCopies
+	t.Cleanup(func() {
+		stripeK.Store(old)
+		stripeShare = oldS
+		stripeShareCopies.Store(oldC)
+		stripeLinkCopies = oldF
+	})
+	stripeK.Store(4)
+	stripeShare = true
+	caps := uint8(capMConn | capMConnRaw)
+	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps)}
+	m := mcManager(ls...)
+	copies := map[Link]int{Link(ls[0]): 3, Link(ls[1]): 1, Link(ls[2]): 2, Link(ls[3]): 4}
+	stripeLinkCopies = func(l Link) int { return copies[l] }
+	for _, ml := range m.links {
+		ml.users.Store(20)
+	}
+	pick := func() (*managedLink, stripeShareWhy) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.pickStripeSharedWhyLocked([]any{stripeCopyUpHint{}}, m.exitInfo.Load()) // an upload's (share62)
+	}
+	stripeShareCopies.Store(false)
+	if ml, why := pick(); ml != nil || why.copies != 4 || why.cand != 0 {
+		t.Fatalf("key off: got %v why=%+v, want none (copies=4)", ml, why)
+	}
+	stripeShareCopies.Store(true)
+	ml, why := pick()
+	if ml != m.links[1] || why.cand != 4 || why.copyOK != 4 {
+		t.Fatalf("key on: got %v why=%+v, want link 1 (fewest copies)", ml, why)
+	}
+	if !strings.Contains(why.String(), "copy-ok=4") {
+		t.Fatalf("String() = %q", why.String())
+	}
+	// a call rides link 1: the next fewest copies (link 2)
+	callLinks.mu.Lock()
+	if callLinks.at == nil {
+		callLinks.at = map[*linkMeter]time.Time{}
+	}
+	callLinks.at[m.links[1].mtr] = time.Now().Add(time.Minute)
+	callLinks.mu.Unlock()
+	t.Cleanup(func() {
+		callLinks.mu.Lock()
+		delete(callLinks.at, m.links[1].mtr)
+		callLinks.mu.Unlock()
+	})
+	if ml, why = pick(); ml != m.links[2] || why.call != 1 {
+		t.Fatalf("call on link 1: got %v why=%+v, want link 2", ml, why)
+	}
+	// flowing user streams still rank first
+	m.links[2].flowing = 1
+	if ml, _ = pick(); ml != m.links[0] {
+		t.Fatalf("got %v, want link 0 (no flowing, 3 copies)", ml)
+	}
+	// HS2_MCONN_STRIPE_SHARE_COPIES_K: this connection already has one
+	// shared sub (on link 3, which it avoids) and the cap is 1
+	oldK := stripeShareCopiesK
+	t.Cleanup(func() { stripeShareCopiesK = oldK })
+	stripeShareCopiesK = 1
+	m.links[3].stShared.Store(1)
+	t.Cleanup(func() { m.links[3].stShared.Store(0) })
+	m.mu.Lock()
+	ml, why = m.pickStripeSharedWhyLocked([]any{Link(ls[3]), stripeCopyUpHint{}}, m.exitInfo.Load())
+	m.mu.Unlock()
+	if ml != nil || !why.kCap || why.own != 1 {
+		t.Fatalf("copies-k: got %v why=%+v, want refused", ml, why)
+	}
+}
+
+// TestStripeShareCopiesUpOnly (share62): the key serves an upload's stripe
+// only — a download's open (no stripeCopyUpHint) keeps the copies rule and
+// the call marks out of its pick; among an upload's candidates the links the
+// TUN lane used lately go last (HS2_MCONN_STRIPE_SHARE_COPIES_LANEQ).
+func TestStripeShareCopiesUpOnly(t *testing.T) {
+	old, oldS, oldC, oldF, oldQ := stripeK.Load(), stripeShare, stripeShareCopies.Load(), stripeLinkCopies, stripeShareCopiesLaneQ
+	t.Cleanup(func() {
+		stripeK.Store(old)
+		stripeShare = oldS
+		stripeShareCopies.Store(oldC)
+		stripeLinkCopies = oldF
+		stripeShareCopiesLaneQ = oldQ
+	})
+	stripeK.Store(4)
+	stripeShare = true
+	stripeShareCopies.Store(true)
+	stripeShareCopiesLaneQ = true
+	caps := uint8(capMConn | capMConnRaw)
+	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps)}
+	m := mcManager(ls...)
+	copies := map[Link]int{Link(ls[0]): 3, Link(ls[1]): 1, Link(ls[2]): 2, Link(ls[3]): 0}
+	stripeLinkCopies = func(l Link) int { return copies[l] }
+	for _, ml := range m.links {
+		ml.users.Store(20)
+		ml.mtr.laneAt.Store(0)
+	}
+	m.links[3].heavy = 1 // the only copy-free link is a download's
+	pick := func(avoid []any) (*managedLink, stripeShareWhy) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.pickStripeSharedWhyLocked(avoid, m.exitInfo.Load())
+	}
+	// a download (no hint, or another hint): as with the key off
+	for _, av := range [][]any{nil, {stripeDirHint{up: false}}} {
+		if ml, why := pick(av); ml != nil || why.copies != 3 || why.copyOK != 0 {
+			t.Fatalf("download %v: got %v why=%+v, want none (copies=3)", av, ml, why)
+		}
+	}
+	up := []any{stripeCopyUpHint{}}
+	if ml, why := pick(up); ml != m.links[1] || why.copyOK != 3 || why.laneBusy != 0 {
+		t.Fatalf("upload: got %v why=%+v, want link 1", ml, why)
+	}
+	// the game's lane rides link 1 and link 2: link 0 (no lane) first
+	now := ctrlNow()
+	m.links[1].mtr.laneAt.Store(now)
+	m.links[2].mtr.laneAt.Store(now)
+	n0 := stripeShareCopiesStat.laneSkipped.Load()
+	ml, why := pick(up)
+	if ml != m.links[0] || why.laneBusy != 2 || why.cand != 3 {
+		t.Fatalf("lane on 1,2: got %v why=%+v, want link 0", ml, why)
+	}
+	if stripeShareCopiesStat.laneSkipped.Load() != n0+1 {
+		t.Fatalf("laneSkipped not counted")
+	}
+	if !strings.Contains(why.String(), "lane-busy=2") {
+		t.Fatalf("String() = %q", why.String())
+	}
+	// every candidate is a lane link: still a pick (never refused), fewest copies
+	m.links[0].mtr.laneAt.Store(now)
+	if ml, _ = pick(up); ml != m.links[1] {
+		t.Fatalf("all lane: got %v, want link 1", ml)
+	}
+	// a lane stamp older than stripeLaneQuiet does not count
+	m.links[0].mtr.laneAt.Store(now - int64(stripeLaneQuiet) - 1)
+	if ml, _ = pick(up); ml != m.links[0] {
+		t.Fatalf("stale lane on 0: got %v, want link 0", ml)
+	}
+	// LANEQ=0: the order of adopt61 (fewest copies)
+	stripeShareCopiesLaneQ = false
+	if ml, why = pick(up); ml != m.links[1] || why.laneBusy != 0 {
+		t.Fatalf("laneq off: got %v why=%+v, want link 1", ml, why)
+	}
+	// the hint: an upload's growth on Iran only, and only with the key
+	mc := &mConn{iran: true, stGrowUp: true}
+	if !stripeCopyUp(mc.stripeCopyUpHintLocked(nil)) {
+		t.Fatal("upload growth: no hint")
+	}
+	mc.stGrowUp = false
+	if stripeCopyUp(mc.stripeCopyUpHintLocked(nil)) {
+		t.Fatal("download growth: hint")
+	}
+	mc.stGrowUp, mc.iran = true, false
+	if stripeCopyUp(mc.stripeCopyUpHintLocked(nil)) {
+		t.Fatal("exit side: hint")
+	}
+	mc.iran = true
+	stripeShareCopies.Store(false)
+	if stripeCopyUp(mc.stripeCopyUpHintLocked(nil)) {
+		t.Fatal("key off: hint")
 	}
 }

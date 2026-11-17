@@ -121,6 +121,9 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	if queueCtlOn {
 		go exitQueue.run(ctx, logf)
 	}
+	if linkCCRefresh.Load() {
+		go ccExit.run(ctx) // cc203: HS2_LINK_CC_REFRESH on the exit's links (link_ccrefresh.go)
+	}
 	if cfg.RevDial != nil || cfg.RevLB != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
@@ -128,6 +131,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	var view *pathView
 	if cfg.LB {
 		view = newPathView(true)
+		view.logf = logf
 	}
 	if cfg.OnStart != nil {
 		cfg.OnStart(func() PoolStats {
@@ -172,7 +176,8 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 				}
 			}()
 			cfg.peers.add(mtr)
-			defer exitQueue.track(car)()
+			defer exitQueue.track(car, true)()   // accepted from our listener (m4f251)
+			defer ccExit.track(tcpConnOf(car))() // cc203 (link_ccrefresh.go)
 			defer cfg.peers.remove(mtr)
 			defer stripeTrack(mtr)() // HS2_MCONN_STRIPE's gate (mconn_stripe_scav.go)
 			logf("link up from %s (now %d)", conn.RemoteAddr(), links.Add(1))
@@ -287,7 +292,9 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		}
 		c := cfg.traffic.open(mtr)
 		defer cfg.traffic.done(c)
-		relayStream(up, exitCountedStream{st, c}, g)
+		if relayStreamHC(up, exitCountedStream{st, c}, g, hcIf(halfCloseLink(mtr), hcExit)) { // hc183
+			streamLocalRst.Add(1) // fx170: the upload was cut; the target got an RST
+		}
 	case kindMConn:
 		serveMConnSub(ctx, st, cfg, mtr)
 	case kindL3:

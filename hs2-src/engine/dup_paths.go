@@ -78,7 +78,16 @@ func countDupPath(other bool, l3 bool) {
 // maps when the preference does not apply (key off, no avoided live link with
 // a known path, or no other path at all).
 func (m *LinkManager) dupPathsLocked(avoid []any) (skip, healthy map[string]bool) {
-	if !dupPathsOn || len(avoid) == 0 {
+	if !dupPathsOn && !cs228Place() { // cs226/cs228: every lite second sub (mconn_cs226.go, HS2_CS228_LITEPLACE)
+		return nil, nil
+	}
+	return m.dupPathsCoreLocked(avoid)
+}
+
+// dupPathsCoreLocked is dupPathsLocked without the key (cs225 call placement,
+// mconn_cs225.go).
+func (m *LinkManager) dupPathsCoreLocked(avoid []any) (skip, healthy map[string]bool) {
+	if len(avoid) == 0 {
 		return nil, nil
 	}
 	alive := map[string]int{}

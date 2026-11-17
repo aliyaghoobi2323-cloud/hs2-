@@ -1,0 +1,74 @@
+env: edge=96fbccba exit=4a3abdf9 TT=2100 NBG=9 start=2026-11-14T01:18:16Z IRE=HS2_PPROF=127.0.0.1:6060 KHE=HS2_PPROF=127.0.0.1:6060 lab=30
+ir proc (t rssMB gor fds tcp), every ~5 min:
+    0 31 1234 121 118
+    303 482 26229 3215 10046
+    606 436 26544 3256 10132
+    909 579 26536 3249 10140
+    1213 490 26533 3256 10256
+    1516 473 26719 3249 10291
+    1819 477 26506 3251 10123
+    2062 466 26511 3254 10480
+    rss first/max/last 31/579/466 MB; 2nd half min/max 432/567; pids 1
+kh proc (t rssMB gor fds tcp), every ~5 min:
+    0 35 1163 110 113
+    303 808 28861 3189 9909
+    606 760 28908 3235 10035
+    909 868 29138 3228 10173
+    1213 855 28967 3232 9962
+    1516 780 29387 3227 10258
+    1819 829 28951 3229 10091
+    2062 874 28948 3232 9756
+    rss first/max/last 35/892/874 MB; 2nd half min/max 779/889; pids 1
+MISSING lines: 0  alarm: []
+stripe_active samples 210: max 9, mean 3.4, p90 6; >8 in 1 samples, >=12 in 0; refused 0 -> 4920, subs 0 -> 293
+    t    0- 300 stripe_active mean 4.9 max 8
+    t  300- 600 stripe_active mean 2.7 max 6
+    t  600- 900 stripe_active mean 3.8 max 6
+    t  900-1200 stripe_active mean 3.8 max 7
+    t 1200-1500 stripe_active mean 2.6 max 5
+    t 1500-1800 stripe_active mean 2.9 max 5
+    t 1800-2100 stripe_active mean 3.4 max 9
+    t 2100-2400 stripe_active mean 0.0 max 0
+test downloads (t mbit striped bg_conns inWindow per-second):
+    60 434 Y 12 - 35 253 230 471 377 458 669 501 595 493 661 457
+    180 487 Y 15 W 44 200 344 527 571 636 609 573 593 489 683 571
+    300 64 n 15 W 4 10 23 28 35 47 56 71 99 79 141 170
+    420 189 n 14 W 149 143 203 199 185 191 222 192 194 196 173 212
+    540 60 n 16 W 0 4 15 23 30 38 53 70 87 100 124 170
+    660 47 n 13 W 4 7 11 15 18 28 36 55 38 88 102 156
+    780 48 n 12 W 4 13 17 24 28 37 50 65 72 66 86 105
+    900 42 n 12 W 2 6 11 16 17 25 31 39 53 73 97 128
+    1020 195 n 16 W 160 199 193 188 190 222 184 202 183 205 203 200
+    1140 67 n 16 W 1 7 18 24 32 45 51 79 96 130 153 162
+    1260 426 Y 14 W 78 268 338 273 335 491 574 521 537 612 583 502
+    1380 58 n 10 W 4 13 18 24 27 29 48 61 77 102 131 157
+    1500 61 n 14 W 5 12 17 22 31 29 44 59 74 83 122 224
+    1620 445 Y 16 W 94 334 471 519 527 598 553 434 438 476 440 444
+    1740 54 n 18 W 5 11 15 23 27 34 46 70 74 103 91 145
+    1860 49 n 15 - 5 10 15 23 33 40 50 63 65 78 109 97
+    1980 61 n 14 W 5 13 16 22 29 42 49 66 78 107 145 153
+tests n=17 ok, 0 ERR: mean 164 median 61 p10 47 min 42; striped 4/17; outside windows mean 242 (n=2)
+bg d: n=111, delivered/target mean 0.93, min 0.00
+bg u: n=51, delivered/target mean 0.96, min 0.13
+bg runs 167, ERR 5
+bg concurrent: mean 7.1 min 3 max 9
+crowd fails total 895, inside windows 892, outside 3: [88, 88, 1888]
+crowd p99 per minute: median 124.4 (outside windows 123.4, n=1), max 156.4
+call p99 per minute: median 175.2 max 215.6
+game p99 per minute: median 105.9 max 159.4
+panics ir/kh: ['0'] ['0']
+ir stripe.log: dlfair lines 21 (released 20, past cap 1); 'download stripe at' 13; 'striped over' 268
+result: {"qcaps":0,"qrel":0,"links_end":200,"links_max":220,"mode":"l3mtcp","emu":"kernel","rate":"1000mbit","delay":"45ms","loss":"0","flowrate":"0","bulk":0,"ping_avg_max":"93.185/248.286","ping_loss":"0","ping_n":10470,"ping_p50":92.8,"ping_p90":95.1,"ping_p99":100.0,"ping_max":248.0,"ping_over120_pct":0.37,"link_churn":0,"lb_paths_end":[25, 3, 25, 25, 25, 0, 25, 24, 24, 24],"lb_paths_max":[26, 25, 26, 26, 26, 23, 25, 26, 25, 25],"lb_paths_avg2h":[21.8, 20.8, 23.2, 23.5, 21.0, 10.1, 18.1, 23.1, 23.0, 22.9],"lb_text":"192.168.50.2>192.168.50.1 25/25 w12% loss 0.1% q 9ms, 192.168.50.2>192.168.52.1 3/
+==race
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	866.172s
+FAIL
+rc=1
+DONE
+full.txt
+gofmt.txt
+race.txt
+vet.txt
+==iperf
+2108 rst off
+kill leaked iperf3 3372993 (holds a lab lock)
+kill leaked iperf3 3372926 (holds a lab lock)

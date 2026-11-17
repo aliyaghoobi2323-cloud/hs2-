@@ -1,0 +1,60 @@
+rr158 (branch rr158 from rr157 6de6bae9), lab3 (198.51.100.235), 2026-11-14.
+
+1. End notice only when the exit may be holding (commit 5b310212)
+   rr157 sent a notice for every unclean Iran end with no live sub: 3503 in the rr157 lab N arm, 1651 found no
+   conn at the exit (endnoconn). The exit holds a conn only when its own rstAllDiedLocked passes, i.e. its
+   rstBaseOKLocked: rescue + records keys, rscCap, a light unstriped records conn past the handshake, not raw,
+   not closing. Iran now also checks the shared part of that (rstExitMayHoldLocked: rescueOn, rescueRecOn,
+   rscCap, mode light, stN 0, !handshaking, !rawW, !peerFin = the exit's FIN not read here) and skips the notice
+   otherwise (new counter endskip). The exit's hold still ends at once for every conn it can hold (the rule only
+   drops notices for conns the exit ends without a hold). Test: TestRescueRstEndNoticeOnlyWhenExitMayHold.
+   The lab effect (enddue/endskip/endnoconn) is measured by the 4 h soak (resc.txt, view.sh last section).
+
+2. The one rr157 call death (N arm, call 10, el 97.2 = 15:11:17.200 UTC, rst window cycle 0, EOFError
+   'eof (tunnel FIN)', age 94 s, 20 MB each way)
+   Rerun: runs/N2 = the rr157 follow-up build (6de6bae9: no per-notice rtrace lines), HS2_MCONN_RESCUE_RST=1
+   both sides, rr157/rep.sh unchanged (HS2_MCONN_TRACE off, rescue trace on), crowd 3000, TT 1000 = 2 cycles,
+   one arm in slot 30, 15:41-15:58 UTC.
+     calls DIED in-run 0 (teardown 30), CORRUPT 0; crowd fails 176 (ip1 50, rst 126);
+     p50/p99 ms crowd 103.4/284.2, call 124.5/647.4, game 103.8/452.7; RSS max ir 568 MB kh 982 MB.
+     ir: asked 271 served 106 acked 263 saved 268 timeout 0 noring 52 alldied 7 probe 3 join 10 nakread 2 |
+         enddue 3746 endsent 3746
+     kh: asked 378 served 268 acked 105 saved 1304 timeout 32 noring 65 alldied 926 hold 926 joinin 8
+         naksent 2 | holdexp 30 holdrsc 36 holdend 859 | endin 1933 endnoconn 1722
+   The death did not recur, so there is no new trace of it. The old N logs (runs/N/full) correct the rr157
+   RESULTS: the Iran rescue trace was NOT used up at 15:11 (its 4000th line came at 15:25:02), so both traces
+   were live at the death. In 15:11:16.8-15:11:17.5 neither side traced any rescue-rst event of a conn that
+   could be the call (every RRST there was ACKed), and Iran sent no end notice between 15:11:16.797 and
+   15:11:17.507. So the call's Iran end was not an all-subs-died end of a rescue-eligible conn and not a
+   failed rescue-rst round: it ended either through the exit (an RST record or the exit's FIN over a live sub:
+   errMConnReset / errMConnPeerDone, no notice by design, mconn_rescue_rst.go rstEndNoticeLocked) or on the old
+   path of a conn rescue-rst does not cover (raw / striped / call-upgraded: rstBaseOKLocked false, subGone in
+   mconn.go "endErr = errMConnSubsDied" or errMConnLost). Every Iran end reaches the caller as a FIN
+   (relayStream closes the user conn without linger, wedge.go relayStream), so "clean EOF" says nothing about
+   the cause. One candidate in the exit trace: conn 2dfeab161d30cd65 was held from 15:11:14.027 and its hold
+   expired at 15:11:17.031 (nosub=true), 170 ms before the death, while Iran never traced it (Iran saw no
+   all-died there, i.e. Iran still had a sub the exit had lost). Not proven to be the call (no per-conn trace).
+   Classification: unexplained single event, not reproduced (0 of 30 calls over 2 cycles), no evidence of a
+   rescue-rst or notice bug; nothing to fix.
+
+3. Checks (lab3, s158 = 5b310212): gofmt clean, go vet ./engine ok; go test -race -run TestRescueRst -count=3
+   ./engine (slot-31 cores): ok, 36 PASS, no race; go test ./engine -timeout 30m (lab3 idle): ok 723.8 s.
+
+4. Soak: unit rr158soak (lab3, labslot --all, LAB_ID 30), soak158.sh = lab2 r65s/soak65s.sh with rr158 both sides
+   (hs2-rr158 sha 4ab1f8e6 = the rawR fix below), HS2_MCONN_RESCUE_RST=1 both sides, no STRIPE_STEER/UPLOSS, TT 14400 s, NBG 9; helpers
+   run141.sh agg.py idle139.py copied read-only from lab2 into /opt/hs2lab/rr158. Started 2026-11-14 16:16:05 UTC,
+   ends ~20:17 UTC. View: bash /opt/hs2lab/rr158/soak/view.sh ; loss map: bash /opt/hs2lab/rr158/lossmap.sh
+   First start (5b310212, sha 188898ea, 16:11:07) stopped after 5 min, kept in /opt/hs2lab/rr158/soak-aborted1:
+   in the first 2 min (before any event) ir enddue 796 endskip 59, kh endin 192 endnoconn 588 - the rule still
+   let most useless notices through. Cause: a pure raw lite conn clears rawW in rawClose (mconn_raw.go rawClose,
+   "pure := m.rawW.Load() && !m.ended"), so the rule saw it as a records conn; the exit writes raw (its rawW
+   mirrors Iran's rawR) and never holds it. Fix: the rule checks rawR (commit after 5b310212; test cases raw and
+   rawClosing). TestRescueRst* and -race -count=3 green again, gofmt/vet clean. The full go test ./engine ran on
+   5b310212 (the fix is one condition in rstExitMayHoldLocked).
+   Soak on 4ab1f8e6 at el 304 s: 0 panics, RSS ir 507 MB kh 888 MB, ping p99/min 128-146 ms. rescue-rst moves
+   (kh asked 39 saved 97 alldied/hold 58: holdend 44 holdexp 14). But the notice rule still trims little:
+   ir enddue 2403 endskip 51; kh endin 613 endnoconn 1767 (74 % useless, ~8 notices/s even before the first
+   RST window). So neither raw, striped, bulk nor peerFin conns are the bulk of the useless notices; their Iran
+   end is something else (open question for the next step: count the useless notices by Iran's end error and
+   conn state - err, closing, lightOpening/first sub, rstRounds - to find the real cause; an exit-side cache of
+   recently ended ids with their end reason would answer it directly).

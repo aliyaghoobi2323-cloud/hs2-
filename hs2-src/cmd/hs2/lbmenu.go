@@ -116,8 +116,12 @@ func lbRow(name string, p engine.LBPathView) []string {
 			auto += " " + p.AutoReason
 		}
 	}
+	mtu := lbPmtuText(p) // mt135
+	if mtu == "" {
+		mtu = "-"
+	}
 	return []string{name, share, fmt.Sprintf("%d/%d", p.Links, p.Target), strconv.Itoa(p.Users),
-		fmt.Sprintf("↓%.1f ↑%.1f", p.DownMbit, p.UpMbit), loss, rtt, auto, lbPathState(p)}
+		fmt.Sprintf("↓%.1f ↑%.1f", p.DownMbit, p.UpMbit), loss, rtt, mtu, auto, lbPathState(p)}
 }
 
 // renderLBTable: the live LB page as aligned columns.
@@ -127,14 +131,16 @@ func renderLBTable(ls liveStatus, hist map[string]int) string {
 		return tr("No load-balancing paths in the live status (lb off, or the tunnel is not running).",
 			"مسیر لودبالانسی در وضعیت زنده نیست (lb خاموش است یا تونل اجرا نمی‌شود).") + "\n"
 	}
-	hdr := []string{tr("path", "مسیر"), tr("share/eff", "سهم/مؤثر"), tr("links", "لینک"), tr("users", "کاربر"),
-		"Mbit", tr("loss", "افت"), "RTT ms", tr("auto", "خودکار"), tr("state", "وضعیت")}
+	// ou180: a path's count is the user streams on its links (mconn subs: a
+	// connection rides two or more), on both sides — named so, not "users"
+	hdr := []string{tr("path", "مسیر"), tr("share/eff", "سهم/مؤثر"), tr("links", "لینک"), tr("subs", "زیراتصال"),
+		"Mbit", tr("loss", "افت"), "RTT ms", "MTU", tr("auto", "خودکار"), tr("state", "وضعیت")}
 	if hist != nil {
 		hdr = append(hdr, tr("cuts 24h", "قطع ۲۴س"))
 		for i := range rows {
 			n := 0
 			if i < len(ls.LBPaths) {
-				n = hist[lbHistKey(ls.LBPaths[i].Local, ls.LBPaths[i].Remote)]
+				n = lbHistCuts(hist, ls.LBPaths[i].Local, ls.LBPaths[i].Remote)
 			}
 			if i < len(ls.LBPaths) {
 				rows[i] = append(rows[i], strconv.Itoa(n))
@@ -166,6 +172,21 @@ func renderLBTable(ls liveStatus, hist map[string]int) string {
 }
 
 func lbHistKey(local, remote string) string { return local + ">" + remote }
+
+// lbHistCuts (ou180): a table row's cuts in the journal. A row's local or
+// remote may list several IPs ("198.51.100.113,203.0.113.67": the Iran side
+// shows each of its IPs against every Kharej IP), while the judge names one
+// pair per cut — so every pair the row covers is summed (before, the joined
+// key never matched and every IPv4 row on Iran read 0).
+func lbHistCuts(hist map[string]int, local, remote string) int {
+	n := 0
+	for _, l := range strings.Split(local, ",") {
+		for _, r := range strings.Split(remote, ",") {
+			n += hist[lbHistKey(strings.TrimSpace(l), strings.TrimSpace(r))]
+		}
+	}
+	return n
+}
 
 // ---- cut history (journal) ---------------------------------------------------
 
@@ -221,14 +242,25 @@ func lbStatusOf(unit string) (liveStatus, bool) {
 
 func lbShowCmd(args []string) {
 	fs := flag.NewFlagSet("lb show", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	lang := langFlag(fs)
 	hist := fs.Bool("history", true, "add the cuts of the last 24 h")
+	stFile := fs.String("status", "", "read the live status from this file (the table only; lab/debug)")
 	fs.Parse(args)
 	setLang(*lang)
+	if *stFile != "" { // mt135: a status file of any tunnel, no unit
+		var ls liveStatus
+		b, err := os.ReadFile(*stFile)
+		if err != nil || json.Unmarshal(b, &ls) != nil {
+			fmt.Println("cannot read " + *stFile)
+			os.Exit(1)
+		}
+		fmt.Print(renderLBTable(ls, nil))
+		return
+	}
 	_, fc, _ := loadUnit(*unit)
-	fmt.Println(lbConfigSummary(fc))
 	ls, ok := lbStatusOf(*unit)
+	fmt.Println(lbLiveSummary(fc, ls, ok))
 	if !ok {
 		fmt.Println(tr("(no live status — is the tunnel running?)", "(وضعیت زنده نیست — تونل اجرا می‌شود؟)"))
 	}
@@ -269,9 +301,31 @@ func lbConfigSummary(fc fileConfig) string {
 	return fmt.Sprintf("lb: %s · iran: %s · kharej: %s", mode, f(fc.LB.Iran), f(fc.LB.Kharej))
 }
 
+// lbLiveSummary (ou180): the config summary with the mode in effect. The
+// listening side follows the dialing side's mode (status lb_mode_from
+// "peer"): its own config's mode (often unset: "fixed") is not what runs.
+func lbLiveSummary(fc fileConfig, ls liveStatus, ok bool) string {
+	s := lbConfigSummary(fc)
+	if !ok || !lbOn(fc) || ls.LBMode == "" {
+		return s
+	}
+	mode := fc.LB.Mode
+	if mode == "" {
+		mode = "fixed"
+	}
+	live := ls.LBMode
+	if ls.LBModeFrom == "peer" {
+		live += tr(" (from the Kharej server)", " (از سرور خارج)")
+	}
+	if ls.LBMode == mode && ls.LBModeFrom != "peer" {
+		return s
+	}
+	return strings.Replace(s, "lb: "+mode, "lb: "+live, 1)
+}
+
 func lbHistoryCmd(args []string) {
 	fs := flag.NewFlagSet("lb history", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	hours := fs.Int("hours", 24, "look back")
 	lang := langFlag(fs)
 	fs.Parse(args)
@@ -383,7 +437,7 @@ func ownList(fc fileConfig) []lbIP {
 
 func lbSuggestCmd(args []string) {
 	fs := flag.NewFlagSet("lb suggest", flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	peer := fs.String("peer", "", "peer IP to ping (default: the peer's IPs from the config)")
 	lang := langFlag(fs)
 	fs.Parse(args)
@@ -1008,7 +1062,7 @@ func loadConfigMap(b []byte) (map[string]any, error) {
 
 func lbChangeCmd(sub string, args []string) int {
 	fs := flag.NewFlagSet("lb "+sub, flag.ExitOnError)
-	unit := fs.String("u", "hs2", "tunnel")
+	unit := unitFlag(fs, "hs2", "tunnel")
 	ip := fs.String("ip", "", "local IP")
 	weight := fs.Int("weight", -1, "add-ip: its weight (default: split equally)")
 	sni := fs.String("sni", "", "add-ip: SNI on this IP (TLS)")

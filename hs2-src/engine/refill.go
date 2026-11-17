@@ -186,6 +186,11 @@ func (m *LinkManager) refillCapLocked() int {
 // waiter when no link takes connections at all (the caller's ordinary wait for
 // a link).
 func (m *LinkManager) pickHeld() (l Link, release func(), ok bool, w *holdWaiter) {
+	if lmFastPick.Load() {
+		if l, rel, ok, done := m.pickHeldFast(); done {
+			return l, rel, ok, nil // HS2_LM_FASTPICK (lm_fastpick.go)
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.hold.on {

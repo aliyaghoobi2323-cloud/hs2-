@@ -1,0 +1,1 @@
+cd /c/h2w/r79; for u in 198.51.100.234:lab2 198.51.100.235:lab3 198.51.100.168:lab1; do ip=${u%:*}; n=${u#*:}; mkdir -p $n; ssh -i ~/.ssh/hs2_claude_ed25519 root@$ip 'cd /opt/hs2lab/dl76/res; for d in $(ls -d q* r* s* 2>/dev/null); do [ -e $d/meta.txt ] && echo $d/result.json $d/meta.txt $d/floor.txt; done | xargs tar cf - 2>/dev/null' | tar xf - -C $n; done

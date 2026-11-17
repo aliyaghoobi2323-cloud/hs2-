@@ -1,0 +1,31 @@
+run  flipsD loweredD trickl  cutA crowd99  game99  call99  cfail cfailE  heavyM call_end
+A1        0      0      0     2 131.635 104.191 176.002      0      0     679 ok
+B1        4      1      0     2 134.877 176.196 178.611      0      0     893 ok
+A3        0      0      0     2   129.2 123.755 134.974      0      0     776 ok
+B3        3      1      0     2 132.597 109.376 184.432      0      0     829 ok
+A5        4      1      0     3 131.769 117.687 154.926      0      0     971 ok
+B5       17      2      0     5 138.142 106.591 177.336      0      0     989 ok
+A7        0      0      1     3 133.241 117.126 179.531      0      0     940 ok
+B7        0      0      0     2 121.717 116.089 156.707      0      0     935 ok
+A8        0      0      0     2 134.641 120.061 186.758      0      0     923 ok
+B8        0      0      0     2  121.97 105.993 180.453      0      0     892 ok
+A9        0      0      7     2 123.308 120.852 175.341      0      0     951 ok
+B9        0      0      0     0    None    None    None   None      0    None ok
+A1   reversals  0 lowerings  0 end ok
+A3   reversals  0 lowerings  0 end ok
+A5   reversals  2 lowerings  1 end ok
+A7   reversals  0 lowerings  0 end ok
+A8   reversals  0 lowerings  0 end ok
+A9   reversals  0 lowerings  0 end ok
+B1   reversals  1 lowerings  1 end lower
+B3   reversals  1 lowerings  1 end lower
+B5   reversals  4 lowerings  2 end ok
+B7   reversals  0 lowerings  0 end ok
+B8   reversals  0 lowerings  0 end ok
+run     fB     fC   fAll   c99all    c99ev  call99  game99  heavy silent-marks
+C1     272    369    641    158.1    160.8 215.583 109.959    699 [192.168.51.1>192.168.50.2] [192.168.52.1>192.168.50.2] 
+O1     260    369    629    140.0    149.5 162.501 147.836    660 
+C2     242    306    548    148.3    154.8 203.531 120.196    740 [192.168.51.1>192.168.50.2] [192.168.52.1>192.168.50.2] 
+O2     251    353    604    144.5    152.8 209.925 114.878    801 
+C3     193    327    520    142.0    157.4 166.038 134.692    694 [192.168.51.1>192.168.50.2] [192.168.52.1>192.168.50.2] 
+O3     263    386    649    141.0    157.7 178.353 170.907    841 
