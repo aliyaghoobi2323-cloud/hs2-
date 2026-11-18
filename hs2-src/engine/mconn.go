@@ -401,6 +401,9 @@ type msub struct {
 	// dcPre: this tick's darkcall link evidence, read with m.mu released
 	// (cs228, mconn_cs228.go); under m.mu
 	dcPre *dcPreRead
+	// b296: dcSubMeter(s) taken once at addSubLocked (s.rw is fixed while live);
+	// the darkcall timer reads it instead of 3 pointer hops per sub per tick
+	dcMtr *linkMeter
 
 	bulk     atomic.Bool  // this is the connection's bulk sub
 	lastRecv atomic.Int64 // UnixNano of the last record read from it
@@ -464,11 +467,13 @@ type msub struct {
 
 	loops    int         // mem68: its readLoop/writeLoop running (under m.mu)
 	rwClosed atomic.Bool // mem68: close has finished closing rw
+	u268Idx  atomic.Bool // in ul268's link index (mconn_ul268_scale.go)
 }
 
 func (s *msub) close() {
 	s.closeOnce.Do(func() {
 		obs.msubsLive.Add(-1)
+		ul268IdxDel(s) // ul268 link index
 		close(s.done)
 		if mtr := s.stMtr.Swap(nil); mtr != nil {
 			mtr.stripeN.Add(-1)
@@ -560,6 +565,14 @@ type mrecv struct {
 type mConn struct {
 	id   uint64
 	iran bool
+	// ul268 vs darkcall (mconn_ul268_scale.go), under mu
+	u268At time.Time // ul268 started a data-dark rescue of this conn
+	dcSwAt time.Time // darkcall switched this conn's primary
+	// b296 (mconn_b296.go): the subs' write sequence and the darkcall
+	// timer's idle proof (seq+1; 0: none), side by side for the timer's scan
+	dcWr     atomic.Uint64
+	dcIdleAt atomic.Uint64
+
 	open mOpener
 
 	dl243Res [dl243ConnMax]time.Time // dl243: this conn's recent rescues (under mu)
@@ -650,6 +663,7 @@ type mConn struct {
 
 	stripeState // HS2_MCONN_STRIPE (mconn_stripe.go)
 	rescueState // HS2_MCONN_RESCUE (mconn_rescue.go)
+	zsState     // zs291 (mconn_zs291.go)
 
 	r mrecv
 
@@ -662,7 +676,11 @@ func newMConn(id uint64, iran bool, open mOpener) *mConn {
 	m := &mConn{id: id, iran: iran, open: open,
 		kick: make(chan struct{}, 1), die: make(chan struct{})}
 	m.sendCond.L = &m.mu
+	if iran && !ul268Iran.Load() {
+		ul268Iran.Store(true) // ul268: this process acts on the TCP_INFO poll
+	}
 	memTrack(m, &memObjMConns)
+	m.zsBorn = time.Now()
 	memRegMConn(m)
 	m.r.cond.L = &m.r.mu
 	m.r.lastProgress = time.Now()
@@ -835,6 +853,11 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	s.idx = m.nsubs
 	m.nsubs++
 	m.subs = append(m.subs, s)
+	s.dcMtr = dcSubMeter(s)
+	m.dcWrBump() // b296: a new sub ends the darkcall idle proof
+	if m.iran && ul268On.Load() && !bulk && m.mode != planeBulk {
+		ul268IdxAdd(s) // ul268: dark-link visits find it (mconn_ul268_scale.go); a bulk conn is no rescue candidate
+	}
 	if !bulk {
 		m.graceFlushLocked(s) // HS2_MCONN_STRIPE_GRACE_MS
 	}
@@ -845,9 +868,11 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 }
 
 func (m *mConn) removeSubLocked(s *msub) {
+	m.zsNoteRemoveLocked()
 	if i := slices.Index(m.subs, s); i >= 0 {
 		m.subs = slices.Delete(m.subs, i, i+1)
 	}
+	ul268IdxDel(s)
 	m.setPrimaryLocked()
 	m.refreshLiteDualLocked()
 }
@@ -1338,6 +1363,11 @@ func (m *mConn) Close() error {
 	m.closeOnce.Do(func() {
 		m.rawClose()
 		m.mu.Lock()
+		// zs291: a connection that never had a sub (the exit's lost
+		// reserve race: a raw first sub arriving after ul268's rescue join
+		// made the conn) has nothing to linger for, and a raw one has no
+		// manager to end it: end it now, or obs.mconnOpen keeps it forever.
+		never := !m.ended && m.nsubs == 0
 		if !m.ended {
 			m.closing = true
 			m.lingerAt = time.Now().Add(mCloseLinger)
@@ -1345,6 +1375,10 @@ func (m *mConn) Close() error {
 		}
 		m.sendCond.Broadcast()
 		m.mu.Unlock()
+		if never {
+			zsNeverEnded.Add(1)
+			m.end(errMConnClosed, false)
+		}
 		r := &m.r
 		r.mu.Lock()
 		r.closed = true
@@ -1381,9 +1415,15 @@ func (s *msub) writeLoop() {
 	defer m.subLoopExit(s)
 	defer func() { // mem66: a sub still referenced (raw1, bulk) keeps no batch buffer
 		m.mu.Lock()
+		b := s.batch
 		s.batch = nil
 		m.mu.Unlock()
+		putMBatch(b) // gc295: the next sub's batches reuse it
 	}()
+	// gc295: the batch's chunk list (s.curMore, plus c for keepSentLocked)
+	// reuses one backing array per writer instead of a new one per batch.
+	// Only this goroutine sets s.curMore; others only read it under m.mu.
+	var spare []*mchunk
 	for {
 		m.mu.Lock()
 		for (len(s.q) == 0 || s.gated) && !s.dead {
@@ -1416,13 +1456,16 @@ func (s *msub) writeLoop() {
 		s.qBytes -= c.qsize()
 		s.cur = c
 		wire := c.wire()
+		s.curMore = spare[:0] // empty: as before, nothing batched yet
 		if mconnBatch.Load() && m.lite && len(s.q) > 0 {
 			wire = s.batchLocked(wire)
 		}
 		m.sendCond.Broadcast()
 		m.mu.Unlock()
 
+		m.dcWrBump() // b296
 		_, err := s.rw.Write(wire)
+		m.dcWrBump()
 
 		m.mu.Lock()
 		s.cur = nil
@@ -1436,10 +1479,11 @@ func (s *msub) writeLoop() {
 			s.noteWrittenLocked(c, more) // b262
 		}
 		kept := (err == nil || stripeResend.Load()) && m.stripeKeepOnLocked(s)
+		all := append(more, c) // gc295: more's spare capacity (writeLoop's spare)
 		if kept {
-			m.keepSentLocked(s, time.Now(), append(more, c)...) // HS2_MCONN_STRIPE_RESEND
+			m.keepSentLocked(s, time.Now(), all...) // HS2_MCONN_STRIPE_RESEND
 		} else {
-			for _, x := range append(more, c) {
+			for _, x := range all {
 				if x != nil && x.seq() {
 					s.noteUnprov(x.off + uint64(x.n)) // cs223: written, no kept copy
 				}
@@ -1457,6 +1501,8 @@ func (s *msub) writeLoop() {
 				x.unref()
 			}
 		}
+		clear(all)
+		spare = all[:0]
 		if idle {
 			m.kickMgr()
 		}
@@ -1525,6 +1571,9 @@ func (m *mConn) switchLocked(b *msub) {
 	b.bulk.Store(true)
 	m.tr.ev("switch to bulk sub %d: BULK + %d requeued bytes (%d records)", b.idx, qb, len(q)-len(ctrl)-1)
 	m.mode, m.bulk = planeBulk, b
+	for _, s := range m.subs {
+		ul268IdxDel(s) // ul268: a bulk conn is neither raw- nor records-rescue eligible (planeBulk is final)
+	}
 	m.setPrimaryLocked()
 	m.sendCond.Broadcast()
 	obs.mconnBulk.Add(1)
@@ -2105,6 +2154,7 @@ func (m *mConn) subGone(s *msub, cause error) {
 		}
 		m.noteDeadKeyLocked(s.key)
 	}
+	m.zsNoteBranchLocked(zsBranchName(len(m.subs), endErr, m.rstHold, !m.graceUntil.IsZero()), cause)
 	if s.noTgt {
 		subNoTargetOutcome(endErr) // b271 Q5 (mconn_sub_resend.go)
 	}
@@ -2340,6 +2390,9 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			r.mu.Unlock()
 			if ev := m.stripeEvacLocked(now); ev != nil {
 				go m.subDied(ev, errStripeEvac) // HS2_MCONN_STRIPE_EVAC (mconn_stripe_evac.go): the resend moves its bytes
+			}
+			if ev := m.ul268StripeEvacLocked(now); ev != nil {
+				go m.subDied(ev, errStripeEvac) // ul268 (mconn_ul268.go): a sub on a data-dark link
 			}
 			if m.stripeTickLocked(now, m.sendOff, recvd) {
 				go m.openStripe(m.stripeAvoidLocked(), false)

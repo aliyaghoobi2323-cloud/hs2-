@@ -4,8 +4,6 @@ package engine
 
 import (
 	"net"
-
-	"golang.org/x/sys/unix"
 )
 
 // tcpStats reads one TCP_INFO snapshot of a link socket: the cumulative
@@ -25,7 +23,7 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 	var st tcpStat
 	var ok bool
 	rc.Control(func(fd uintptr) {
-		info, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+		info, e := tcpInfo(int(fd))
 		if e != nil {
 			return
 		}
@@ -44,6 +42,7 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			bytesAcked:   info.Bytes_acked,
 			bytesRcvd:    info.Bytes_received,
 			backoff:      info.Backoff,
+			unacked:      info.Unacked,
 			caState:      info.Ca_state,
 			rtoUs:        info.Rto,
 			pmtu:         info.Pmtu,

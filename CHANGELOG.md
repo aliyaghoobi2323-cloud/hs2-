@@ -19,6 +19,65 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel69m — GitHub release 2026-11-18: rel69l + gc295 allocation/GC cuts + b296 scale fixes + gc296 rescue ring pool + live LB screen (installer)
+
+rel69m = rel69l (b291 814c68a0) + gc295 (b295 3264fb3a) + b296 (f7cf5926 a5acbcdc 798a7075 cfe2ade3), cherry-picked on
+branch b299 with no conflict (the lab-only sc4x commits 138f1f54/d13c7199 are left out), + gc296 (b295 a28be0c8,
+cherry-picked on branch b300, no conflict; lab-only gc297 harness left out). envdef 109 -> 111 keys
+(`HS2_B296_DCSKIP`, `HS2_GC296_RINGPOOL`, both). No capability bit, no wire change; behaviour is identical by design except the darkcall idle skip.
+
+| change | side | disable / old behaviour |
+|---|---|---|
+| gc295 (no key): hot-path allocation cuts — typed smux shaper heap (container/heap's exact up/down order, equivalence test), pooled smux request ctx (result chan + reqOwn per frame; a given-up request is left to the GC, rc134 unchanged), msub.writeLoop batch chunk list reused per writer, 64 KB batch buffer pooled when a writeLoop ends, alloc-free TCP_INFO (struct by value). lab2 gc295 storm harness: alloc ir 1415/1702 -> ~800/1260 MB/min steady/storm (vs bin291), kh more; 1 h parallel soak vs rel69l: GC cycles/min Iran -27 %, Kharej -55 %, heap/RSS/goroutines/fds flat, latency equal, 0 panics, 0 corruption signs | both | none (rebuild/roll back the binary) |
+| b296 `HS2_B296_DCSKIP=1` (default on): the darkcall timer skips a non-call conn proven idle (nothing to do on its last visit, every live sub consumed by the peer, no write/new sub/call roll since: conn write sequence dcWr unchanged); calls never skipped; every 25th tick (5 s) visits all conns and only that tick takes proofs. The cs226 lite gate tests the link (cached meter, msub.dcMtr) before the stream's ack marks: same verdict (20k random sub mixes, TestB296LiteOrderSame) | both | `HS2_B296_DCSKIP=0` |
+| gc296 `HS2_GC296_RINGPOOL=1` (default on): rescue ring buffers (raw/rescue rings, rrBig rings) come from a sync.Pool per power-of-two size class (4 KB-8 MB) and go back when the ring is dropped, instead of make/drop each time; every ring byte still counts against the existing budgets (rescue mem cap, `HS2_UL268_MEM_MB`, rrBig RAM-scaled) and pooled buffers live at most 2 GC cycles. lab2 5v5 storm pairs vs gc295: alloc -26..-50 %, GC cycles kh -32 %, STW max equal or lower; Iran RSS +137 MB (bounded); gc297 1-s storm-onset bins (5 more pairs): onset spike present in both arms, pool effect within noise; 0 panics, 0 fails | both | `HS2_GC296_RINGPOOL=0` |
+| b296 (no key): exitTraffic.sample copies the conn set under t.mu (reused slice) and does the per-conn math outside it, so add/done of new exit streams no longer wait for a full scan every 2 s | both | none (rebuild/roll back the binary) |
+
+lab3 sc4x (prod-like scale harness): 1x (crowd 3000), 7 interleaved b296 vs rel69l pairs: call p99 +2.7 % [CI -87, +119 ms],
+crowd p99 -3.6 % [-55, +30], CPU ir+kh -1.6 %, all neutral; 1.5x (crowd 4500): b296 equal or better on call/crowd p99,
+stall seconds and darkcall switches; 0 fails, 0 panics.
+
+Rollback to rel69l behaviour: `HS2_B296_DCSKIP=0` and `HS2_GC296_RINGPOOL=0` (both sides); gc295 and the b296 exit-stats/gate-order changes have no
+key, so a full rollback is the rel69l binary (sha256 5674c6bb...).
+
+Installer (b304, `install.sh` 5ee7cf4b, no binary change): the classic "Load balancing — live status" table is replaced by a
+live load-balancing screen — one row per Iran IP sorted by traffic (SHARE %, LINKS live/target, down/up Mbit/s, STREAMS,
+LOSS % = the worse of down and up with `N↑` for upload loss, RTT, path MTU from mt135 with the lower direction and a red mark
+under 1280, auto CUTS in the last 24 h from `hs2 lb history`), cut/idle IPs on one dim line, Kharej IPs, LB verdicts, keys
+p/m/k/h/Enter, in-place redraw, narrow terminals drop columns, ASCII fallback. Reachable from the new menu (3 Load balancing
+& IPs -> l Live view), the classic LB screen (9) and the shell: `hs2-menu lb [tunnel] [--once] [--view V]`; install/upgrade
+write the wrapper `/usr/local/bin/hs2-menu-lb` (exec `hs2-menu lb`), uninstall removes it. Read-only; every column equals
+`hs2 lb show --status` and its JSON (checked on a live 12-path + IPv6-pair lab tunnel). `hs2-src/install/tests/lb_menu_test.sh`
+covers the layout, MTU, cuts, parks, the CLI and the wrapper.
+
+Release binary (the one both reference production tunnels run since 2026-11-18): `hs2-linux-amd64` sha256
+`5e8fc8bc562ec1e9f525db0888b1c6830ab9e870f7be763e24b4dd4038fd82a2`, `[build rel69m]`, from a `git archive` of b300 0882a109
+(LF), `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.buildTag=rel69m"`, go1.27.3, static.
+gofmt and `go vet ./...` clean, full `go test ./...` and `go test -race ./engine` passed on that tree (0 DATA RACE). The
+public `hs2-src/` adds only the b304 installer and its test on top of that tree (no Go change).
+
+## rel69l — rel69k + ul268 data-dark raw rescue + b278 TUN ping stall fix + ul281 upload stripe slot + cs286 call copy apart (never published on its own; included in rel69m)
+
+rel69l = rel69k (b276, incl. b277/b278 test race fixes) + ul268 from b268 (f8b18c7f ff88a84b f1080f1f 856182cf eed2720e
+156c15c7 68306cc7 a7fb4446 99a9adb4 271e45e7 b6d3db1a f2154bfe ce858299, incl. lab/ul268s harness), cherry-picked on branch
+b279 with no conflict; b278 (34868ab5 2ec4d1cf 7776d489 0a8e3987, TUN interactive flows off a stuck link, dup copy on another
+path) cherry-picked on branch b280 with no conflict; ul281 (d6de38f9, extra stripe slot for a new fast upload) cherry-picked
+on branch b285 with no conflict, default flipped on; cs286 (b286 174d998e c7e0eb66 1403c099 163e1f78, call copy sub never
+on the path of the call's other sub) cherry-picked on branch b289 (docs rows merged by hand). envdef 105 -> 109 keys
+(`HS2_UL268_RESCUE`, `HS2_UL281_SLOT`, Iran; `HS2_B278_L3STALL`, `HS2_CS286_CALLAPART`, both); `HS2_UL268_HOLD_MS` is an in-code default; `HS2_B278_TRACE` is a lab-only trace.
+No capability bit, no wire change; ul268/ul281 act only on Iran, b278/cs286 on both sides. Calls are never touched by ul268 (dcIsCallLocked -> er92 set only; the
+stripe evac skips calls; darkcall dc254/b262/b270/xs261 keep owning calls).
+
+| change | side | disable / old behaviour |
+|---|---|---|
+| ul268 `HS2_UL268_RESCUE=1`: a link whose data is frozen (TCP_INFO unacked/bytes_acked unchanged >= max(1 s, 8 x srtt), or backoff >= 2) on 2 consecutive 250 ms ticks while another path still acks joins the rescue set; the Iran non-bulk raw conns on it are rescued when their ring covers SIOCOUTQ + 64 KB, a stripe sub on it is closed (stripe RESEND moves its bytes); a fast raw writer's ring grows to half a second of its rate (<= 8 MB/conn, <= min(256 MB, RAM/16)/process). lab2 pv270b (b268 vs bin264, parallel CPU-split A/B): pathdark crowd fails -62/round, no-fault icmp p99 -2..-5 ms, call tail neutral, 0 panics | Iran | `HS2_UL268_RESCUE=0` |
+| b278 `HS2_B278_L3STALL=1`: a TUN interactive flow (ping/ICMP, small packets) leaves a link whose socket has data in flight with no ack progress (RTO backoff, or bytes_acked still for max(400 ms, 3 srtt); TCP_INFO read at most every 50 ms per link, only for links an interactive packet is about to use; a read older than the window restarts it, so a rarely read idle link with one packet just sent is not called stuck), and the HS2_L3_DUP second copy skips such a link; `HS2_B278_TRACE=1` (lab) logs every ICMP echo with its link paths | both | `HS2_B278_L3STALL=0` |
+| ul281 `HS2_UL281_SLOT=1` (default on): a NEW fast upload (raw sample >= 80 Mbit/s, raw conn younger than 20 s, first growth only) whose growth finds all 8 stripe slots held may take one of the 4 dlfair extra stripe slots (shared with dlfair/dl241, bounded at 12 per process); before, every upload was refused and stayed on its raw first link. lab2 ul281d prod-like harness (12 paths, ~130 links, 3000 crowd, 30 bg users), 10 interleaved off/on pairs: upload 229 -> 327 Mbit/s (+98, 95 % CI [+72, +123], 10/10), light p99 diffs ~0 (crowd -0.4 [-9, +9], icmp +0.8 [-10, +11], echo -0.3, call -1.5 [-15, +12]), 0 fails, 0 panics. No wire change | Iran | `HS2_UL281_SLOT=0` |
+| cs286 `HS2_CS286_CALLAPART=1` (default on): a call's copy/pair sub (call upgrade, pair subs, raw upgrade of a call, call rescue) whose pick rides a path one of the call's other subs rides is re-picked on another path — healthy first, then a lowered/cooled one, then a degraded one (never draining/retiring/suspect); covers the plain-pick fallback when the call placement finds no light link (lab1 sk280 SN4: after a late lb auto2 cut verdict the copy went beside the primary, cs229 never ran, the next cut of that path stalled the call 11 s); log "cs286 kept/moved (low)/nocand" in the mconn call 10 s line | both | `HS2_CS286_CALLAPART=0` |
+| zs291 (0d98ccbb, bug fix, no key): `Close()` ends at once an mconn that never had a sub (nsubs==0). Before, a raw exit conn (no manager, no raw1) whose first sub lost the reserve race to a ul268 rescue join only set closing, end() never ran and the exit `mem: mconns` counter (obs.mconnOpen) crept up at each data-dark event (accounting only; the object was collected, RSS flat). `HS2_ZS291=1` is a diagnosis-only mem-line extension (live/zero-sub conns, neverended, reserve-lost by role), default off, not in envdef | both (seen on Kharej) | none (fix) |
+
+Rollback to rel69k behaviour: `HS2_UL268_RESCUE=0` and `HS2_UL281_SLOT=0` (Iran), `HS2_B278_L3STALL=0` and `HS2_CS286_CALLAPART=0` (both sides).
+
 ## rel69k — GitHub release 2026-11-17: rel69j + b261 xs261 + b262 coverage fixes + b270/b271/b274
 
 rel69k = rel69j (b264 c9d3d835) + b261/b262 (cherry-picked from b262 after its b254 base 5e2a7fb6: ca76db7a xs261 + cs224

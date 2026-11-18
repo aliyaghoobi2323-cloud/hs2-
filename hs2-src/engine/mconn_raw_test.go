@@ -26,6 +26,7 @@ func newRawPair(t *testing.T) (*tNet, *mConn, *mConn) {
 	if iran.raw1 == nil || !iran.rawW.Load() || liveSubs(iran) != 1 {
 		t.Fatal("the first sub is not raw")
 	}
+	closeAtEnd(t, iran, n.exit)
 	mWaitFor(t, "exit raw sub", time.Second, func() bool { return liveSubs(n.exit) == 1 })
 	return n, iran, n.exit
 }

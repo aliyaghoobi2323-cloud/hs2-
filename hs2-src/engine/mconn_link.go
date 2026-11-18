@@ -958,6 +958,8 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 		mc.tr.setPort(port)
 		if !tbl.reserve(id, mc) { // ul173: joins attach only after the first sub (publish below)
 			// mem64: mc's manage goroutine already runs; close it too.
+			// zs291: Close ends it at once (no sub ever joined), raw or not.
+			zsReserveLost[role&7].Add(1)
 			mc.Close()
 			if role == mconnRoleRescueJoin {
 				// er94: the first sub came meanwhile: a plain join

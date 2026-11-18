@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sync"
 	"sync/atomic"
 )
 
@@ -35,7 +36,7 @@ func (s *msub) batchLocked(first []byte) []byte {
 		return first
 	}
 	if cap(s.batch) < mRecMax {
-		s.batch = make([]byte, 0, mRecMax)
+		s.batch = getMBatch()
 	}
 	b := append(s.batch[:0], first...)
 	for i := 0; i < k; i++ {
@@ -47,4 +48,23 @@ func (s *msub) batchLocked(first []byte) []byte {
 	}
 	s.q = s.q[k:]
 	return b
+}
+
+// mBatchPool (gc295): the writers' batch buffers (mRecMax each). A sub used
+// to make its own on its first batch and drop it when its writeLoop ended
+// (mem66), so every short-lived lite sub of the crowd allocated one: the
+// exit's second-largest allocation site in the gc295 storm profile
+// (~210 MB/min). The ended writeLoop now hands it to the next sub.
+var mBatchPool = sync.Pool{New: func() any { b := make([]byte, 0, mRecMax); return &b }}
+
+func getMBatch() []byte { return (*mBatchPool.Get().(*[]byte))[:0] }
+
+// putMBatch: b's writer is done with it (its writeLoop returned, so no
+// Write still reads it).
+func putMBatch(b []byte) {
+	if cap(b) < mRecMax {
+		return
+	}
+	b = b[:0]
+	mBatchPool.Put(&b)
 }

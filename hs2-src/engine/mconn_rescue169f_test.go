@@ -49,6 +49,7 @@ func freshRetryPair(t *testing.T, id uint64, j1 func(k int, ia, eb *tSub) bool) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, iran, exit)
 	iran.rescueEnable()
 	req := randBytes(6000, 41)
 	if _, err := iran.Write(req); err != nil {

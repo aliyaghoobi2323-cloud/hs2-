@@ -67,8 +67,17 @@ const (
 
 var rescueOn atomic.Bool // loadEnvKeys: HS2_MCONN_RESCUE
 
+// rescueRingCapV: HS2_MCONN_RESCUE_KB in bytes, the per-connection ring
+// cap. Atomic since b279: tests change it while sweepers and conn loops of
+// earlier tests may still read it.
+var rescueRingCapV atomic.Int64
+
+func init() { rescueRingCapV.Store(int64(envIntDef("HS2_MCONN_RESCUE_KB", 128) << 10)) }
+
+// rescueRingCap returns the per-connection ring cap in bytes.
+func rescueRingCap() int { return int(rescueRingCapV.Load()) }
+
 var (
-	rescueRingCap       = envIntDef("HS2_MCONN_RESCUE_KB", 128) << 10
 	rescueMemMax  int64 = int64(envIntDef("HS2_MCONN_RESCUE_MB", 64)) << 20
 	rescueKeep          = 10 * time.Second
 	rescueSilence       = time.Duration(envIntDef("HS2_MCONN_RESCUE_MS", 1500)) * time.Millisecond
@@ -157,6 +166,17 @@ type rescueRing struct {
 	call  bool  // the conn is copied as a call (callOn), set by rrKeepLocked
 	lowT0 int64 // monoNano: since when the rate wants a ring at most half this size
 	bigC  int   // of big, the bytes counted in rrStat.bigCall
+	// ul268 (mconn_ul268.go): an Iran raw ring sized to a fast writer
+	u268  bool         // this ring may grow past rescueRingCap (Iran, key on)
+	uT0   int64        // monoNano: the rate window's start
+	uN    int          // bytes in the window
+	uRate int          // bytes/s
+	ulBig int          // bytes of buf above rescueRingCap, counted in ul268Stat.mem
+	uTot  int64        // bytes ever added
+	uOver bool         // the budget refused a growth
+	uCov  atomic.Bool  // ul268Covered: a data-dark rescue may start (read under mu)
+	uHeld atomic.Int64 // n, readable under mu (ul268CoverNowLocked)
+	uTotA atomic.Int64 // uTot, readable under mu
 }
 
 func rescueMemTake(n int) bool {
@@ -171,7 +191,10 @@ func (r *rescueRing) capB() int {
 	if r.rec {
 		return rrCapFor(r.rate)
 	}
-	return rescueRingCap
+	if r.u268 {
+		return ul268RawCap(r.uRate)
+	}
+	return rescueRingCap()
 }
 
 // noteRate (records rings): the bytes of the last full second.
@@ -211,6 +234,10 @@ func (r *rescueRing) add(p []byte) {
 	r.last.Store(now)
 	if r.rec {
 		r.noteRate(now, len(p))
+	} else if r.u268 {
+		r.ul268Note(now, len(p))
+		r.uTot += int64(len(p))
+		r.uTotA.Store(r.uTot)
 	}
 	if need := r.n + len(p); need > len(r.buf) && len(r.buf) < r.capB() {
 		size := 4 << 10
@@ -221,7 +248,22 @@ func (r *rescueRing) add(p []byte) {
 		if r.rec && len(r.buf) < rrRingCap {
 			size = min(size, rrRingCap) // the first rrRingCap from rrMemCap
 		}
-		if r.rec && len(r.buf) >= rrRingCap {
+		if !r.rec && r.u268 && len(r.buf) < rescueRingCap() {
+			size = min(size, rescueRingCap()) // the first rescueRingCap from rescueMemCap
+		}
+		if !r.rec && r.u268 && len(r.buf) >= rescueRingCap() {
+			// ul268: growth past rescueRingCap from its own budget
+			if ul268Take(size - len(r.buf)) {
+				if r.ulBig == 0 {
+					ul268Stat.grown.Add(1)
+				}
+				r.ulBig += size - len(r.buf)
+				r.uOver = false // review-rel69k #2: a later growth clears a refusal
+			} else {
+				size = len(r.buf)
+				r.uOver = true
+			}
+		} else if r.rec && len(r.buf) >= rrRingCap {
 			// cd152: growth past the old fixed cap comes from its own
 			// budget (rrBigMax): the crowd's rings fill rrMemCap. Not
 			// there: the ring stays as it is.
@@ -237,8 +279,9 @@ func (r *rescueRing) add(p []byte) {
 			return
 		}
 		if size > len(r.buf) {
-			nb := make([]byte, size)
+			nb := rpGet(size) // gc296: pooled size classes
 			k := r.copyOut(nb)
+			rpPut(r.buf)
 			r.buf, r.head, r.n = nb, 0, k
 		}
 	}
@@ -255,6 +298,13 @@ func (r *rescueRing) add(p []byte) {
 	k := copy(r.buf[tail:], p)
 	copy(r.buf, p[k:])
 	r.n += len(p)
+	if r.u268 {
+		if len(r.buf) >= r.capB() {
+			r.uOver = false // at its cap: nothing was cut short
+		}
+		r.uHeld.Store(int64(r.n))
+		r.ul268Cover()
+	}
 }
 
 // copyOut copies the held bytes, oldest first, into dst.
@@ -293,10 +343,18 @@ func (r *rescueRing) release() {
 			rrStat.big.Add(-int64(r.big))
 			rrStat.bigCall.Add(-int64(r.bigC))
 		} else {
-			rescueStat.mem.Add(-int64(len(r.buf)))
+			rescueStat.mem.Add(-int64(len(r.buf) - r.ulBig))
+			ul268Stat.mem.Add(-int64(r.ulBig))
 		}
+		rpPut(r.buf) // gc296
 	}
-	r.buf, r.head, r.n, r.big, r.bigC, r.lowT0 = nil, 0, 0, 0, 0, 0
+	r.buf, r.head, r.n, r.big, r.bigC, r.lowT0, r.ulBig = nil, 0, 0, 0, 0, 0, 0
+	r.uCov.Store(false)
+	// review-rel69k #2: the rate window and a budget refusal start over;
+	// uTot keeps counting (a fresh ring never holds the bytes written before
+	// the release, so "holds every byte" must stay false)
+	r.uOver, r.uRate, r.uT0, r.uN = false, 0, 0, 0
+	r.uHeld.Store(0)
 }
 
 // rescueState: per connection.
@@ -353,6 +411,7 @@ var (
 func (m *mConn) rescueEnable() {
 	m.wmu.Lock()
 	m.ring.on = true
+	m.ring.u268 = m.iran && ul268On.Load() // ul268 (mconn_ul268.go)
 	m.wmu.Unlock()
 	m.mu.Lock()
 	m.rscCap = true
@@ -397,7 +456,7 @@ func rescueSweeper() {
 		rescueSweep(time.Now())
 		rrSweep(time.Now()) // er97
 		if i%10 == 0 {
-			if l := rescueLogLine() + " | " + rescueRecLogLine() + " | " + rescue145LogLine() + " | " + rescue169LogLine() + " | " + rescueRstLogLine() + " | " + darkcallLogLine(); l != last {
+			if l := rescueLogLine() + " | " + rescueRecLogLine() + " | " + rescue145LogLine() + " | " + rescue169LogLine() + " | " + rescueRstLogLine() + " | " + darkcallLogLine() + " | " + ul268LogLine() + " | " + ul268ScaleLogLine() + " | " + rpLogLine(); l != last {
 				last = l
 				log.Print(l)
 			}
@@ -466,34 +525,34 @@ func rescueAllowNow(now time.Time) bool {
 func rescueSilentLinks(set map[any]bool) {
 	if len(set) == 0 {
 		rescueSilentSet.Store(nil)
+		rescueEr92On.Store(false)
 		return
 	}
-	if rescueSilentSet.Swap(&set) == nil {
-		rescueStat.trigger.Add(1) // a new silent episode (not every watch tick)
+	rescueSilentSet.Store(&set)
+	var only map[any]bool
+	if p := ul268DarkOnly.Load(); p != nil {
+		only = *p
 	}
 	now := time.Now()
+	callSet := ul268CallSet(set) // ul268: what a call sees (no data-dark-only links)
+	if len(set) <= len(only) {
+		// ul268 (mconn_ul268_scale.go): data-dark-only links: visit only
+		// the conns with a sub on them, not every Iran conn
+		rescueEr92On.Store(false)
+		ul268VisitDark(set, callSet, only, now)
+		return
+	}
+	if !rescueEr92On.Swap(true) {
+		rescueStat.trigger.Add(1) // a new er92 silent episode (not every watch tick)
+	}
+	ul268Scale.full.Add(1)
 	rescueConns.Range(func(k, _ any) bool {
 		m := k.(*mConn)
 		if !m.iran {
 			return true
 		}
-		m.mu.Lock()
-		m.rescueRetrySilentLocked(set) // rs146: HS2_MCONN_RESCUE_RETRY, join on a silent link
-		ok := m.rescueEligibleLocked(now) && set[m.raw1.key]
-		if ok {
-			m.lightOpening = true
-		}
-		m.mu.Unlock()
-		if ok {
-			if !rescueAllowNow(now) {
-				m.mu.Lock()
-				m.lightOpening = false
-				m.mu.Unlock()
-				return false
-			}
-			go m.rescueStart()
-		}
-		return true
+		_, stop := rescueVisitRaw(m, now, set, callSet)
+		return !stop
 	})
 	// er97: records-mode connections (mconn_rescue_rec.go)
 	rrConns.Range(func(k, _ any) bool {
@@ -501,24 +560,95 @@ func rescueSilentLinks(set map[any]bool) {
 		if !m.iran {
 			return true
 		}
-		m.mu.Lock()
-		m.rescueRetrySilentLocked(set) // rs146
-		ok := m.rrEligibleLocked(now, set)
-		if ok {
-			m.lightOpening = true
-		}
-		m.mu.Unlock()
-		if ok {
-			if !rescueAllowNow(now) {
-				m.mu.Lock()
-				m.lightOpening = false
-				m.mu.Unlock()
-				return false
-			}
-			go m.rrStart()
-		}
-		return true
+		_, stop := rescueVisitRec(m, now, set, callSet)
+		return !stop
 	})
+}
+
+// rescueEr92On: an er92 silent episode is running (trigger counts its start).
+var rescueEr92On atomic.Bool
+
+// rescueVisitRaw (Iran, watch tick): rescue m's raw first sub when it sits
+// on a link of set. stop: the per-second rescue limit is reached.
+func rescueVisitRaw(m *mConn, now time.Time, set, callSet map[any]bool) (started, stop bool) {
+	m.mu.Lock()
+	set = m.ul268SetForLocked(now, set, callSet)
+	m.rescueRetrySilentLocked(set) // rs146: HS2_MCONN_RESCUE_RETRY, join on a silent link
+	ok := m.rescueEligibleLocked(now) && set[m.raw1.key]
+	dark := ok && ul268DarkOnlyHas(m.raw1.key)
+	if dark { // ul268: data-dark, not silent (never a call: ul268SetForLocked)
+		switch {
+		case m.ul268DcRecentLocked(now):
+			ok = false
+			ul268Scale.dcSkip.Add(1)
+		case !m.ul268CoverNowLocked():
+			ok = false
+			ul268Stat.noCov.Add(1)
+		}
+	}
+	if ok {
+		m.lightOpening = true
+		if dark {
+			m.u268At = now
+		}
+	}
+	m.mu.Unlock()
+	if !ok {
+		return false, false
+	}
+	if !rescueAllowNow(now) {
+		m.mu.Lock()
+		m.lightOpening = false
+		m.u268At = time.Time{}
+		m.mu.Unlock()
+		return false, true
+	}
+	if dark {
+		ul268Stat.rescued.Add(1)
+	}
+	go m.rescueStart()
+	return true, false
+}
+
+// rescueVisitRec (Iran, watch tick): the records-mode rescue (er97) of m when
+// every live sub of it is on a link of set.
+func rescueVisitRec(m *mConn, now time.Time, set, callSet map[any]bool) (started, stop bool) {
+	m.mu.Lock()
+	set = m.ul268SetForLocked(now, set, callSet) // ul268: a call on a data-dark link is darkcall's (dc254)
+	m.rescueRetrySilentLocked(set)               // rs146
+	ok := m.rrEligibleLocked(now, set)
+	dark := false
+	if ok {
+		for _, s := range m.rrLiveSubsLocked() {
+			if ul268DarkOnlyHas(s.key) {
+				dark = true
+				break
+			}
+		}
+		if dark && m.ul268DcRecentLocked(now) { // ul268 vs darkcall: one resend per episode
+			ok = false
+			ul268Scale.dcSkip.Add(1)
+		}
+	}
+	if ok {
+		m.lightOpening = true
+		if dark {
+			m.u268At = now
+		}
+	}
+	m.mu.Unlock()
+	if !ok {
+		return false, false
+	}
+	if !rescueAllowNow(now) {
+		m.mu.Lock()
+		m.lightOpening = false
+		m.u268At = time.Time{}
+		m.mu.Unlock()
+		return false, true
+	}
+	go m.rrStart()
+	return true, false
 }
 
 // rescueEligibleLocked (Iran, under mu): still pure raw, no other open or

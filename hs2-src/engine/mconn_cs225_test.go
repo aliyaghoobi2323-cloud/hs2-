@@ -53,6 +53,7 @@ func TestCs225CallCopyOffPath(t *testing.T) {
 	// b sick (most links degraded / suspect): no preference, the old pick
 	// (link 1 on a or b's one healthy link 4, ties at random).
 	m, ls = pathLinks("a>x", "a>x", "b>y", "b>y", "b>y")
+	withCs286(t, false) // cs286 takes b's healthy link 4 (TestCs286SickOtherPath)
 	m.links[2].degraded, m.links[3].suspect = true, true
 	if got := pickCallSecond(t, m, ls, 0, 40); got[1] == 0 || got[2]+got[3] != 0 {
 		t.Fatalf("sick other path preferred: %v", got)
@@ -72,6 +73,7 @@ func TestCs225CallCopyOffPath(t *testing.T) {
 func TestCs225KeyOff(t *testing.T) {
 	withDupPaths(t, false)
 	withCs225(t, false)
+	withCs286(t, false)
 	m, ls := pathLinks("a>x", "a>x", "a>x", "b>y", "b>y")
 	got := pickCallSecond(t, m, ls, 0, 200)
 	if got[1]+got[2] == 0 {

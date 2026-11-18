@@ -118,10 +118,14 @@ type l3Link struct {
 	// (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go).
 	cut *l3CutSet
 	// qs is the link's HS2_QUIET_IDLE state (nil: off; quiet.go).
-	qs   *quietState
-	dead atomic.Bool
-	once sync.Once
-	done chan struct{}
+	qs *quietState
+	// txStat (nil: unknown) reads the link socket's TCP_INFO and stall is
+	// its ack-progress view (HS2_B278_L3STALL, l3_b278.go).
+	txStat func() (tcpStat, bool)
+	stall  l3Stall
+	dead   atomic.Bool
+	once   sync.Once
+	done   chan struct{}
 }
 
 // qpkt is a queued packet and when it was queued.
@@ -324,6 +328,8 @@ type l3Set struct {
 	// cut: this tunnel's cut paths (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go);
 	// add points each link at it.
 	cut l3CutSet
+	// b278Log: logDrops' logger, for the HS2_B278_TRACE lines (l3_b278.go).
+	b278Log atomic.Pointer[func(string, ...any)]
 }
 
 func (s *l3Set) add(l *l3Link) {
@@ -408,9 +414,13 @@ func (s *l3Set) pickAll(pkt []byte) (first, second *l3Link, fp fecPlan, fec bool
 		if l, ok := s.lane.pick(s.links, pkt, h); ok {
 			if s.dup && l != nil && l.canDup() {
 				second = dupSecond(s.links, h, l)
+				second = b278Second(s.links, h, l, second, s.lane.now()) // HS2_B278_L3STALL
 				if dupPathsOn && second != nil && l.path != "" {
 					countDupPath(second.path != l.path, true)
 				}
+			}
+			if b278Trace {
+				s.b278TraceICMP(pkt, l, second, s.lane.now())
 			}
 			return l, second, fp, false
 		}
@@ -511,12 +521,18 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
+	s.b278Log.Store(&logf)
+	var b278Last [4]int64
 	var fc fecCounts
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if c := [4]int64{b278Moved.Load(), b278DupSkip.Load(), b278Stuck.Load(), b278OtherPath.Load()}; c != b278Last {
+				b278Last = c
+				logf("l3 b278 stall: on %v · lane flows moved off a stuck link %d · dup copies kept off one %d · stuck verdicts %d · dup copies moved off the first's path %d", b278On.Load(), c[0], c[1], c[2], c[3])
+			}
 			if n := s.drops.Swap(0); n > 0 {
 				logf("l3: dropped %d packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected", n)
 			}

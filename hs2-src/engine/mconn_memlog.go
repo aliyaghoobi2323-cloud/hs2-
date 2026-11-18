@@ -44,7 +44,7 @@ func memLogLoop() {
 func memLogLine() string {
 	return fmt.Sprintf("mem: mconns=%d msubs=%d edgesubs=%d smuxstreams=%d smuxsessions=%d",
 		obs.mconnOpen.Load(), obs.msubsLive.Load(), mconnStat.light.Load()+mconnStat.bulk.Load(),
-		smux.LiveStreams(), smux.LiveSessions()) + smuxStallLine() + memObjLine()
+		smux.LiveStreams(), smux.LiveSessions()) + smuxStallLine() + memObjLine() + zsLine()
 }
 
 func memObjLine() string {
@@ -66,7 +66,7 @@ var memMConns struct {
 }
 
 func memRegMConn(m *mConn) {
-	if !smux.CountObjects.Load() {
+	if !smux.CountObjects.Load() && !zsOn.Load() {
 		return
 	}
 	memMConns.mu.Lock()

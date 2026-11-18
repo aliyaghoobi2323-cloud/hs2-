@@ -900,6 +900,17 @@ Restore the old behaviour:
   since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
   are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
   512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69m** (allocation/GC cuts, rescue ring pool, darkcall idle skip, exit stats scan outside the lock): `Environment=HS2_B296_DCSKIP=0`
+  (both sides; the darkcall timer visits every conn on every 200 ms tick again, as in rel69l), `Environment=HS2_GC296_RINGPOOL=0`
+  (both sides; rescue ring buffers are made and dropped per ring again, as in rel69l). gc295's allocation cuts
+  (typed smux shaper heap, pooled smux request ctx, writer batch-list reuse, batch buffer pool, alloc-free TCP_INFO) and
+  b296's exit stats copy, cs226 lite-gate order and cached link meter have **no key**: behaviour is identical by design;
+  to undo them, roll back the binary (rel69l build, sha256 5674c6bb...);
+- **before rel69l** (data-dark raw rescue, TUN ping stall fix, extra stripe slot for new fast uploads, call copy apart): `Environment=HS2_UL268_RESCUE=0` (Iran; the TCP_INFO watch,
+  the dark-link rescue and the larger raw ring for fast uploads all go back to rel69k behaviour),
+  `Environment=HS2_B278_L3STALL=0` (both sides; the TUN lane and the HS2_L3_DUP second copy pick links as in rel69k),
+  `Environment=HS2_UL281_SLOT=0` (Iran; a new fast upload no longer takes an extra stripe slot past the cap),
+  `Environment=HS2_CS286_CALLAPART=0` (both sides; a call's copy sub may again be placed on the path of its other sub, as in rel69k);
 - **before rel69k** (cross-side call switch, darkcall switch coverage fixes): `Environment=HS2_XS261=0` (both sides;
   XS records are still parsed; the capability bit is no longer announced), `Environment=HS2_B262_COVER=0` (both sides);
   `HS2_B262_REPLACE` is off by default; `HS2_B262_WAIT_MS=0` gives back the unbounded darkwait (default 500 ms);
@@ -1129,6 +1140,7 @@ defaults; ...)`.
 | `HS2_XS261` (xs261, rel69k; cross-side call switch: a side that moves a call off a dark/txDark sub, or whose call receive is silent >= 800 ms while another sub's link receives, sends an XS record (kind 0x15 + seq) on the sub the peer should make its primary; the receiver switches through darkcall (resend of what the peer may lack), at most one act per 500 ms, stale seq ignored, never echoed; sent only to a peer announcing ext bit 14 (older peers, incl. r54c, never see the record); also b258's cs224 fix (a sub a darkcall switch chooses loses its "left" mark); `=0` gives back rel69j) | `1` | both |
 | `HS2_B262_COVER` (b262, rel69k; a darkcall switch trusts "the target holds it" only for bytes the target provably wrote or still queues, a ring that misses provably unconsumed bytes is short (not covered), a chunk's only copy never goes to a dark sub, and a call pair (3+ subs) never leaves a chunk on dark subs only (the writer waits, "darkwait"); `=0` gives back b261) | `1` | both |
 | `HS2_B262_WAIT_MS` (b262, rel69k; upper bound in ms of one darkwait episode; at the bound the chunk goes out as b261 sent it (counted "give"); `0` = no bound; default 500 since b266: unbounded, Kharej held sends up to 5 s in lab1) | `500` | both |
+| `HS2_B278_L3STALL` (b278, rel69l; the TUN lane moves an interactive flow off a link whose TCP has data in flight and no ack progress — RTO backoff, or bytes_acked still for max(400 ms, 3 srtt) — and the dup's second copy skips such a link; lab3 data-dark ping gaps; `=0` gives back the old pick) | `1` | both |
 | `HS2_B270_TXRES` (b270; a 2-sub call's copies that went only on a non-primary sub whose link is half dead — dc254 txDark (our sends frozen in RTO), or the link received nothing for darkcallAfter while the conn's receive advances over the other sub (the peer->us direction dead) — are resent on the live sub at the edge and every 300 ms while it lasts, repeats only past what was covered; data-dark lab3 ab270: 7-10 s call stalls on rel69j/b266 gone; `=0` gives back rel69k-pre) | `1` | both |
 | `HS2_B274_REPAIR` (b274, rel69k; a call conn left with one live sub (its second died) re-opens the second at the next manager tick when it was call-like within 5 s, instead of waiting for the lite sampler's two steady call-like windows (lab1 R1: ~48 s on one sub; a data cut on that sole sub had no darkcall candidate, 12.3 s stall); call budget and the 2 s reopen backoff still apply; `=0` gives back the sampler only) | `1` | Iran (edge) |
 | `HS2_B270_RECENT_MS` (b274, rel69k; a b270 resend takes only the half-dead sub's chunks sent within this many ms (plus its queue): lab1 one-direction cuts, the rx edge misfired on subs whose own direction worked and pushed 450-1260 old chunks in front of the live sub's call data; `0`/unset = default 600000 (in effect unbounded = b270); lab1 TH1 with 3000 resent 0 chunks in 15 edges, so turn it down only after a lab3 data-dark check) | `600000` | both |
@@ -1185,7 +1197,7 @@ defaults; ...)`.
 | `HS2_ST244_UPG_RATE` (st244..st246, rel69h; the edge paces lite raw->dual upgrades through one token bucket so a connection storm's second-sub upgrades spread over a few seconds; `auto` = max(500, 100 x GOMAXPROCS) a second, burst rate/10; call upgrades and interactive flows (`HS2_ST246_INTERACTIVE_BPS`, in-code 1000 B/s, `0` = off) are not paced; a number sets the rate, `=0` turns it off) | `auto` | Iran (edge) |
 | `HS2_LINK_CC_REFRESH` (us200/cc203, rel69a; a light link whose BBR left STARTUP with a collapsed estimate is re-inited by a reno->bbr toggle; `=0` turns it off) | `1` | both |
 
-The table is `hs2-src/envdef/envdef.go` row for row (105 keys). Not in it on
+The table is `hs2-src/envdef/envdef.go` row for row (111 keys). Not in it on
 purpose: `HS2_MCONN_STRIPE_JUMP_MS` (no proven gain). `HS2_QUEUE_CTL_UP` was
 opt-in until rel69a (rel58v measured echo p99 +10 ms without _KEEP); rel69a
 turns it on together with `_FAST` and `_KEEP` (CHANGELOG rel69a). Opt-in keys, off unless set
@@ -1219,6 +1231,12 @@ older behaviour.
 | `HS2_MCONN_CALL_RESEND` (r68fix, rel68b) | on (`=0` off) | both | a lite call's chunks are kept until TCP acked them and a dead sub's unacked ones are sent again on a live sub (with `HS2_MCONN_STRIPE_RESEND`); on Iran a sub given up by the stuck-call trigger whose close handshake never completed counts as unclean. Before, a call whose subs went dark was reset 10-30 s after the stuck-call give-up ("missing bytes never arrived"; rel67b too). The receiver drops what it already has by offset; no wire change |
 | `HS2_MCONN_DARKCALL_MS` (cs194, rel68b) | `1000` (clamped 300-5000) | both | the dark-evidence window of `HS2_MCONN_DARKCALL` |
 | `HS2_MCONN_STRIPE_DL_COPIES_MAX` (dl188) | `4` (`0` = no bound) | Iran (edge) | the cap of `HS2_MCONN_STRIPE_DL_COPIES` |
+| `HS2_UL268_RESCUE` (ul268, rel69l) | on (`=0` off) | Iran (edge) | data-dark path rescue: a link whose data is frozen (TCP_INFO: unacked and bytes_acked unchanged for >= max(1 s, 8 x srtt), or backoff >= 2) on 2 consecutive 250 ms watch ticks, while a link on another path still acks, joins the rescue set; only the Iran conns with a non-bulk sub on that link are visited (link index), a raw one is rescued only when its ring covers the link's SIOCOUTQ + 64 KB, calls are left to darkcall (dc254), the two exclude each other per conn for 1.5 s; a fast raw writer's ring grows to half a second of its rate (<= 8 MB per conn, <= min(256 MB, RAM/16) per process); logs "ul268: dark ..." and "ul268 scale: ..." |
+| `HS2_UL268_HOLD_MS` (ul268, rel69l) | `2000` | Iran (edge) | after a dark link's visit started a rescue, that link is not visited again for this long (it stays in the join avoid set) |
+| `HS2_UL281_SLOT` (ul281, rel69l) | on (`=0` off) | Iran (edge) | a NEW fast upload (raw sample >= 80 Mbit/s, raw conn younger than 20 s, first growth only) whose growth finds all 8 stripe slots held may take one of the 4 extra stripe slots that `HS2_MCONN_STRIPE_DL_FAIR` gives fast downloads (shared, bounded at 12 per process); before, every upload was refused and stayed on its raw first link (~200 Mbit/s at 80 ms once autowin cut the window to the 2 MiB base). lab2 ul281d, 10 interleaved off/on pairs: upload 229 -> 327 Mbit/s (+98, CI [+72, +123], 10/10), light p99 unchanged, 0 fails; logs "ul281: new upload took stripe slot ..."; no wire change |
+| `HS2_CS286_CALLAPART` (cs286, rel69l) | on (`=0` off) | both | a call's copy sub never rides the path of the call's other sub while another path exists: re-picked on a healthy other path, else a lowered/cooled one (a lowered path beats both copies on one path), else a degraded one; also when the call placement falls back to the plain pick; logs "cs286 kept/moved/nocand" in the "mconn call" 10 s line |
+| `HS2_B296_DCSKIP` (b296, rel69m) | on (`=0` off) | both | the darkcall timer (every 200 ms) skips a non-call conn proven idle: its last visit found nothing to do and every live sub fully consumed by the peer (written == consumed, none dark or capped, no outcome check due, no dc254 episode), and no write, new sub or call roll happened since (the conn's write sequence is unchanged); call conns are never skipped and every 25th tick (5 s) visits all conns. Cuts the timer's m.mu and ack-mark reads on idle conns (5-6 % CPU and late ticks at 2x load). lab3 sc4x: 7 interleaved 1x pairs neutral (all CIs straddle 0), 1.5x equal or better (crowd p99, stall seconds, 0 darkcall switches vs 3); the darkcall stats line ends "b296 skip N"; no wire change |
+| `HS2_GC296_RINGPOOL` (gc296, rel69m) | on (`=0` off) | both | rescue ring buffers (rescue/raw rings and rrBig rings) are taken from a sync.Pool per power-of-two size class (4 KB-8 MB) and returned when the ring is dropped, instead of a fresh make each time; the ring bytes still count against the existing budgets (rescue mem cap, `HS2_UL268_MEM_MB`, rrBig RAM-scaled) and a pooled buffer survives at most 2 GC cycles, so the pool is bounded by those budgets, not by user count. lab2 storm pairs: alloc -26..-50 %, kharej GC cycles -32 %, Iran RSS +137 MB, latency within noise; no wire change |
 | `HS2_UL257_STUCK` (ul257, rel69j) | on (`=0` off) | Iran (edge) | a raw upload whose writer sat blocked in its first sub's Write for >= 60 % of a full 1 s sample, under 30 Mbit/s, after >= 1 MB, opens its second stripe sub at once instead of waiting for 4 good samples (a sample that moved nothing counts as an upload); app-limited flows never block, so light users never trigger it; logs "ul257 stuck raw upload" |
 
 **Rescue: what it covers and its limits.** `HS2_MCONN_RESCUE` saves a
@@ -1585,6 +1603,14 @@ checklist in `docs/menu-m7-checklist.md`). The classic menu stays reachable:
 hs2-menu --classic    # the classic menu    (or HS2_MENU=classic hs2-menu)
 hs2-menu --new        # force the new menu  (or HS2_MENU=new hs2-menu)
 ```
+
+**Live load-balancing screen** (rel69m installer): new menu **3) Load balancing & IPs → l) Live view**, the classic
+LB screen (9), or straight from a shell with `hs2-menu lb [tunnel] [--once] [--view V]` or the one-word wrapper
+`hs2-menu-lb` (written to `/usr/local/bin/hs2-menu-lb` by install/upgrade, removed by uninstall). One row per Iran IP
+sorted by traffic, with share, links live/target, down/up Mbit/s, streams, loss (the worse of down and up; `N↑` marks
+upload loss), RTT, path MTU (lowest direction, red under 1280) and the automatic cuts of the last 24 h; cut or idle IPs
+on one dim line, then the Kharej IPs and the LB verdicts. Keys: `p` per-path table, `m` matrix, `k` Kharej IPs, `h` help,
+Enter back. It reads the same data as `hs2 lb show --status` and changes nothing.
 
 `c` in the new menu opens the classic one and `n` there comes back;
 **9) Menu settings → hs2-menu opens** switches the default

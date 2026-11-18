@@ -145,7 +145,9 @@ func (m *mConn) writeRaw(p []byte) (int, error, bool) {
 		return 0, nil, false
 	}
 	t0 := m.ul257WriteStart()
+	m.dcWrBump() // b296
 	n, err := m.raw1.rw.Write(p)
+	m.dcWrBump()
 	m.ul257WriteEnd(t0)
 	m.rawSent.Add(int64(n))
 	if m.ring.on && n > 0 {

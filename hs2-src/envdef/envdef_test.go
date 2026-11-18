@@ -160,7 +160,7 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 105 {
-		t.Fatalf("table has %d keys, want 105", len(Table))
+	if len(Table) != 111 {
+		t.Fatalf("table has %d keys, want 111", len(Table))
 	}
 }

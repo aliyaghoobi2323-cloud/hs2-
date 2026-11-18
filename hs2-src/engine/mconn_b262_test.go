@@ -23,6 +23,7 @@ func TestB262ClaimNeedsWritten(t *testing.T) {
 		func() error { return xfer(exit, data, 2000, 0) },
 		func() error { return readN(iran, data) },
 	)
+	b262WaitQDrained(t, exit)
 	exit.mu.Lock()
 	p := exit.primary.Load()
 	var to *msub
@@ -102,6 +103,7 @@ func TestB262RingShortNotCovered(t *testing.T) {
 		func() error { return xfer(exit, data, 2000, 0) },
 		func() error { return readN(iran, data) },
 	)
+	b262WaitQDrained(t, exit)
 	exit.mu.Lock()
 	p := exit.primary.Load()
 	var to *msub
@@ -307,6 +309,7 @@ func TestB262WaitBound(t *testing.T) {
 		func() error { return xfer(exit, warm, 2000, 0) },
 		func() error { return readN(iran, warm) },
 	)
+	b262WaitQDrained(t, exit)
 	exit.mu.Lock()
 	p := exit.primary.Load()
 	var to *msub
@@ -409,4 +412,22 @@ func TestB262WaitDefault(t *testing.T) {
 			t.Fatalf("HS2_B262_WAIT_MS=%q: %d, want %d", v, got, want)
 		}
 	}
+}
+
+// b262WaitQDrained waits until no live sub of m holds queued chunks. readN
+// returns once the peer has every byte (from the primary); a copy sub's writer
+// may still hold queued duplicates for a moment, more so under load (the ~1/60
+// "setup:" flake of TestB262ClaimNeedsWritten, to.q non-empty).
+func b262WaitQDrained(t *testing.T, m *mConn) {
+	t.Helper()
+	waitFor(t, 5*time.Second, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for _, s := range m.rrLiveSubsLocked() {
+			if len(s.q) != 0 {
+				return false
+			}
+		}
+		return true
+	})
 }

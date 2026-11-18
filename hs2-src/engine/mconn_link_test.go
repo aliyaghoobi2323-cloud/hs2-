@@ -319,6 +319,7 @@ func TestMConnTable(t *testing.T) {
 	stop := make(chan struct{})
 	// a join before its first sub waits for it
 	mc := newMConnExit(1)
+	closeAtEnd(t, mc)
 	got := make(chan *mConn, 1)
 	go func() { got <- tb.join(1, 5*time.Second, stop) }()
 	time.Sleep(50 * time.Millisecond)
@@ -333,13 +334,17 @@ func TestMConnTable(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("join did not wake on create")
 	}
-	if tb.create(1, newMConnExit(1)) {
+	dup := newMConnExit(1)
+	closeAtEnd(t, dup)
+	if tb.create(1, dup) {
 		t.Fatal("a live id was taken twice")
 	}
 	if tb.join(1, time.Second, stop) != mc {
 		t.Fatal("join after create")
 	}
-	tb.remove(1, newMConnExit(1)) // not this connection: kept
+	other := newMConnExit(1)
+	closeAtEnd(t, other)
+	tb.remove(1, other) // not this connection: kept
 	if tb.size() != 1 {
 		t.Fatal("removed another connection's entry")
 	}
@@ -501,7 +506,7 @@ func TestMConnTableJoinWaitsFirstAttach(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
 	mc := newMConnExit(7)
-	defer mc.Close()
+	closeAtEnd(t, mc)
 	if !tb.reserve(7, mc) {
 		t.Fatal("reserve refused")
 	}
@@ -527,7 +532,9 @@ func TestMConnTableJoinWaitsFirstAttach(t *testing.T) {
 			}
 		}(got, wait)
 	}
-	if tb.reserve(7, newMConnExit(7)) {
+	dup := newMConnExit(7)
+	closeAtEnd(t, dup)
+	if tb.reserve(7, dup) {
 		t.Fatal("a reserved id was taken twice")
 	}
 	// a reserved connection removed before publish: its joins get nil

@@ -12,6 +12,7 @@
 #  travels in the link, with the tunnel's own tun subnet.
 #      hs2-menu                   (this menu, installed locally by setup/upgrade)
 #      hs2-menu --classic         (the classic menu; the redesigned one is the default since M7, --new forces it)
+#      hs2-menu lb [tunnel]       (the live load-balancing screen; --once prints one frame; also hs2-menu-lb)
 # ============================================================================
 set -euo pipefail
 # Create every file and directory root-only by default (configs hold the tunnel
@@ -2656,7 +2657,7 @@ uninstall(){
   read -rp "Also remove the hs2 program and the hs2-menu command? Keep them (Enter) to set up again without a download [y/N]: " a </dev/tty || a=""
   case "$a" in
     y|Y|yes)
-      rm -f "$BIN" "$MENU_BIN"
+      rm -f "$BIN" "$MENU_BIN" "$MENU_LB_BIN"
       ok "Removed $BIN and $MENU_BIN — hs2 is gone from this server (backups aside)." ;;
     *) info "Kept $BIN and $MENU_BIN (run hs2-menu to set up again)." ;;
   esac
@@ -2709,6 +2710,7 @@ status(){
 # if it fails) and follow its log. Tunnels are found from their systemd units,
 # so this works for hs2.service today and hs2-<name>.service later.
 MENU_BIN=/usr/local/bin/hs2-menu
+MENU_LB_BIN=/usr/local/bin/hs2-menu-lb   # wrapper: exec hs2-menu lb
 
 # Colours for the manager screens (stderr, like the rest of the UI).
 C_G=$'\033[1;32m'; C_R=$'\033[1;31m'; C_Y=$'\033[1;33m'; C_B=$'\033[1;34m'; C_D=$'\033[2m'; C_0=$'\033[0m'
@@ -4480,15 +4482,39 @@ lb_get_cert(){
   ok "$ip now uses $cf (apply with 8 to put it into use)."
 }
 
-# lb_live_render UNIT STATUSFILE: one screen of the per-path live view from
-# the status file (lb_paths / lb_total, see cmd/hs2/status.go), parsed with
-# python3's json, so no JSON escape (>) reaches the screen. An older hs2
-# without lb_paths gets its one-line summary and a note.
+# lb_live_render UNIT STATUSFILE [VIEW]: one screen of the live load-balancing
+# view from the status file (lb_paths / lb_pairs / lb_total / lb_report, see
+# cmd/hs2/status.go), parsed with python3's json, so no JSON escape (>) reaches
+# the screen. VIEW: main (default: a 2-line header, one table per Iran IP,
+# the cut / idle IPs on one line, the Kharej IPs, at most 2 verdicts), paths
+# (the full per-path table), matrix (Iran IP x Kharej IP), kharej (the full
+# Kharej-IP table) or help (main + the legend). CUTSFILE (4th): `hs2 lb
+# history` output for the CUTS column. Width: $COLUMNS, else the
+# terminal's; under 100 columns RTT and then UP are left out. A locale that is
+# not UTF-8 gets ASCII ('*' dots, '#' bars). An older hs2 without lb_paths
+# gets its one-line summary and a note.
 lb_live_render(){
+  LB_VIEW="${3:-main}" LB_CUTS="${4:-}" LB_PARK="${HS2_PARK_DIR:-/var/lib/hs2}/lb-park-${1%.service}.json" \
+  LB_COLS="${COLUMNS:-}" LB_LOC="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" \
   C_R="$C_R" C_Y="$C_Y" C_G="$C_G" C_B="$C_B" C_D="$C_D" C_0="$C_0" python3 - "$1" "$2" <<'PY' >&2
 import json, os, re, sys, time, datetime
 unit, path = sys.argv[1], sys.argv[2]
+view = os.environ.get("LB_VIEW") or "main"
 R, Y, G, B, D, Z = (os.environ.get(k, "") for k in ("C_R", "C_Y", "C_G", "C_B", "C_D", "C_0"))
+# the locale as the shell has it (python coerces a C locale to UTF-8)
+loc = os.environ.get("LB_LOC", "")
+UTF = bool(re.search(r"utf-?8", loc, re.I)) and not os.environ.get("HS2_ASCII")
+try:
+    COLS = int(os.environ.get("LB_COLS") or 0) or os.get_terminal_size(2).columns
+except Exception:
+    COLS = 100
+COLS = max(60, COLS)
+ASCII = str.maketrans({"·": "|", "→": "->", "—": "-", "–": "-", "…": "~", "✓": "ok", "✗": "no",
+                       "●": "*", "↓": "dn", "↑": "up", "×": "x", "─": "-", "▏": "#"})
+_print = print
+def print(*a):
+    s = " ".join(str(x) for x in a)
+    _print(s if UTF else s.translate(ASCII).encode("ascii", "replace").decode())
 try:
     st = json.load(open(path))
 except Exception:
@@ -4498,13 +4524,15 @@ paths, tot = st.get("lb_paths") or [], st.get("lb_total")
 side = st.get("lb_side", "")
 iran_side = st.get("role") == "Iran side"
 rep = st.get("lb_report") or {}
+auto = st.get("lb_mode") == "auto"
 
-def ago(t):
+def ago(t, short=False):
     d = max(0, int(time.time()) - int(t))
-    if d < 60: return "%ds ago" % d
-    if d < 3600: return "%dm ago" % (d // 60)
-    if d < 86400: return "%dh %dm ago" % (d // 3600, d % 3600 // 60)
-    return "%dd ago" % (d // 86400)
+    if d < 60: s = "%ds" % d
+    elif d < 3600: s = "%dm" % (d // 60)
+    elif d < 86400: s = "%dh %dm" % (d // 3600, d % 3600 // 60)
+    else: s = "%dd" % (d // 86400)
+    return s if short else s + " ago"
 
 def gotime(s):
     # Go's RFC 3339 with nanoseconds -> unix seconds (None if unparsable)
@@ -4516,42 +4544,41 @@ def gotime(s):
     except Exception:
         return None
 
-src = {"advert": "the other server's announcement", "local": "this config",
-       "announces": "this config (announced to the other server)"}.get(st.get("lb_source", ""), "")
-sidetxt = {"dial": "dials the paths", "listen": "listens on the addresses"}.get(side, "")
-head = [st.get("role") or "?", st.get("dir") or "?"]
-if sidetxt: head.append(sidetxt)
-print("  Tunnel:     %s%s%s · %s" % (B, unit, Z, " · ".join(head)))
-if st.get("lb_mode"):
-    m = st["lb_mode"]
-    txt = " (shares follow path quality)" if m == "auto" else " (shares as set)"
-    if m == "auto" and st.get("lb_auto2"):
-        txt = " — fast (5 s readings, lossy paths cut at once)"
-    if st.get("lb_mode_from") == "peer":
-        txt += " · as the Kharej server (it dials) reports it"
-    print("  Mode:       " + m + txt)
-if src:
-    print("  Addresses:  from " + src)
-if st.get("lb_reload"):
-    peer = "announcement support not known yet"
-    if st.get("lb_peer_advert"):
-        peer = "reads this tunnel's announcements"
-    if st.get("lb_peer_at"):
-        peer += " · last exchange " + ago(st["lb_peer_at"])
-    rt = gotime(rep.get("at")) if rep else None
-    if rt:
-        peer += " · path report " + ago(rt)
-    print("  Peer:       " + peer)
-if st.get("lb_loaded_at"):
-    print("  Last load:  " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["lb_loaded_at"])) + " (" + ago(st["lb_loaded_at"]) + ", the config)")
-if st.get("lb_note"):
-    print("  %sNote: %s%s" % (Y, st["lb_note"], Z))
-if st.get("lb_rejected"):
-    print("  %sThe other server's announcement was rejected: %s%s" % (R, st["lb_rejected"], Z))
-for v in st.get("lb_verdicts") or []:
-    print("  %sVerdict:    %s%s" % (R, v, Z))
-print()
+def vlen(s):  # visible length (no colour codes)
+    return len(re.sub(r"\033\[[0-9;]*m", "", s))
+
+# ---- header: what, how, the other server ---------------------------------
+# the dialing side's path report (listening side): its age, and stale when
+# older than the engine's 15 s (lbReportFresh) or when the edge says so
+# (auto_reason "report stale": it steers by the shares as set meanwhile)
+RT = gotime(rep.get("at")) if rep else None
+STALE = (RT is not None and (st.get("updated") or time.time()) - RT > 15) or any(
+    (p.get("auto_reason") or "") == "report stale" for p in (paths or []) + (st.get("lb_pairs") or []))
+def header():
+    who = []
+    if st.get("role"): who.append(st["role"])
+    if side: who.append({"dial": "dials", "listen": "listens"}.get(side, side))
+    parts = [B + unit + Z, ", ".join(who) or "?"]
+    if st.get("lb_mode"):
+        m = st["lb_mode"]
+        if auto and st.get("lb_auto2"): m += " (fast)"
+        parts.append("mode " + m)
+    if st.get("lb_reload"):
+        pa = st.get("lb_peer_advert")
+        peer = ("peer " + (G + "✓ " + Z if UTF else "") + "reads announcements") if pa else \
+               ("peer " + Y + "✗" + Z + " does not read announcements") if pa is False else "peer: not known yet"
+        if STALE:
+            peer += " · " + Y + "report stale" + (" (" + ago(RT) + ")" if RT else "") + Z
+        elif RT:
+            peer += " · report " + ago(RT)
+        elif st.get("lb_peer_at"):
+            peer += " · exchange " + ago(st["lb_peer_at"])
+        parts.append(peer)
+    print("  " + " · ".join(parts))
+
 if not paths:
+    header()
+    print()
     txt = st.get("lb_text", "")
     if txt:
         print("  " + txt)
@@ -4565,27 +4592,415 @@ if not paths:
 
 def mbit(x):
     return "%.1f" % x if x < 1000 else "%.0f" % x
+
+# ---- path MTU (mt135: pmtu_down / pmtu_up per path, as `hs2 lb show`) -------
+# per reading: the median and its lowest link; low = a median under 1280
+# (red), a link under 1280 or a drop in the last 10 min (pmtuRecent: yellow)
+def pmtu(p):
+    """(median: the lower of the two directions, lowest link when lower than
+    that median or 0, level 0/1/2, "d/u" medians) or None without a reading"""
+    xs = [x for x in (p.get("pmtu_down"), p.get("pmtu_up")) if x]
+    if not xs: return None
+    med = min(x.get("pmtu_med", 0) for x in xs)
+    lows = [x.get("pmtu_min", 0) for x in xs if 0 < x.get("pmtu_min", 0) < x.get("pmtu_med", 0)]
+    lo = min(lows) if lows else 0
+    lvl = 2 if med and med < 1280 else 0
+    if not lvl and ((lo and lo < 1280) or any(x.get("pmtu_drops") and x.get("last_drop_s", 10**9) < 600 for x in xs)):
+        lvl = 1
+    f = lambda x: str(x.get("pmtu_med", 0)) if x else "-"
+    return med, lo, lvl, f(p.get("pmtu_down")) + "/" + f(p.get("pmtu_up"))
+def mtu_txt(med, lo):
+    return "-" if not med else str(med) + (" (min %d)" % lo if lo else "")
+
+# ---- cuts in the last 24 h: `hs2 lb history` (the judge's journal lines,
+# per "local>remote" pair as the dialing side names it), cached by lb_live
+# every 60 s in LB_CUTS; no file = no CUTS column
+CUTS = None
+try:
+    if os.environ.get("LB_CUTS"):
+        CUTS = {}
+        for ln in open(os.environ["LB_CUTS"]):
+            m = re.match(r"^(\S+)>(\S+)\s+cuts:\s+(\d+)\s*$", ln)
+            if m: CUTS[(m.group(1), m.group(2))] = CUTS.get((m.group(1), m.group(2)), 0) + int(m.group(3))
+except Exception:
+    CUTS = None
+def cuts_of(a, b):
+    """cuts of every pair a row covers (either side may list several IPs;
+    the journal names the pair from the dialing side: both orders count)"""
+    if CUTS is None: return None
+    n = 0
+    for x in (a or "").split(","):
+        for y in (b or "").split(","):
+            x, y = x.strip(), y.strip()
+            n += CUTS.get((x, y), 0) + (CUTS.get((y, x), 0) if x != y else 0)
+    return n
+
+# ---- parked IPs (`hs2 lb park`: weight 0 until a time, restored by a timer)
+try:
+    PARKS = [q for q in json.load(open(os.environ.get("LB_PARK", ""))) if q.get("ip")]
+except Exception:
+    PARKS = []
+
+# ---- per Iran IP / per Kharej IP, from the (Iran IP, Kharej IP) pairs ------
+pairs = st.get("lb_pairs") or paths
+iran_dials = (iran_side and side == "dial") or (not iran_side and side == "listen")
+def ik(p):
+    l, r = p.get("local", ""), p.get("remote", "")
+    if l == "*": l = "(default)"
+    return (l, r) if iran_side else (r, l)
+# the dialing side's report (listening side): its sender loss and cuts per pair
+rp = {}
+for q in [] if STALE else rep.get("paths") or []:  # a stale report: none of its figures
+    a, b = q.get("local", ""), q.get("remote", "")
+    rp[(a, b) if iran_dials else (b, a)] = q
+def sloss(p, i, k):
+    """the sender's down loss of a pair: (value or None, estimate?)"""
+    v = p.get("loss_down_pct")
+    if v is not None and p.get("loss_down_src") != "receiver":
+        return v, False
+    q = rp.get((i, k))
+    if q and (q.get("raw_pct", 0) >= 0 or q.get("loss_pct")):
+        return q.get("loss_pct", 0), False
+    m = re.search(r"loss (\d+(?:\.\d+)?)%", p.get("auto_reason", ""))
+    if m:
+        return float(m.group(1)), False
+    return (v, True) if v is not None else (None, False)
+def is_cut(p, i, k):
+    q = rp.get((i, k))
+    return (p.get("auto_reason") or "").startswith("cut") or bool(q and q.get("cut"))
+
+def agg(keyf, skip=()):
+    """rows per IP; pairs whose Iran IP is in skip (cut as a whole) do not
+    colour the row (a Kharej IP is not to blame for a cut Iran IP)"""
+    out, order = {}, []
+    for p in pairs:
+        i, k = ik(p)
+        key = keyf(i, k)
+        if not key: continue
+        if key not in out:
+            out[key] = []; order.append(key)
+        out[key].append((p, i, k))
+    rows = []
+    for key in order:
+        ps = out[key]
+        r = {"ip": key, "n": len(ps), "links": 0, "tgt": 0, "users": 0, "dn": 0.0, "up": 0.0, "share": 0.0,
+             "mtu": 0, "mtulo": 0, "mtulvl": 0, "mtulow": 0, "cuts": None if CUTS is None else 0}
+        lw, ls, est, rw, rs, ncut, cutl = 0.0, 0.0, False, 0, 0.0, 0, []
+        ulw, uls = 0.0, 0.0
+        red, yel = [], []
+        for p, i, k in ps:
+            r["links"] += p.get("links", 0); r["users"] += p.get("users", 0); r["tgt"] += p.get("target", 0)
+            m = pmtu(p)
+            if m:
+                med, lo, ml, _ = m
+                if med and (not r["mtu"] or med < r["mtu"]): r["mtu"] = med
+                if lo and (not r["mtulo"] or lo < r["mtulo"]): r["mtulo"] = lo
+                r["mtulvl"] = max(r["mtulvl"], min(ml, 1)); r["mtulow"] += ml == 2
+            if CUTS is not None:
+                r["cuts"] += cuts_of(i if i != "(default)" else "", k)
+            r["dn"] += p.get("down_mbit", 0); r["up"] += p.get("up_mbit", 0)
+            r["share"] += (p.get("eff_pct") if auto and p.get("eff_pct") is not None else p.get("share_pct", 0)) or 0
+            if p.get("loss_up_pct") is not None:   # ↑: the Iran side's resends (where it reads them)
+                uw = max(p.get("up_mbit", 0), 0.01); ulw += uw; uls += p["loss_up_pct"] * uw
+            v, e = sloss(p, i, k)
+            if v is not None:
+                w = max(p.get("down_mbit", 0), 0.01)
+                lw += w; ls += v * w; est = est or e
+            if p.get("rtt_p50_ms"):
+                w = max(p.get("links", 0), 1); rw += w; rs += p["rtt_p50_ms"] * w
+            stt = p.get("state", "ok")
+            if i in skip: continue
+            if is_cut(p, i, k):
+                ncut += 1
+                if v is not None: cutl.append(v)
+            elif stt == "cooling": red.append("cooling %ds" % p.get("cooled_s", 0))
+            elif stt == "no-peer": red.append("no lb on peer")
+            elif stt == "probing": yel.append("probing")
+            elif stt == "draining": yel.append("removed")
+            elif (p.get("auto_reason") or "") == "recovering": yel.append("recovering")
+            elif p.get("auto_factor") and p["auto_factor"] < 0.9: yel.append("lowered")
+            if p.get("degraded") or p.get("suspect"):
+                yel.append("replacing %d" % (p.get("degraded", 0) + p.get("suspect", 0)))
+            if p.get("fails"): yel.append("dial fails %d" % p["fails"])
+        if r["mtulo"] and r["mtu"] and r["mtulo"] >= r["mtu"]: r["mtulo"] = 0
+        r["loss"] = ls / lw if lw else None
+        r["uloss"] = uls / ulw if ulw else None
+        r["est"] = est
+        r["rtt"] = rs / rw if rw else None
+        r["cut"] = ncut == len(ps)
+        r["dead"] = r["cut"] or (red and len(red) == len(ps))
+        st_ = []
+        if ncut == len(ps):
+            st_.append((2, "cut %.0f%%" % max(cutl) if cutl else "cut"))
+        elif ncut:
+            st_.append((1, "cut %d/%d" % (ncut, len(ps))))
+        # a state held by only some of a row's pairs says how many (a Kharej IP over
+        # 11 Iran IPs: "lowered 1/11", not "lowered")
+        cnt = lambda l, s: ("%s %d/%d" % (s, l.count(s), len(ps))) if 1 < len(ps) and l.count(s) < len(ps) else s
+        for s in dict.fromkeys(red): st_.append((2, cnt(red, s)))
+        for s in dict.fromkeys(yel): st_.append((1, cnt(yel, s)))
+        # low MTU (a median under 1280): red when every pair of the row has it, else
+        # yellow with how many ("low MTU 1200 1/11" on a Kharej IP)
+        if r["mtulow"]:
+            if r["mtulow"] == len(ps): r["mtulvl"] = 2
+            st_.append((1, "low MTU %d" % r["mtu"] + ("" if r["mtulow"] == len(ps) else " %d/%d" % (r["mtulow"], len(ps)))))
+        if (r["uloss"] or 0) > 3 and r["uloss"] > (r["loss"] or 0):   # the upload is the problem
+            st_.insert(0, (2 if r["uloss"] > 5 else 1, "↑ loss %.0f%%" % r["uloss"]))
+        st_ = st_[:2] or [(0, "ok")]
+        r["state"] = ", ".join(s for _, s in st_)
+        lvl = max(c for c, _ in st_)
+        lo = max(r["loss"] or 0, r["uloss"] or 0)   # the worse direction
+        if lo > 5 and r["users"]: lvl = 2
+        elif lo > 3: lvl = max(lvl, 1)
+        r["lvl"], r["col"] = lvl, (G, Y, R)[lvl]
+        rows.append(r)
+    rows.sort(key=lambda r: (-r["dn"], -r["users"], -r["share"]))
+    if rows and not sum(r["share"] for r in rows):
+        nl = sum(r["links"] for r in rows)
+        for r in rows: r["share"] = 100.0 * r["links"] / nl if nl else 0
+    return rows
+
+single = lambda s: s if s and "," not in s else None
+ir_rows = agg(lambda i, k: single(i))
+kh_rows = agg(lambda i, k: single(k), {r["ip"] for r in ir_rows if r["dead"]})
+
+def short_ip(ip, w):
+    if len(ip) <= w: return ip
+    if ":" in ip:
+        g = [x for x in ip.split(":")]
+        head, tail = ":".join(g[:2]), g[-1]
+        s = head + "…:" + tail
+        if len(s) <= w: return s
+    return ip[:w - 1 - 4] + "…" + ip[-4:]
+
+def bar(pct, top, w=10):
+    if top <= 0: top = 100
+    f = max(0.0, min(1.0, pct / top))
+    if UTF:
+        e = int(round(f * w * 8))
+        if pct > 0 and e == 0: e = 1
+        s = "█" * (e // 8) + ("" if e % 8 == 0 else " ▏▎▍▌▋▊▉"[e % 8])
+        return s + D + "·" * (w - len(s)) + Z
+    n = int(round(f * w))
+    if pct > 0 and n == 0: n = 1
+    return "#" * n + D + "." * (w - n) + Z
+
+# ---- the totals (header line 2) -------------------------------------------
+t = tot or {}
+# per path "users" are user STREAMS on both sides (ou180: with mconn a
+# connection rides 2+ subs); the top-level "users" is connections on the
+# Kharej side and streams on the Iran side (users_kind), whose connections
+# are mconn_open
+streams = sum(r["users"] for r in ir_rows) or t.get("users", 0)
+if st.get("users_kind") == "streams":
+    users = st.get("mconn_open") or 0
+    utxt = ("%d users · %d streams" % (users, st.get("users", 0))) if users else "%d streams" % st.get("users", streams)
+else:
+    users = st.get("users", 0) if "users" in st else streams
+    utxt = "%d users" % users
+dn = t.get("down_mbit", sum(r["dn"] for r in ir_rows))
+up = t.get("up_mbit", sum(r["up"] for r in ir_rows))
+lw = [(r["loss"], max(r["dn"], 0.01)) for r in ir_rows if r["loss"] is not None]
+oloss = sum(a * w for a, w in lw) / sum(w for _, w in lw) if lw else t.get("loss_down_pct")
+live = [r for r in ir_rows if not r["dead"] and (r["links"] or r["users"])]
+# degraded: the overall loss, no live IP, a rejected announcement, or red IPs
+# carrying over a quarter of the users or the traffic (a few users left on a
+# cut IP are the auto doing its job: watching)
+redu = sum(r["users"] for r in ir_rows if r["lvl"] == 2); redd = sum(r["dn"] for r in ir_rows if r["lvl"] == 2)
+if (oloss or 0) > 5 or not live or st.get("lb_rejected") or redu > 0.25 * max(streams, 1) or redd > 0.25 * max(dn, 0.01):
+    word, wc = "degraded", R
+elif (oloss or 0) > 3 or any(r["lvl"] for r in ir_rows) or STALE:
+    word, wc = "watching", Y
+else:
+    word, wc = "healthy", G
+
+def health():
+    s = "  %s● %s%s   %s   ↓ %s  ↑ %s Mbit/s" % (
+        wc, word, Z, utxt, mbit(dn), mbit(up))
+    if oloss is not None:
+        s += "   loss %.1f%%" % oloss
+    print(s)
+
+# ---- the main table --------------------------------------------------------
+# columns in five groups — identity | share, links | traffic | quality: loss,
+# RTT, MTU | cuts, state — split by a dim rule; units live in the headers
+# (cells are bare numbers). Narrow terminals drop RTT, CUTS, UP, MTU, then
+# LINKS, in that order; a column nobody has a reading for is left out.
+ipw = min(22, max([15] + [len(r["ip"]) for r in ir_rows + kh_rows]))
+GROUP = {"ip": 0, "share": 1, "links": 1, "dn": 2, "up": 2, "users": 2, "loss": 3, "rtt": 3, "mtu": 3, "cuts": 4, "state": 4}
+anyr = ir_rows + kh_rows
+mtuw = max([4] + [len(mtu_txt(r["mtu"], r["mtulo"])) for r in anyr])
+def cols_for(width):
+    cs = [("ip", ipw), ("share", 15), ("links", 7), ("dn", 7), ("up", 7), ("users", 7),
+          ("loss", 6), ("rtt", 6), ("mtu", mtuw), ("cuts", 4), ("state", 12)]
+    if all(r["rtt"] is None for r in anyr): cs = [c for c in cs if c[0] != "rtt"]
+    if all(r["loss"] is None and r["uloss"] is None for r in anyr): cs = [c for c in cs if c[0] != "loss"]
+    if all(not r["mtu"] for r in anyr): cs = [c for c in cs if c[0] != "mtu"]
+    if CUTS is None: cs = [c for c in cs if c[0] != "cuts"]
+    def need(cs):
+        g = len({GROUP[k] for k, _ in cs})
+        return 4 + sum(w + 1 for _, w in cs) + 2 * (g - 1)
+    for drop in ("rtt", "cuts", "up", "mtu", "links"):
+        if need(cs) <= width: break
+        cs = [c for c in cs if c[0] != drop]
+    return cs
+COLSET = cols_for(COLS)
+SEP = D + ("│" if UTF else "|") + Z
+def joincols(parts):
+    """the cells of COLSET joined, a rule between groups"""
+    out, last = "", None
+    for (key, _), c in zip(COLSET, parts):
+        if last is not None:
+            out += (" " + SEP + " ") if GROUP[key] != last else " "
+        out += c; last = GROUP[key]
+    return out
+def cell(r, key, w, top):
+    if key == "ip": return short_ip(r["ip"], w).ljust(w)
+    if key == "share": return bar(r["share"], top) + ("%4.0f%%" % r["share"])
+    if key == "links":
+        c = ("%d/%d" % (r["links"], r["tgt"])).rjust(w)
+        off = r["tgt"] > 0 and abs(r["links"] - r["tgt"]) > max(1, round(0.1 * r["tgt"]))
+        return (Y + c + Z) if off else c
+    if key == "users": return str(r["users"]).rjust(w)
+    if key == "dn": return mbit(r["dn"]).rjust(w)
+    if key == "up": return mbit(r["up"]).rjust(w)
+    if key == "loss":
+        # the worse of ↓ and ↑; ↑ marked (an upload problem: Iran → Kharej resends)
+        d, u = r["loss"], r["uloss"]
+        if d is None and u is None: return "-".rjust(w)
+        # ↑ only when it is the worse and at least 1 % (a smaller ↑ resend rate is
+        # noise next to ↓; [p] shows both)
+        up = u is not None and u >= 1 and (d is None or u > d)
+        if d is None and not up: return "-".rjust(w)
+        v = u if up else d
+        t_ = "%.1f" % v + ("↑" if up else "")
+        if r["est"] and not up and len(t_) < w: t_ = "~" + t_
+        c = t_.rjust(w)
+        return (R + c + Z) if v > 5 else (Y + c + Z) if v > 3 else c
+    if key == "rtt": return ("-" if r["rtt"] is None else "%.0f" % r["rtt"]).rjust(w)
+    if key == "mtu":
+        c = mtu_txt(r["mtu"], r["mtulo"]).ljust(w)
+        return (R + c + Z) if r["mtulvl"] == 2 else (Y + c + Z) if r["mtulvl"] == 1 else c
+    if key == "cuts":
+        c = ("-" if r["cuts"] is None else str(r["cuts"])).rjust(w)
+        return (Y + c + Z) if r["cuts"] else c
+    if key == "state":
+        c = r["col"] if r["state"] != "ok" else G
+        return c + r["state"] + Z
+TITLES = {"share": "SHARE %", "links": "LINKS", "users": "STREAMS", "dn": "↓Mbit/s", "up": "↑Mbit/s",
+          "loss": "LOSS %", "rtt": "RTT ms", "mtu": "MTU", "cuts": "CUTS", "state": "STATE"}
+LEFT = ("ip", "share", "mtu", "state")
+def title_row(label):
+    out = []
+    for key, w in COLSET:
+        t_ = label if key == "ip" else TITLES[key]
+        if not UTF and key in ("dn", "up"): t_ = {"dn": "DN Mb/s", "up": "UP Mb/s"}[key]
+        out.append(B + (t_.ljust(w) if key in LEFT else t_.rjust(w)) + Z)
+    print("    " + joincols(out))
+def row(r, top):
+    cs = [cell(r, k, w, top) for k, w in COLSET]
+    line = "  " + r["col"] + "●" + Z + " " + joincols(cs)
+    over = vlen(line) - (COLS - 1)
+    if over > 0 and COLSET[-1][0] == "state" and len(r["state"]) > 4:   # the state is last: cut it to fit
+        s = r["state"][:max(4, len(r["state"]) - over - 1)] + "…"
+        cs[-1] = (r["col"] if r["state"] != "ok" else G) + s + Z
+        line = "  " + r["col"] + "●" + Z + " " + joincols(cs)
+    print(line)
+
+def main_table():
+    shown = [r for r in ir_rows if not (r["dead"] and not r["users"]) and (r["links"] or r["users"] or r["dn"] >= 0.05)]
+    rest = [r for r in ir_rows if r not in shown]
+    top = max([r["share"] for r in ir_rows] or [100])   # each table scaled to its largest
+    title_row("IRAN IP")
+    for r in shown: row(r, top)
+    if rest:
+        cut = [r for r in rest if r["dead"]]
+        idle = [r for r in rest if not r["dead"]]
+        what = []
+        if cut: what.append("%d cut" % len(cut))
+        if idle: what.append("%d without links" % len(idle))
+        ips = [short_ip(r["ip"], ipw) for r in cut + idle]
+        ls = [r["loss"] for r in rest if r["loss"] is not None]
+        tail = ""
+        if ls:
+            lo, hi = min(ls), max(ls)
+            tail = " — loss %.0f%%" % lo if round(lo) == round(hi) else " — loss %.0f–%.0f%%" % (lo, hi)
+        head = "  " + D + "○ " if UTF else "  " + D + "o "
+        head += ", ".join(what) + " (no traffic): "
+        room = COLS - vlen(head) - len(tail) - 2
+        txt = ""
+        for n, ip in enumerate(ips):
+            add = (" · " if txt else "") + ip
+            if len(txt) + len(add) > room:
+                txt += " +%d" % (len(ips) - n); break
+            txt += add
+        print(head + txt + tail + Z)
+    if kh_rows and (len(kh_rows) > 1 or len(ir_rows) > 1):
+        print()
+        title_row("KHAREJ IP")
+        ktop = max([r["share"] for r in kh_rows] or [100])
+        for r in kh_rows[:3]: row(r, ktop)
+        if len(kh_rows) > 3:
+            print("  " + D + "  +%d more Kharej IPs: [k]" % (len(kh_rows) - 3) + Z)
+    if PARKS:
+        now = time.time()
+        ps = ["%s until %s" % (q["ip"], time.strftime("%H:%M", time.localtime(q.get("until", 0)))) +
+              (" (restore failed %d×: hs2 lb unpark)" % q["tries"] if q.get("tries", 0) >= 3 else "")
+              for q in PARKS if q.get("until", 0) > now - 3600]
+        if ps:
+            print("  " + Y + "parked: " + " · ".join(ps) + Z)
+
+# ---- verdicts: at most 2 short lines, deduplicated -------------------------
+def verdicts():
+    out = []
+    if st.get("lb_rejected"):
+        out.append((R, "The other server's announcement was rejected: " + st["lb_rejected"]))
+    vs = list(dict.fromkeys((st.get("lb_verdicts") or []) + (rep.get("verdicts") or [])))
+    grp, other = {}, []
+    for v in vs:
+        m = re.match(r"(\w+) IP (\S+) lossy on every (\w+) IP", v)
+        if m:
+            grp.setdefault((m.group(1).capitalize(), m.group(3).capitalize()), []).append(m.group(2))
+        else:
+            other.append(v)
+    byip = {r["ip"]: r for r in ir_rows + kh_rows}
+    for (a, b), ips in grp.items():
+        ips = list(dict.fromkeys(ips))
+        ls = [byip[i]["loss"] for i in ips if i in byip and byip[i]["loss"] is not None]
+        lt = ""
+        if ls:
+            lo, hi = min(ls), max(ls)
+            lt = " (%.0f%%)" % lo if round(lo) == round(hi) else " (%.0f–%.0f%%)" % (lo, hi)
+        if len(ips) == 1:
+            out.append((R, "%s IP %s lossy on every %s IP%s: the IP, not the paths — replace it" % (a, ips[0], b, lt)))
+        else:
+            out.append((R, "%d %s IPs lossy on every %s IP%s: the IPs, not the paths — replace them" % (len(ips), a, b, lt)))
+    for v in other: out.append((Y, v))
+    if not out: return
+    print()
+    for c, v in out[:2]:
+        s = "→ " + v
+        if len(s) > COLS - 4: s = s[:COLS - 5] + "…"
+        print("  " + c + s + Z)
+    if len(out) > 2:
+        print("  " + D + "  +%d more: [h]" % (len(out) - 2) + Z)
+
+# ---- details on demand: the full per-path table (p) ------------------------
 def size(mb):
     if mb >= 1e6: return "%.1fT" % (mb / 1e6)
     if mb >= 1e3: return "%.1fG" % (mb / 1e3)
     return "%.0fM" % mb
-def loss(p):
+def ploss(p, up=True):
     d, u = p.get("loss_down_pct"), p.get("loss_up_pct")
+    if not up: u = None
     if d is None and u is None: return "-", False
     f = lambda v: "-" if v is None else ("%.1f" % v)
     mark = "~" if p.get("loss_down_src") == "receiver" else ""
-    return mark + f(d) + "/" + f(u) + "%", (d or 0) > 5 or (u or 0) > 5
-def rtt(p):
+    return mark + f(d) + ("/" + f(u) if up else ""), (d or 0) > 5 or (u or 0) > 5
+def prtt(p):
     if not p.get("rtt_p50_ms"): return "-"
     return "%.0f/%.0f" % (p["rtt_p50_ms"], p.get("rtt_p99_ms", 0))
-def mtu(p):
-    # mt135: path MTU median per direction (down = what kharej sends); "!" = under 1280 or dropped in the last 10 min
-    d, u = p.get("pmtu_down"), p.get("pmtu_up")
-    if not d and not u: return "-", False
-    f = lambda x: "-" if not x else str(x.get("pmtu_med", 0))
-    bad = any(x and (x.get("pmtu_min", 9999) < 1280 or (x.get("pmtu_drops") and x.get("last_drop_s", 10**9) < 600)) for x in (d, u))
-    return f(d) + "/" + f(u) + ("!" if bad else ""), bad
-def state(p):
+def pstate(p):
     s, col = [], ""
     stt = p.get("state", "ok")
     if stt == "cooling":
@@ -4609,169 +5024,311 @@ def state(p):
     if not s or s == ["primary"]:
         s.insert(0, "ok"); col = col or G
     return ", ".join(s), col
-def autof(p):
-    f = p.get("auto_factor")
-    return "%.2f" % f if f else "-"
-def newp(p):
-    n = p.get("new_pct")
-    return "-" if n is None else "%.0f%%" % n
+def paths_view():
+    nlinks = sum(p.get("links", 0) for p in paths)
+    # LOSS U only when some path has it (the exit has no up reading)
+    up = any(p.get("loss_up_pct") is not None for p in paths)
+    def pmt(p):
+        m = pmtu(p)
+        if not m: return "-", 0
+        med, lo, lvl, du = m
+        ld = [x.get("last_drop_s") for x in (p.get("pmtu_down"), p.get("pmtu_up")) if x and x.get("pmtu_drops") and x.get("last_drop_s", 10**9) < 600]
+        return du + (" (min %d)" % lo if lo else "") + (" drop %ds ago" % min(ld) if ld else ""), lvl
+    mw = max([9] + [len(pmt(p)[0]) for p in paths])
+    W = (15, 15, 7 if auto else 5, 8, 4, 5, 4, 7, 7, 7, 11 if up else 8, 8, mw, 4, 11)
+    def cells_of(p, total):
+        links, target = p.get("links", 0), p.get("target", 0)
+        lo, hi = ("total", "") if total else (p.get("local", ""), p.get("remote", ""))
+        if len(lo) > 15: lo = short_ip(lo, 15)
+        if len(hi) > 15: hi = hi[:14] + "…" if "," in hi else short_ip(hi, 15)
+        share = p.get("eff_pct") or p.get("share_pct", 0)
+        now = ("%.0f" % (100.0 * links / nlinks)) if (nlinks and not total) else ""
+        l, lbad = ploss(p, up)
+        f, n = p.get("auto_factor"), p.get("new_pct")
+        sh = ("%.0f/%.0f" % (p.get("share_pct", 0), share)) if auto and not total else "%.0f" % share
+        return [lo, hi, sh, "%d/%d" % (links, target), now,
+                "" if total else ("%.2f" % f if f else "-"),
+                "" if total else ("-" if n is None else "%.0f" % n), str(p.get("users", 0)),
+                mbit(p.get("down_mbit", 0)), mbit(p.get("up_mbit", 0)), l, prtt(p),
+                "" if total else pmt(p)[0],
+                "" if total else ("-" if cuts_of(p.get("local", ""), p.get("remote", "")) is None
+                                  else str(cuts_of(p.get("local", ""), p.get("remote", "")))),
+                size(p.get("down_mb", 0)) + "/" + size(p.get("up_mb", 0))], lbad
+    # AUTO and NEW only when some path has them; MTU / CUTS only with readings
+    drop = {i for i, key in ((5, "auto_factor"), (6, "new_pct")) if all(p.get(key) is None for p in paths)}
+    if all(pmtu(p) is None for p in paths): drop.add(12)
+    if CUTS is None: drop.add(13)
+    J = lambda cells, start=0: " ".join(c for i, c in enumerate(cells) if i >= start and i not in drop)
+    def pad(cells):
+        return [c.ljust(W[i]) if i < 2 or i == 12 else c.rjust(W[i]) for i, c in enumerate(cells)]
+    print("  " + B + J(pad(["THIS SERVER", "OTHER SERVER", "SHARE", "LINKS", "NOW", "AUTO", "NEW", "STREAMS", "DOWN", "UP", "LOSS D/U" if up else "LOSS D", "RTT ms", "MTU D/U", "CUTS", "TOTAL D/U"])) + "  STATE" + Z)
+    print("  " + D + J(pad(["", "", "set/eff %" if auto else "set %", "live/tgt", "%", "factor", "conns %", "", "Mbit/s", "Mbit/s", "%", "p50/p99", "median", "24h", "bytes"])) + Z)
+    for p in paths:
+        c, lbad = cells_of(p, False)
+        c = pad(c)
+        links, target, share = p.get("links", 0), p.get("target", 0), p.get("share_pct", 0)
+        if (target > 0 and abs(links - target) > max(1, round(0.1 * target))) or (target == 0 and links > 0 and share > 0):
+            c[3], c[4] = Y + c[3], c[4] + Z
+        f = p.get("auto_factor")
+        if f and f < 0.5: c[5] = R + c[5] + Z
+        if lbad: c[10] = R + c[10] + Z
+        ml = pmt(p)[1]
+        if ml: c[12] = (R if ml == 2 else Y) + c[12] + Z
+        if c[13].strip() not in ("", "-", "0"): c[13] = Y + c[13] + Z
+        s, sc = pstate(p)
+        print("  " + J(c) + "  " + sc + s + Z)
+    if tot:
+        c, lbad = cells_of(tot, True)
+        c = pad(c)
+        if lbad: c[10] = R + c[10] + Z
+        extra = ["%s %d" % (k, tot[k]) for k in ("degraded", "draining", "suspect") if tot.get(k)]
+        print("  " + D + "─" * sum(w + 1 for i, w in enumerate(W) if i not in drop) + Z)
+        print("  " + B + c[0] + Z + " " + J(c, 1) + "  " + ", ".join(extra))
+    print()
+    # the legend names only the columns shown
+    l1 = ["SHARE = " + ("set/effective" if auto else "set") + " share", "LINKS = live/target", "NOW = its actual share of the links"]
+    if 5 not in drop: l1.append("AUTO = quality factor (1 = full)")
+    l2 = ["NEW = share of new connections placed here"] if 6 not in drop else []
+    l2.append(("LOSS D/U" if up else "LOSS D") + " = data resent by the sender" +
+              (" (~ = this server's estimate)" if any(p.get("loss_down_src") == "receiver" for p in paths) else ""))
+    l3 = ["MTU = path MTU median down/up (min = lowest link, red under 1280)"] if 12 not in drop else []
+    if 13 not in drop: l3.append("CUTS = auto cuts in 24 h")
+    l3.append("TOTAL = since start")
+    print("  " + D + " · ".join(l1) + Z)
+    print("  " + D + " · ".join(l2) + Z)
+    print("  " + D + " · ".join(l3) + Z)
+    if side == "listen":
+        print("  " + D + "Rows are the addresses this server is reached on; " +
+              ("targets and shares as the Kharej server reports them." if rep else "targets split the live links by its shares.") + Z)
 
-W = (15, 15, 5, 8, 4, 5, 4, 5, 7, 7, 11, 8, 10, 11)
-def cells_of(p, total):
-    links, target = p.get("links", 0), p.get("target", 0)
-    lo, hi = ("total", "") if total else (p.get("local", ""), p.get("remote", ""))
-    if len(lo) > 15: lo = lo[:14] + "~"
-    if len(hi) > 15: hi = hi[:14] + "~"
-    share = p.get("eff_pct") or p.get("share_pct", 0)
-    now = ("%.0f%%" % (100.0 * links / nlinks)) if (nlinks and not total) else ""
-    l, lbad = loss(p)
-    m, _ = mtu(p)
-    return [lo, hi, "%.0f%%" % share, "%d/%d" % (links, target), now, "" if total else autof(p),
-            "" if total else newp(p), str(p.get("users", 0)),
-            mbit(p.get("down_mbit", 0)), mbit(p.get("up_mbit", 0)), l, rtt(p), m,
-            size(p.get("down_mb", 0)) + "/" + size(p.get("up_mb", 0))], lbad
-
-def pad(cells, w=W):
-    out = []
-    for i, c in enumerate(cells):
-        out.append(c.ljust(w[i]) if i < 2 else c.rjust(w[i]))
-    return out
-
-nlinks = sum(p.get("links", 0) for p in paths)
-hdr = pad(["THIS SERVER", "OTHER SERVER", "SHARE", "LINKS", "NOW", "AUTO", "NEW", "USERS", "DOWN", "UP", "LOSS D/U", "RTT ms", "MTU D/U", "TOTAL D/U"])
-print("  " + B + " ".join(hdr) + "  STATE" + Z)
-print("  " + D + " ".join(pad(["", "", "eff" if st.get("lb_mode") == "auto" else "set", "live/tgt", "", "factor", "conns", "", "Mbit/s", "Mbit/s", "", "p50/p99", "median", "bytes"])) + Z)
-for p in paths:
-    c, lbad = cells_of(p, False)
-    c = pad(c)
-    links, target, share = p.get("links", 0), p.get("target", 0), p.get("share_pct", 0)
-    off = (target > 0 and abs(links - target) > max(1, round(0.1 * target))) or (target == 0 and links > 0 and share > 0)
-    if off:
-        c[3], c[4] = Y + c[3], c[4] + Z
-    f = p.get("auto_factor")
-    if f and f < 0.5:
-        c[5] = R + c[5] + Z
-    if lbad:
-        c[10] = R + c[10] + Z
-    if mtu(p)[1]:
-        c[12] = Y + c[12] + Z
-    stt, scol = state(p)
-    print("  " + " ".join(c) + "  " + scol + stt + Z)
-if tot:
-    c, lbad = cells_of(tot, True)
-    c = pad(c)
-    if lbad:
-        c[10] = R + c[10] + Z
-    extra = []
-    for k in ("degraded", "draining", "suspect"):
-        if tot.get(k): extra.append("%s %d" % (k, tot[k]))
-    print("  " + D + "-" * (sum(W) + len(W) - 1) + Z)
-    print("  " + B + c[0] + Z + " " + " ".join(c[1:]) + "  " + ", ".join(extra))
-
-# ---- Iran IP x Kharej IP: per-IP summaries and the matrix -----------------
-pairs = st.get("lb_pairs") or (paths if side == "dial" else [])
-def ik(p):
-    l, r = p.get("local", ""), p.get("remote", "")
-    return (l, r) if iran_side else (r, l)
-ips_i, ips_k, cell = [], [], {}
+# ---- the matrix (m) and the full Kharej-IP table (k) -----------------------
+cellm, ips_i, ips_k = {}, [], []
 for p in pairs:
     i, k = ik(p)
     if not i or not k or "," in k or "," in i: continue
     if i not in ips_i: ips_i.append(i)
     if k not in ips_k: ips_k.append(k)
-    cell[(i, k)] = p
-def ploss(p):
-    v = p.get("loss_down_pct")
-    return v
-def summary(ips, keyf, label):
-    rows = []
-    for ip in ips:
-        ps = [p for (a, b), p in cell.items() if keyf(a, b) == ip]
-        if not ps: continue
-        links = sum(p.get("links", 0) for p in ps)
-        users = sum(p.get("users", 0) for p in ps)
-        dn = sum(p.get("down_mbit", 0) for p in ps); up = sum(p.get("up_mbit", 0) for p in ps)
-        ls = [(ploss(p), max(p.get("down_mbit", 0), 0.01)) for p in ps if ploss(p) is not None]
-        lo = sum(a * w for a, w in ls) / sum(w for _, w in ls) if ls else None
-        rt = [p["rtt_p50_ms"] for p in ps if p.get("rtt_p50_ms")]
-        fs = [p["auto_factor"] for p in ps if p.get("auto_factor")]
-        eff = sum(p.get("eff_pct") or 0 for p in ps)
-        bad = [p for p in ps if (ploss(p) or 0) > 3]
-        rows.append((ip, links, users, dn, up, lo, (sum(rt) / len(rt)) if rt else None,
-                     (sum(fs) / len(fs)) if fs else None, eff, len(bad), len(ps)))
-    if not rows: return
-    print()
-    w = (39, 6, 6, 8, 8, 7, 6, 6, 6)
-    print("  " + B + "%-39s %6s %6s %8s %8s %7s %6s %6s %6s" % (label, "LINKS", "USERS", "DOWN", "UP", "LOSS D", "RTT", "AUTO", "EFF") + Z)
-    for ip, links, users, dn, up, lo, rt, f, eff, nb, n in rows:
-        col = R if lo is not None and lo > 3 else (Y if lo is not None and lo > 1 else "")
-        print("  %-39s %6d %6d %8s %8s %s%7s%s %6s %6s %6s" % (ip, links, users, mbit(dn), mbit(up), col,
-              "-" if lo is None else "%.1f%%" % lo, Z, "-" if rt is None else "%.0f" % rt,
-              "-" if f is None else "%.2f" % f, ("%.0f%%" % eff) if eff else "-"))
-if len(ips_i) + len(ips_k) > 2:
-    summary(ips_i, lambda a, b: a, "IRAN IP (over every Kharej IP)")
-    summary(ips_k, lambda a, b: b, "KHAREJ IP (over every Iran IP)")
-    # the matrix: loss down % · auto factor
-    print()
+    cellm[(i, k)] = p
+def matrix_view():
+    if not ips_k:
+        print("  (no per-pair readings: the matrix needs this hs2 to report each Iran IP x Kharej IP pair)")
+        return
+    order = [r["ip"] for r in ir_rows if r["ip"] in ips_i]
     cw = 13
-    short = lambda s: s if len(s) <= cw else s[:cw - 1] + "~"
-    print("  " + B + "%-39s " % "LOSS D % · AUTO   Iran \\ Kharej" + " ".join(short(k).rjust(cw) for k in ips_k) + Z)
-    def bad(p): return p is not None and (ploss(p) or 0) > 3
-    for i in ips_i:
+    print("  " + B + "%-22s " % "LOSS ↓ · AUTO" + " ".join(short_ip(k, cw).rjust(cw) for k in ips_k) + Z)
+    print("  " + D + "%-22s " % "Iran \\ Kharej" + Z)
+    bad = lambda p: p is not None and (sloss(p, *ik(p))[0] or 0) > 3
+    for i in order:
         cs = []
         for k in ips_k:
-            p = cell.get((i, k))
+            p = cellm.get((i, k))
             if p is None:
-                cs.append("-".rjust(cw)); continue
-            lo, f = ploss(p), p.get("auto_factor")
-            t = ("-" if lo is None else "%.1f" % lo) + ("·%.2f" % f if f else "")
-            col = R if (lo or 0) > 3 or (f and f < 0.5) else (Y if (lo or 0) > 1 or (f and f < 0.9) else G)
-            cs.append(col + t.rjust(cw) + Z)
-        print("  %-39s " % i + " ".join(cs))
-    # verdicts the matrix shows: a whole row or column bad while others are not
-    allp = list(cell.values())
+                cs.append(D + "-".rjust(cw) + Z); continue
+            lo, f = sloss(p, i, k)[0], p.get("auto_factor")
+            t_ = ("-" if lo is None else "%.1f" % lo) + ("·%.2f" % f if f else "")
+            col = R if (lo or 0) > 5 or (f and f < 0.5) else (Y if (lo or 0) > 3 or (f and f < 0.9) else G)
+            cs.append(col + t_.rjust(cw) + Z)
+        print("  %-22s " % short_ip(i, 22) + " ".join(cs))
+    allp = list(cellm.values())
     if allp and not all(bad(p) for p in allp):
-        for i in ips_i:
-            ps = [cell.get((i, k)) for k in ips_k if cell.get((i, k))]
-            if len(ps) >= 2 and all(bad(p) for p in ps):
-                print("  %s→ Iran IP %s is lossy on every Kharej IP: the Iran IP, not the paths%s" % (R, i, Z))
-        for k in ips_k:
-            ps = [cell.get((i, k)) for i in ips_i if cell.get((i, k))]
-            if len(ps) >= 2 and all(bad(p) for p in ps):
-                print("  %s→ Kharej IP %s is lossy on every Iran IP: the Kharej IP, not the paths%s" % (R, k, Z))
+        for name, ips, other, get in (("Iran", order, ips_k, lambda a, b: cellm.get((a, b))),
+                                      ("Kharej", ips_k, order, lambda a, b: cellm.get((b, a)))):
+            lossy = [a for a in ips if len([get(a, b) for b in other if get(a, b)]) >= 2 and
+                     all(bad(get(a, b)) for b in other if get(a, b))]
+            if lossy:
+                print("  %s→ %s IP%s lossy (over 3%%) on every other-side IP: %s%s" % (
+                    R, name, "s" if len(lossy) > 1 else "", ", ".join(short_ip(x, 22) for x in lossy), Z))
+    print()
+    print("  " + D + "each cell: the sender's ↓ loss % · the auto quality factor (1 = full share, cut 0.05–0.1)" + Z)
 
+def kharej_view():
+    if not kh_rows:
+        print("  (no per-Kharej-IP readings yet)")
+        return
+    top = max([r["share"] for r in kh_rows] or [100])
+    title_row("KHAREJ IP")
+    for r in kh_rows: row(r, top)
+    print()
+    print("  " + D + "each Kharej IP over every Iran IP it pairs with" + Z)
+
+def legend():
+    print()
+    print("  " + D + "● green ok · yellow: loss over 3%, lowered, recovering, probing · red: cut, cooled or loss over 5%" + Z)
+    print("  " + D + "SHARE = " + ("effective share of the links (auto: after the quality factor)" if auto else "set share of the links") + "; bar relative to the largest" + Z)
+    print("  " + D + "↓ = Kharej to Iran, ↑ = Iran to Kharej, Mbit/s over the last 10 s · RTT ms = p50 over its links" + Z)
+    print("  " + D + "LOSS % = data its sender resent, the worse of ↓ and ↑ (N↑ = the ↑ upload, when worse and 1 % or more; ~ = this server's estimate; [p] shows both)" + Z)
+    print("  " + D + "cut N% = auto took it out at N% loss and keeps probing it · cut a/b = a of its b paths cut" + Z)
+    print("  " + D + "STREAMS = user streams on its links (a connection rides 2+) · LINKS = live/target · CUTS = auto cuts in the last 24 h" + Z)
+    print("  " + D + "MTU = path MTU median, the lower direction (min = its lowest link) · red under 1280, yellow a link under 1280 or a drop in 10 min" + Z)
+    more = []
+    src = {"advert": "the other server's announcement", "local": "this config",
+           "announces": "this config (announced to the other server)"}.get(st.get("lb_source", ""), "")
+    if src: more.append("Addresses: from " + src)
+    if st.get("lb_loaded_at"):
+        more.append("last load " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["lb_loaded_at"])) + " (" + ago(st["lb_loaded_at"]) + ")")
+    if st.get("dir"): more.append("tunnel " + st["dir"])
+    if st.get("lb_mode_from") == "peer": more.append("mode as the dialing side reports it")
+    if more: print("  " + D + " · ".join(more) + Z)
+    vs = list(dict.fromkeys((st.get("lb_verdicts") or []) + (rep.get("verdicts") or [])))
+    for v in vs: print("  " + D + "verdict: " + v + Z)
+    if st.get("lb_note"): print("  " + D + "note: " + st["lb_note"] + Z)
+
+header()
+health()
 print()
-print("  " + D + "DOWN = Kharej to Iran, UP = Iran to Kharej (last 10 s) · LOSS = share of data resent" + Z)
-src_note = " (~ = this server's receiver estimate; no ~ = the sender's own count)" if any(p.get("loss_down_src") == "receiver" for p in paths) else ""
-if src_note:
-    print("  " + D + "LOSS D" + src_note + Z)
-print("  " + D + "SHARE = set share" + (" (auto: the effective one)" if st.get("lb_mode") == "auto" else "") +
-      " · LINKS = live/target · NOW = its actual share of the links · TOTAL = since hs2 started" + Z)
-print("  " + D + "AUTO = quality factor on the share (1 = full; cut paths 0.05–0.1) · NEW = share of new connections placed here" + Z)
-if side == "listen":
-    print("  " + D + "Rows are the addresses this server is reached on; " +
-          ("targets and shares as the Kharej server reports them." if rep else "targets split the live links by its shares.") + Z)
-print("  " + R + "red" + Z + D + ": loss over 5% (matrix: 3%), a cut path or a cooled one · " + Z + Y + "yellow" + Z + D + ": links off target, or links being replaced" + Z)
+if view == "paths": paths_view()
+elif view == "matrix": matrix_view()
+elif view == "kharej": kharej_view()
+else:
+    main_table()
+    verdicts()
+    if view == "help": legend()
+keys = [("p", "paths", "paths"), ("m", "matrix", "matrix"), ("k", "kharej", "Kharej IPs"), ("h", "help", "help")]
+foot = "  ".join(("%s[%s] %s%s" % (B, k, n, Z + D)) if v == view else "[%s] %s" % (k, n) for k, v, n in keys)
+print()
+print("  " + D + foot + "  [Enter] back · every 3 s" + Z)
 PY
 }
 
-# lb_live UNIT CFG: the per-path view, refreshed every 3 s until Enter.
-lb_live(){
-  local cfg="$2" sf rc
-  sf=$(status_path "$cfg")
-  while :; do
-    printf '\033[2J\033[H' >&2
-    say " ${C_B}Load balancing — live status${C_0} · refreshes every 3 s · Enter to go back"; hr
+# lb_live UNIT CFG: the live view, refreshed every 3 s. One key switches the
+# detail (p paths, m matrix, k Kharej IPs, h help; the same key again goes
+# back to the main table); Enter (or q, or EOF) returns to the menu. The view
+# chosen is kept for the session (LB_LIVE_VIEW).
+LB_LIVE_VIEW=${LB_LIVE_VIEW:-main}
+# lb_live_draw FRAME: one frame over the last, each line ending in "erase to
+# end of line" and the rest of the screen erased after it, so nothing of a
+# longer earlier frame stays. A frame taller than the terminal ($LINES, else
+# the tty's) is cut to fit (it would scroll): its first lines, one "… N more"
+# line and its last line (the key hints).
+lb_live_draw(){
+  local rows n keep i more
+  local -a L
+  mapfile -t L <<< "$1"
+  n=${#L[@]}
+  rows=${LINES:-}
+  [ -n "$rows" ] || rows=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f1) || true
+  case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
+  if [ "$rows" -ge 8 ] && [ "$n" -gt $((rows - 1)) ]; then
+    keep=$((rows - 3)); more=$((n - keep - 1))
+    for ((i = 0; i < keep; i++)); do printf '%s\033[K\n' "${L[$i]}" >&2; done
+    if [ "$LB_LIVE_VIEW" != main ]; then
+      printf '  %s… %d more lines (the terminal is too short)%s\033[K\n' "$C_D" "$more" "$C_0" >&2
+    else
+      printf '  %s… %d more lines — [p] for all paths%s\033[K\n' "$C_D" "$more" "$C_0" >&2
+    fi
+    printf '%s\033[K\n' "${L[$((n - 1))]}" >&2
+  else
+    for ((i = 0; i < n; i++)); do printf '%s\033[K\n' "${L[$i]}" >&2; done
+  fi
+  printf '\033[J' >&2
+}
+# lb_live_cuts UNIT FILE: `hs2 lb history` (the auto's cuts per pair, last
+# 24 h, from the journal) into FILE; at most once a minute (a journal read
+# every 3 s would cost). An hs2 without it, or no journal: FILE is removed and
+# the screen shows no CUTS column.
+lb_live_cuts(){
+  local now t=0
+  now=$(date +%s)
+  [ -f "$2" ] && t=$(stat -c %Y "$2" 2>/dev/null || echo 0)
+  [ $((now - t)) -ge 60 ] || return 0
+  if [ -x "$BIN" ] && timeout 10 "$BIN" lb history -u "$1" --lang en >"$2.new" 2>/dev/null; then
+    mv -f "$2.new" "$2"
+  else
+    rm -f "$2.new" "$2"
+  fi
+  return 0
+}
+# lb_live_frame UNIT CFG CUTSFILE: one frame (title + render) on stdout.
+lb_live_frame(){
+  local sf; sf=$(status_path "$2")
+  {
+    say " ${C_B}Load balancing — live${C_0}"
     if status_fresh "$sf"; then
-      lb_live_render "$1" "$sf" || say "  (could not read the status)"
+      lb_live_render "$1" "$sf" "$LB_LIVE_VIEW" "$3" || say "  (could not read the status)"
     else
       say "  (the tunnel is not running, or this hs2 is too old to report it)"
-    fi
-    hr
-    # Enter returns; a timeout (status > 128) refreshes; EOF also returns.
-    rc=0; read -rst 3 _ </dev/tty || rc=$?
-    [ "$rc" -gt 128 ] || return 0
+      say "  ${C_D}[Enter] back${C_0}"
+    fi; } 2>&1
+}
+lb_live(){
+  local cfg="$2" rc k v frame shown="" cuts
+  cuts=$(mktemp -u "${TMPDIR:-/tmp}/hs2-lbcuts.XXXXXX")
+  # shellcheck disable=SC2064
+  trap "rm -f '$cuts' '$cuts.new'" RETURN
+  while :; do
+    lb_live_cuts "$1" "$cuts"
+    frame=$(lb_live_frame "$1" "$cfg" "$([ -f "$cuts" ] && echo "$cuts")")
+    # the whole screen once when the view changes, else redraw in place
+    if [ "$shown" != "$LB_LIVE_VIEW" ]; then printf '\033[2J\033[H' >&2; else printf '\033[H' >&2; fi
+    shown=$LB_LIVE_VIEW
+    lb_live_draw "$frame"
+    # a key switches the view; a timeout (status > 128) refreshes; EOF returns.
+    k=""; rc=0; read -rsn 1 -t 3 k </dev/tty || rc=$?
+    if [ "$rc" -gt 128 ]; then continue; fi
+    [ "$rc" -eq 0 ] || return 0
+    case "$k" in
+      p|P) v=paths ;; m|M) v=matrix ;; k|K) v=kharej ;; h|H|'?') v=help ;;
+      q|Q) return 0 ;;
+      '') return 0 ;;
+      *) continue ;;
+    esac
+    if [ "$LB_LIVE_VIEW" = "$v" ]; then LB_LIVE_VIEW=main; else LB_LIVE_VIEW=$v; fi
   done
+}
+# lb_live_cli [UNIT] [--once] [--view main|paths|matrix|kharej|help]:
+# `hs2-menu lb …` (and the hs2-menu-lb wrapper) — the live screen straight
+# from the shell. No UNIT: the only tunnel with load balancing, else a pick.
+# --once prints one frame (no terminal needed: scripts, tests, a quick look).
+lb_live_cli(){
+  local u="" once="" a cfg c n=0 list=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --once) once=1 ;;
+      --view) LB_LIVE_VIEW="${2:-main}"; shift ;;
+      --view=*) LB_LIVE_VIEW="${1#--view=}" ;;
+      -u) u="${2:-}"; shift ;;
+      -h|--help) say "Usage: hs2-menu lb [tunnel] [--once] [--view main|paths|matrix|kharej|help]"; return 0 ;;
+      -*) err "unknown option: $1"; return 2 ;;
+      *) u="$1" ;;
+    esac
+    shift
+  done
+  case "$LB_LIVE_VIEW" in main|paths|matrix|kharej|help) ;; *) err "unknown view: $LB_LIVE_VIEW"; return 2 ;; esac
+  if [ -z "$u" ]; then
+    for a in $(tm_units); do
+      c=$(tm_cfg "$a" 2>/dev/null || true); [ -n "$c" ] || c=$(unit_cfg "$a")
+      [ -f "$c" ] || continue
+      # balancing: lb on in its config, or the running tunnel reports paths
+      # (a listening side that follows the other server's announcement)
+      if python3 -c 'import json,sys
+c = json.load(open(sys.argv[1]))
+try: s = json.load(open(sys.argv[2]))
+except Exception: s = {}
+sys.exit(0 if (c.get("lb") or {}).get("enabled") or s.get("lb_paths") or s.get("lb_text") else 1)' "$c" "$(status_path "$c")" 2>/dev/null; then
+        list+=("$a"); n=$((n + 1))
+      fi
+    done
+    if [ "$n" -eq 1 ]; then u=${list[0]}
+    elif [ "$n" -eq 0 ]; then err "No tunnel with load balancing here (name one: hs2-menu lb <tunnel>)."; return 1
+    elif [ -n "$once" ]; then err "Several tunnels balance load: ${list[*]} — name one."; return 1
+    else
+      say "Tunnels with load balancing:"; for a in "${list[@]}"; do say "  $a"; done
+      read -rp "Tunnel: " u </dev/tty || return 0
+    fi
+  fi
+  u=${u%.service}
+  # a bare name (lab, not hs2-lab) is the hs2-NAME tunnel
+  if [ ! -e "$UNIT_DIR/$u.service" ] && [ -e "$UNIT_DIR/hs2-$u.service" ]; then u=hs2-$u; fi
+  cfg=$(tm_cfg "$u" 2>/dev/null || true); [ -n "$cfg" ] || cfg=$(unit_cfg "$u")
+  [ -f "$cfg" ] || { err "No tunnel '$u' (no $cfg)."; return 1; }
+  if [ -n "$once" ]; then
+    local cuts; cuts=$(mktemp -u "${TMPDIR:-/tmp}/hs2-lbcuts.XXXXXX")
+    lb_live_cuts "$u" "$cuts"
+    lb_live_frame "$u" "$cfg" "$([ -f "$cuts" ] && echo "$cuts")"
+    rm -f "$cuts"
+    return 0
+  fi
+  lb_live "$u" "$cfg"
 }
 
 lb_show(){ # cfg
@@ -4954,7 +5511,7 @@ tm_lb(){ # unit cfg
     say "  6) Split equally (both sides)"
     say "  7) Get a certificate for an address (Let's Encrypt, its own subdomain)"
     say "  8) Check & apply (backup, reload this tunnel — restart only for an older hs2 or on/off — rollback on failure)"
-    say "  9) Live status (per path: links, users, traffic, loss, RTT — every 3 s)"
+    say "  9) Live view (health, share, traffic, loss, RTT, MTU, cuts per IP — every 3 s; also: hs2-menu lb)"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in
@@ -5170,6 +5727,11 @@ install_self(){
     rm -f "$tmp"; return 0
   fi
   install -m755 "$tmp" "$MENU_BIN"; rm -f "$tmp"
+  # hs2-menu-lb: the live load-balancing screen in one word (exec hs2-menu lb)
+  printf '#!/bin/bash
+# hs2: the live load-balancing screen (hs2-menu lb [tunnel] [--once] [--view V])
+exec %s lb "$@"
+' "$MENU_BIN" > "$MENU_LB_BIN.tmp" && chmod 755 "$MENU_LB_BIN.tmp" && mv -f "$MENU_LB_BIN.tmp" "$MENU_LB_BIN" || rm -f "$MENU_LB_BIN.tmp"
   return 0
 }
 
@@ -5756,6 +6318,7 @@ nm_lb(){
   while :; do
     echo >&2; hr; say " ${C_B}$(nm_t "Load balancing & IPs" "لودبالانس و IPها") — $NM_U${C_0}"; hr
     nm_lbx show -u "$NM_U"
+    say "   l) $(nm_t "Live view (every 3 s: health, share, traffic, loss, RTT, MTU, cuts — keys p m k h)" "نمای زنده (هر ۳ ثانیه: سلامت، سهم، ترافیک، افت، RTT، MTU، قطع — کلیدهای p m k h)")"
     say "   1) $(nm_t "Refresh" "تازه‌سازی")   2) $(nm_t "Cut history (24 h)" "تاریخچهٔ قطع (۲۴ ساعت)")"
     say "   3) $(nm_t "Suggest the primary IP (ping the peer from each local IP)" "پیشنهاد IP اصلی (پینگ سرور مقابل از هر IP محلی)")"
     say "   4) $(nm_t "Add a local IP" "افزودن IP محلی")   5) $(nm_t "Remove a local IP" "حذف IP محلی")"
@@ -5770,6 +6333,7 @@ nm_lb(){
     case "$c" in
       0|"") return 0 ;;
       1) ;;
+      l|L) lb_live "$NM_U" "$NM_CFG" ;;
       2) nm_lbx history -u "$NM_U"; nm_pause ;;
       3) nm_lbx suggest -u "$NM_U"; nm_pause ;;
       4) nm_ask ip "$(nm_t "Local IP to add: " "IP محلی برای افزودن: ")"
@@ -6250,6 +6814,7 @@ case "${1:-}" in
   --new)     NM_FORCE=new ;;                      # the redesigned menu (the default since M7)
   --classic) NM_FORCE=classic ;;                  # the classic menu (still reachable)
   manage)    tunnel_manager; exit 0 ;;
+  lb|live)   shift; lb_live_cli "$@" || { HS2_DIED=1; exit 1; }; exit 0 ;;   # the live load-balancing screen (also: hs2-menu-lb)
   upgrade)   upgrade "${2:-}"; exit 0 ;;
   backup)    backup >/dev/null; exit 0 ;;
   restore)   restore "${2:-}"; exit 0 ;;
@@ -6258,7 +6823,7 @@ case "${1:-}" in
   cleanup)   kernel_cleanup; exit 0 ;;
   version)   "$BIN" version 2>/dev/null || die "hs2 is not installed on this server."; exit 0 ;;
   *) err "unknown command: $1"
-     say "Usage: bash install.sh [--new | --classic | manage | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
+     say "Usage: bash install.sh [--new | --classic | manage | lb [tunnel] [--once] [--view V] | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
      say "       (no argument opens the menu)"
      # HS2_DIED=1 like die/bail: this is a deliberate usage error, so the EXIT
      # trap must NOT add its "stopped unexpectedly / report to the developer" note.

@@ -40,6 +40,7 @@ func newLitePair(t *testing.T) (*tNet, *mConn, *mConn) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, iran, n.exit)
 	if liveSubs(iran) != 1 || n.count(planeLight) != 1 || n.count(planeBulk) != 0 {
 		t.Fatalf("lite start: %d subs, %d light opens", liveSubs(iran), n.count(planeLight))
 	}

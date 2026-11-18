@@ -110,6 +110,7 @@ const (
 )
 
 type LinkManager struct {
+	ul268 map[Link]*ul268Link // ul268 trigger state (rescueWatch, under mu; mconn_ul268.go)
 	// steerGen / steerC (lk165, HS2_LM_FASTPICK): steerDrawLocked's cache,
 	// one per steer tick (lm_steercache.go).
 	steerGen atomic.Uint64

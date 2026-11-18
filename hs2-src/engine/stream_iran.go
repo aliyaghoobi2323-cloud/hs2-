@@ -590,6 +590,9 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 	if mtr := linkMeterOf(l); mtr != nil {
 		pl.path = mtr.path
 	}
+	if _, ok := l.(metered); ok {
+		pl.txStat = func() (tcpStat, bool) { return linkTCPStatsOf(l) } // HS2_B278_L3STALL
+	}
 	set.add(pl)
 	go func() {
 		set.serveLink(ctx, pl, dev)

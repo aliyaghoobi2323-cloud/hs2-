@@ -65,7 +65,7 @@ func cs226Silent(s *msub, nowc int64) bool {
 	if h := cs226SilentHook.Load(); h != nil {
 		return (*h)(s, nowc)
 	}
-	mtr := dcSubMeter(s)
+	mtr := dcMeterOf(s)
 	if mtr == nil {
 		return false
 	}
@@ -94,12 +94,16 @@ func (m *mConn) cs226LiteVisitLocked(nowc int64) bool {
 		if s.dc.isDark {
 			return true // a visit clears its dark state
 		}
-		if !cs228InFlight(s) {
-			continue // cs228: an idle conn is not dark
+		// b296: the link-level tests (shared meters, cache-hot) before the
+		// stream's ack marks (a cache miss per sub, 60 % of the timer at 2x);
+		// all side-effect free: the same verdict as rel69l's order
+		if !cs226Silent(s, nowc) && !(cs228Pending(s, nowc) && rescueLowKey(s.key)) {
+			continue
 		}
-		if rescueLowKey(s.key) && cs228Pending(s, nowc) || cs226Silent(s, nowc) {
+		if cs228InFlight(s) {
 			return true
 		}
+		// cs228: an idle conn is not dark
 	}
 	return false
 }

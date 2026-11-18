@@ -368,7 +368,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		return false
 	}
 	if !m.stActive {
-		if c := stripeStat.active.Add(1); c > stripeMaxConns && !m.stripeDlFairExtraLocked(c, up, rate) && !m.dl241SlowSlotLocked(c, up, rate, now) { // HS2_MCONN_STRIPE_DL_FAIR: a fast download past the cap (mconn_stripe_dlfair.go)
+		if c := stripeStat.active.Add(1); c > stripeMaxConns && !m.stripeDlFairExtraLocked(c, up, rate) && !m.dl241SlowSlotLocked(c, up, rate, now) && !m.ul281SlotLocked(c, up, rate, now) { // HS2_MCONN_STRIPE_DL_FAIR: a fast download past the cap (mconn_stripe_dlfair.go)
 			stripeStat.active.Add(-1)
 			stripeStat.refused.Add(1)
 			m.trLocked(trSlot)

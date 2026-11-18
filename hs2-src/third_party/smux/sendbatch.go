@@ -1,7 +1,6 @@
 package smux
 
 import (
-	"container/heap"
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
@@ -58,7 +57,7 @@ func (s *Session) shaperLoopBatch() {
 				if len(b) > 0 && size+fl > limit {
 					break
 				}
-				r := heap.Pop(&reqs).(writeRequest)
+				r := reqs.popReq()
 				if r.jump > 0 && overtook(reqs, r) {
 					smallFirstOvertakes.Add(1)
 				}
@@ -84,14 +83,14 @@ func (s *Session) shaperLoopBatch() {
 		case r := <-chShaper:
 			if batch != nil { // reshape: the new request may go first
 				for _, q := range *batch {
-					heap.Push(&reqs, q)
+					reqs.pushReq(q)
 				}
 				clear(*batch)
 				*batch = (*batch)[:0]
 				sendBatchPool.Put(batch)
 				batch = nil
 			}
-			heap.Push(&reqs, r)
+			reqs.pushReq(r)
 		case chWrite <- batch:
 			batch = nil
 		}
@@ -136,7 +135,7 @@ func (s *Session) sendLoopBatch() {
 				}
 				off += headerSize + lens[i]
 				b[i].result <- writeResult{n: wn, err: e}
-				close(b[i].result)
+				// gc295: not closed — the channel goes back to reqCtxPool (writeFrameQueued)
 			}
 			clear(b)
 			*bp = b[:0]

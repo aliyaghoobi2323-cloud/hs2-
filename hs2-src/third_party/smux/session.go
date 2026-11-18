@@ -1,7 +1,6 @@
 package smux
 
 import (
-	"container/heap"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -85,6 +84,19 @@ func (o *reqOwn) take(data []byte) []byte {
 		}
 	}
 }
+
+// reqCtx (hs2 gc295): a request's result channel and owner state in one
+// pooled object. writeFrameQueued made both per frame (the top allocation
+// site by objects in the gc295 storm profiles, ~7 M/min on a busy exit). The
+// channel is no longer closed after its one result, so a context whose result
+// the writer received goes back to reqCtxPool; one the writer gave up on
+// (giveUp: sendLoop may still send into it) is left to the GC.
+type reqCtx struct {
+	own    reqOwn
+	result chan writeResult
+}
+
+var reqCtxPool = sync.Pool{New: func() any { return &reqCtx{result: make(chan writeResult, 1)} }}
 
 type writeResult struct {
 	n   int
@@ -539,7 +551,7 @@ func (s *Session) shaperLoop() {
 		// chWrite is not available until it has packet to send
 		if len(reqs) > 0 {
 			chWrite = s.writes
-			next = heap.Pop(&reqs).(writeRequest)
+			next = reqs.popReq()
 		} else {
 			chWrite = nil
 		}
@@ -561,9 +573,9 @@ func (s *Session) shaperLoop() {
 			return
 		case r := <-chShaper:
 			if chWrite != nil { // next is valid, reshape
-				heap.Push(&reqs, next)
+				reqs.pushReq(next)
 			}
-			heap.Push(&reqs, r)
+			reqs.pushReq(r)
 		case chWrite <- next:
 			if next.jump > 0 && overtook(reqs, next) {
 				smallFirstOvertakes.Add(1)
@@ -625,7 +637,7 @@ func (s *Session) sendLoop() {
 			}
 
 			request.result <- result
-			close(request.result)
+			// gc295: not closed — the channel goes back to reqCtxPool (writeFrameQueued)
 
 			// store conn error
 			if err != nil {
@@ -664,12 +676,13 @@ func (s *Session) writeFrameQueued(f Frame, deadline <-chan time.Time, cut <-cha
 			}
 		}()
 	}
+	rc := reqCtxPool.Get().(*reqCtx)
 	req := writeRequest{
 		class:  class,
 		frame:  f,
 		seq:    atomic.AddUint32(&s.requestID, 1),
-		result: make(chan writeResult, 1),
-		own:    new(reqOwn),
+		result: rc.result,
+		own:    &rc.own,
 	}
 	if sf := s.config.SmallFirst; sf > 0 && class == CLSDATA && len(f.data) <= sf {
 		req.jump = SmallFirstJump
@@ -693,6 +706,12 @@ func (s *Session) writeFrameQueued(f Frame, deadline <-chan time.Time, cut <-cha
 	var err error
 	select {
 	case result := <-req.result:
+		// gc295: sendLoop is done with the request (it released the data
+		// before it sent the one result): its channel and owner state are
+		// free to reuse. A request given up on is never put back.
+		rc.own.st.Store(reqPending)
+		rc.own.data = nil
+		reqCtxPool.Put(rc)
 		return result.n, result.err
 	case <-s.die:
 		err = io.ErrClosedPipe

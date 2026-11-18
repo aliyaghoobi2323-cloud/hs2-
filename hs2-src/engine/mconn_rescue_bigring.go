@@ -117,6 +117,7 @@ func (r *rescueRing) shrinkIdle(now int64) {
 		r.copyOut(nb)
 	}
 	gone := len(r.buf) - size
+	rpPut(r.buf) // gc296
 	r.buf, r.head = nb, 0
 	r.big -= gone
 	rrStat.big.Add(-int64(gone))

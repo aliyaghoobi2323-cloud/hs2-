@@ -105,7 +105,7 @@ func rescueScaledCap(base int64, n int64, ring int) int64 {
 func rrMemCap() int64 { return rescueScaledCap(rrMemMax, rrStat.conns.Load(), rrRingCap) }
 
 func rescueMemCap() int64 {
-	return rescueScaledCap(rescueMemMax, rescueStat.rings.Load(), rescueRingCap)
+	return rescueScaledCap(rescueMemMax, rescueStat.rings.Load(), rescueRingCap())
 }
 
 // --- join placement ---

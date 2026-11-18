@@ -65,6 +65,7 @@ func upPair(t *testing.T, id uint64, perLink int64, k int, up bool) (*tNet, *mCo
 		iran.setStripeUp()
 	}
 	t.Cleanup(resetLiteBudget) // the next test starts with the budget it expects
+	closeAtEnd(t, iran, n.exit)
 	return n, iran, n.exit
 }
 

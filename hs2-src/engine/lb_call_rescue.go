@@ -28,7 +28,7 @@ import (
 //   - a call's own upgrade (one sub, lite's call rule) is placed off the
 //     lowered links too, and passes the duplication budget when its one sub
 //     is on a lowered link (rescueAllow's rate bound, as the light rescue).
-var lbCallRescue bool // loadEnvKeys: HS2_LB_CALL_RESCUE
+var lbCallRescue atomic.Bool // loadEnvKeys: HS2_LB_CALL_RESCUE
 
 const (
 	callRescueEvery = time.Second
@@ -48,7 +48,7 @@ type callRescueMark struct{}
 
 // callRescueOnLocked: the key is on and m is a call (Iran, lite).
 func (m *mConn) callRescueOnLocked(now time.Time) bool {
-	return lbCallRescue && lbRescue.Load() && m.iran && m.lite &&
+	return lbCallRescue.Load() && lbRescue.Load() && m.iran && m.lite &&
 		(m.callOn || m.callUp || (!m.callLikeAt.IsZero() && now.Sub(m.callLikeAt) < callRescueTTL))
 }
 

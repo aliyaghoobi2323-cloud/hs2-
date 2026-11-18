@@ -126,9 +126,9 @@ func TestRescueNakKeepsConn(t *testing.T) {
 	setRescue(t, true)
 	setLite(t, true)
 	resetLiteBudget()
-	oldCap := rescueRingCap
-	rescueRingCap = 4 << 10
-	t.Cleanup(func() { rescueRingCap = oldCap })
+	oldCap := rescueRingCapV.Load()
+	rescueRingCapV.Store(4 << 10)
+	t.Cleanup(func() { rescueRingCapV.Store(oldCap) })
 	exit := newMConnExitRaw(10)
 	var mu sync.Mutex
 	opens := 0

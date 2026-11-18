@@ -229,6 +229,7 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 		like = true // dc254: a stall does not drop a copying call to one copy
 	}
 	m.callOn = like && dupOff && !m.callCopyOff() && m.liveSubsLocked() >= 2 && !callCapped(now.Unix())
+	m.dcWrBump() // b296: call state may change: no darkcall idle skip on old proof
 	if m.callOn != was {
 		m.tr.ev("call: copy %v (sent=%d got=%d in %v)", m.callOn, sent, got, w.Round(time.Millisecond))
 		if m.callOn && m.iran && mconnCallSubs > 2 {
@@ -281,8 +282,8 @@ func callLog(now time.Time) {
 	if up == pu && dup == pd {
 		return
 	}
-	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget) · %d call subs placed away from other copies · cs225 offpath %d samepath %d",
-		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load(), callStat.avoided.Load(), cs225Stat.off.Load(), cs225Stat.same.Load())
+	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget) · %d call subs placed away from other copies · cs225 offpath %d samepath %d%s",
+		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load(), callStat.avoided.Load(), cs225Stat.off.Load(), cs225Stat.same.Load(), cs286LogPart())
 }
 
 // ---- paired copies over more subs (HS2_MCONN_CALL_SUBS=3..6) ------------
@@ -562,6 +563,7 @@ func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) 
 		pool := m.exitInfo.Load()
 		m.mu.Lock()
 		if ml := m.pickCallRescueLocked(avoid, pool, nil); ml != nil {
+			ml = m.cs286ApartLocked(planeLight, avoid, pool, ml) // cs286 (mconn_cs286.go)
 			m.placeLocked(ml)
 			m.mu.Unlock()
 			return ml.link, m.releaseFor(ml), true
@@ -599,13 +601,13 @@ func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) 
 	if cs229MinPlace() { // cs229 (mconn_cs229.go): replaces cs225's placement
 		if ml := m.pickPlaneTiers(p, avoid, pool, light); ml != nil {
 			ml = m.cs229CallLocked(p, avoid, pool, ml, light)
+			ml = m.cs286ApartLocked(p, avoid, pool, ml) // cs286 (mconn_cs286.go)
 			callStat.avoided.Add(1)
 			m.placeLocked(ml)
 			m.mu.Unlock()
 			return ml.link, m.releaseFor(ml), true
 		}
-		m.mu.Unlock()
-		return m.pickPlane(p, avoid)
+		return m.callPlainLocked(p, avoid, pool)
 	}
 	// cs225 (mconn_cs225.go): a healthy path none of the other subs ride
 	// first — a light link there, then any usable link there.
@@ -629,13 +631,31 @@ func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) 
 	}
 	ml := m.pickPlaneTiers(p, avoid, pool, light)
 	if ml != nil {
+		ml = m.cs286ApartLocked(p, avoid, pool, ml) // cs286 (mconn_cs286.go)
 		callStat.avoided.Add(1)
 		m.placeLocked(ml)
 		m.mu.Unlock()
 		return ml.link, m.releaseFor(ml), true
 	}
+	return m.callPlainLocked(p, avoid, pool)
+}
+
+// callPlainLocked (m.mu held, released): the plain pick for a call sub when
+// the call placement found no light link, kept off the other subs' paths
+// (cs286: the plain pickPlane has no call path rule).
+func (m *LinkManager) callPlainLocked(p mPlane, avoid []any, pool *peerInfo) (Link, func(), bool) {
+	if !cs286Apart.Load() {
+		m.mu.Unlock()
+		return m.pickPlane(p, avoid)
+	}
+	ml := m.cs286ApartLocked(p, avoid, pool, m.pickPlaneLocked(p, avoid, pool))
+	if ml == nil {
+		m.mu.Unlock()
+		return nil, nil, false
+	}
+	m.placeLocked(ml)
 	m.mu.Unlock()
-	return m.pickPlane(p, avoid)
+	return ml.link, m.releaseFor(ml), true
 }
 
 // linkCopies: the copy-only streams (lite's second subs) open on l.

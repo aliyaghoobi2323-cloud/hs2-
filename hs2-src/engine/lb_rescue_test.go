@@ -301,11 +301,11 @@ func TestMConnRescueRawOffByDefault(t *testing.T) {
 
 func withCallRescue(t *testing.T, on bool) {
 	t.Helper()
-	old := lbCallRescue
-	lbCallRescue = on
+	old := lbCallRescue.Load()
+	lbCallRescue.Store(on)
 	t.Cleanup(func() {
 		waitConnLoops(t.Logf, mCloseLinger+mRSTWait+2*time.Second)
-		lbCallRescue = old
+		lbCallRescue.Store(old)
 	})
 }
 

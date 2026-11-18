@@ -314,6 +314,9 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		pl.dupOK = peerL3Dup(mtr)
 		if mtr != nil {
 			pl.path = mtr.path
+			if tc := mtr.tcp; tc != nil {
+				pl.txStat = func() (tcpStat, bool) { return tcpStats(tc) } // HS2_B278_L3STALL
+			}
 		}
 		l3.add(pl)
 		l3.serveLink(ctx, pl, cfg.TUN)

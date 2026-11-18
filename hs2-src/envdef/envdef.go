@@ -322,12 +322,23 @@ var Table = []Key{
 	// non-primary sub (txDark, or its link receives nothing while the conn's
 	// receive advances) are resent on the live sub (lab3 ab270 data-dark).
 	{"HS2_B270_TXRES", "1", Both},
+	// HS2_B278_L3STALL: a TUN interactive flow (ping, small packets) leaves
+	// a link whose socket has data in flight with no ack progress (RTO
+	// backoff or bytes_acked still for max(400 ms, 3 srtt)), and the dup's
+	// second copy skips such a link (lab3 data-dark 5-9 s ping gaps).
+	{"HS2_B278_L3STALL", "1", Both},
 	// HS2_B274_REPAIR: a call conn left with one live sub re-opens its
 	// second at the next manager tick when call-like within 5 s.
 	{"HS2_B274_REPAIR", "1", Edge},
 	// HS2_JM271_RST: the exit answers a missed plain join with an RST record
 	// (rate-limited) so Iran ends the dead conn instead of re-joining it forever.
 	{"HS2_JM271_RST", "1", Exit},
+	// HS2_UL268_RESCUE: Iran rescues raw conns off a data-dark link (TCP_INFO:
+	// data frozen while another path still acks); calls stay with darkcall.
+	{"HS2_UL268_RESCUE", "1", Edge},
+	// HS2_UL281_SLOT: a new fast upload (>= 80 Mbit/s, raw conn < 20 s) may
+	// take one of the bounded dlfair extra stripe slots when all 8 are held.
+	{"HS2_UL281_SLOT", "1", Edge},
 	// HS2_CS225_CALLPATH: a call's second sub on another path (replaced by
 	// HS2_CS229_MINPLACE while that is on).
 	{"HS2_CS225_CALLPATH", "1", Both},
@@ -341,6 +352,15 @@ var Table = []Key{
 	{"HS2_CS228_LITEVISIT", "1", Both},
 	{"HS2_CS228_LITEPLACE", "0", Both},
 	{"HS2_CS229_MINPLACE", "1", Both},
+	// HS2_CS286_CALLAPART: a call's copy sub never shares the primary's path
+	// while another path exists (a lowered/cooled one beats co-location).
+	{"HS2_CS286_CALLAPART", "1", Both},
+	// HS2_B296_DCSKIP: the darkcall timer skips a non-call conn proven idle
+	// (subs all consumed, no write since); every 25th tick visits all conns.
+	{"HS2_B296_DCSKIP", "1", Both},
+	// HS2_GC296_RINGPOOL: rescue ring buffers come from a per-size-class
+	// sync.Pool (4 KB-8 MB) and are returned when the ring is dropped.
+	{"HS2_GC296_RINGPOOL", "1", Both},
 	// rel69h (st244/st245/st246): the edge paces lite raw->dual upgrades
 	// through one token bucket, "auto" = max(500, 100 x GOMAXPROCS) a second
 	// (burst rate/10); call upgrades and interactive flows

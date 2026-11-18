@@ -182,6 +182,7 @@ func newTPair(t *testing.T, light bool) (*tNet, *mConn, *mConn) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, iran, n.exit)
 	if light {
 		lightOnly(iran)
 		lightOnly(n.exit)
@@ -204,6 +205,46 @@ func closeAndWait(t *testing.T, ms ...*mConn) {
 	}
 	waitConnLoops(t.Logf, mRSTWait+4*time.Second)
 }
+
+// closeAtEnd (b279) registers a cleanup that closes ms and waits (bounded,
+// never failing) for them to end and for their conn loops to exit. The pair
+// helpers call it, so a test that forgets closeAndWait (or fails early) does
+// not leave loops that read package switches later tests and cleanups
+// restore. It runs before the cleanups registered ahead of the pair (the
+// set* restores). Every such cleanup closes all conns the test registered
+// so far (the wait for connLoops is process-wide, so one still open conn of
+// the same test would make it wait to its bound). Close is idempotent, so a
+// test's own closeAndWait is fine.
+func closeAtEnd(t *testing.T, ms ...*mConn) {
+	closeAtEndMu.Lock()
+	first := closeAtEndOf[t] == nil
+	closeAtEndOf[t] = append(closeAtEndOf[t], ms...)
+	closeAtEndMu.Unlock()
+	t.Cleanup(func() {
+		closeAtEndMu.Lock()
+		all := closeAtEndOf[t]
+		if first {
+			delete(closeAtEndOf, t)
+		}
+		closeAtEndMu.Unlock()
+		for _, m := range all {
+			m.Close()
+		}
+		end := time.Now().Add(mCloseLinger + mRSTWait + 2*time.Second)
+		for _, m := range all {
+			select {
+			case <-m.GetDieCh():
+			case <-time.After(time.Until(end)):
+			}
+		}
+		waitConnLoops(t.Logf, max(time.Until(end), 0)+mRSTWait)
+	})
+}
+
+var (
+	closeAtEndMu sync.Mutex
+	closeAtEndOf = map[*testing.T][]*mConn{}
+)
 
 // upgradesInFlight counts forceUpgrade goroutines (they may start a manage
 // loop after the conn was closed).

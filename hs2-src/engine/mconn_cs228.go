@@ -67,6 +67,7 @@ func init() {
 	darkcallReadP.Store(&r)
 	darkcallReadOSOn.Store(true)
 	darkcallMarksP.Store(&mk)
+	darkcallMarksOSOn.Store(true)
 }
 
 func darkcallAfter() time.Duration { return time.Duration(darkcallAfterNs.Load()) }
@@ -87,7 +88,10 @@ func darkcallReadSet(f dcReadFn) {
 	darkcallReadOSOn.Store(reflect.ValueOf(f).Pointer() == reflect.ValueOf(darkcallReadOS).Pointer())
 	darkcallReadP.Store(&f)
 }
-func darkcallMarksSet(f dcMarksFn) { darkcallMarksP.Store(&f) }
+func darkcallMarksSet(f dcMarksFn) {
+	darkcallMarksOSOn.Store(reflect.ValueOf(f).Pointer() == reflect.ValueOf(darkcallMarksOS).Pointer()) // b296
+	darkcallMarksP.Store(&f)
+}
 
 func cs228Place() bool { return cs226LitePath() && cs228PlaceKey.Load() }
 func cs228Visit() bool { return cs226LitePath() && cs228VisitKey.Load() }
@@ -195,7 +199,7 @@ func cs228Pending(s *msub, nowc int64) bool {
 	if h := cs228PendHook.Load(); h != nil {
 		return (*h)(s, nowc)
 	}
-	mtr := dcSubMeter(s)
+	mtr := dcMeterOf(s)
 	if mtr == nil {
 		return false
 	}
@@ -242,6 +246,7 @@ func (m *mConn) dcReadLocked(s *msub) (*net.TCPConn, string, int64, uint64, uint
 // darkcallVisit: one timer visit of m; a lite visit reads its subs' TCP_INFO
 // with m.mu released (cs228).
 func (m *mConn) darkcallVisit(now time.Time, nowc int64) bool {
+	seq := m.dcWr.Load() // b296: read before any mark
 	m.mu.Lock()
 	pre, lite := m.cs228PreLocked(now, nowc)
 	var rr bool
@@ -254,6 +259,11 @@ func (m *mConn) darkcallVisit(now time.Time, nowc int64) bool {
 	}
 	for _, s := range pre {
 		s.dcPre = nil
+	}
+	if !rr {
+		m.b296ProofLocked(now, seq)
+	} else {
+		m.dcIdleAt.Store(0)
 	}
 	m.mu.Unlock()
 	return rr

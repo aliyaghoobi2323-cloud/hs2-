@@ -22,15 +22,15 @@ func TestRescueRingBounds(t *testing.T) {
 		r.add(p)
 		all = append(all, p...)
 	}
-	if len(r.buf) != rescueRingCap || r.n != rescueRingCap {
-		t.Fatalf("ring holds %d in %d, want cap %d", r.n, len(r.buf), rescueRingCap)
+	if len(r.buf) != rescueRingCap() || r.n != rescueRingCap() {
+		t.Fatalf("ring holds %d in %d, want cap %d", r.n, len(r.buf), rescueRingCap())
 	}
 	end := uint64(len(all))
 	got, ok := r.get(end-1000, end)
 	if !ok || !bytes.Equal(got, all[len(all)-1000:]) {
 		t.Fatal("last 1000 bytes differ")
 	}
-	if _, ok := r.get(end-uint64(rescueRingCap)-1, end); ok {
+	if _, ok := r.get(end-uint64(rescueRingCap())-1, end); ok {
 		t.Fatal("a gap older than the ring was covered")
 	}
 	if got, ok := r.get(end, end); !ok || len(got) != 0 {

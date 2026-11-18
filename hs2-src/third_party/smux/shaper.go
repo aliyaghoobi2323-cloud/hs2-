@@ -51,3 +51,53 @@ func overtook(h shaperHeap, w writeRequest) bool {
 	}
 	return false
 }
+
+// hs2 gc295: pushReq/popReq are container/heap's Push/Pop on the concrete
+// type (the same up/down steps, so the same order): heap.Push/Pop box every
+// writeRequest into an interface{} (two heap objects per frame through the
+// shaper, ~5 M objects/min on a busy exit in the gc295 storm profile).
+func (h *shaperHeap) pushReq(x writeRequest) {
+	*h = append(*h, x)
+	h.up(len(*h) - 1)
+}
+
+func (h *shaperHeap) popReq() writeRequest {
+	old := *h
+	n := len(old) - 1
+	old.Swap(0, n)
+	old.down(0, n)
+	x := old[n]
+	old[n] = writeRequest{} // no stale result/own pointers left in the backing array
+	*h = old[:n]
+	return x
+}
+
+func (h shaperHeap) up(j int) {
+	for {
+		i := (j - 1) / 2 // parent
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
+	}
+}
+
+func (h shaperHeap) down(i0, n int) {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
+			break
+		}
+		j := j1 // left child
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2 // right child
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+}

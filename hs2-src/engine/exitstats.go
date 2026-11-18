@@ -49,6 +49,11 @@ type exitTraffic struct {
 	hist      []float64            // bytes/s per tick, newest last (peakTicks)
 
 	snap atomic.Pointer[exitSnap]
+
+	// b296: the sampler's copy of conns (reused); t.mu is held only for the
+	// copy, the per-conn math runs without it (add/done on new or closing
+	// exit streams no longer wait for a full scan).
+	scan []*exitConn
 }
 
 // exitSnap is the last sample.
@@ -127,8 +132,17 @@ func (t *exitTraffic) sample(now time.Time) {
 	t.lastAt = now
 	alpha := flowAlpha(dt)
 	var s exitSnap
+	// b296 (sc4x): copy the set under t.mu, compute outside it. The sampler
+	// fields (prev, lastActive, ewma, steady) are the sampler's own; a conn
+	// closed after the copy is counted once more this tick (as if it had
+	// closed just after the scan).
 	t.mu.Lock()
+	scan := t.scan[:0]
 	for c := range t.conns {
+		scan = append(scan, c)
+	}
+	t.mu.Unlock()
+	for _, c := range scan {
 		b := c.bytes.Load()
 		steady := false
 		if b != c.prev {
@@ -153,7 +167,12 @@ func (t *exitTraffic) sample(now time.Time) {
 			t.heavy[c.mtr]++
 		}
 	}
-	t.mu.Unlock()
+	n := len(scan)
+	clear(scan) // a closed conn is not kept alive by the copy
+	if cap(scan) > 4*n+1024 {
+		scan = nil // the set shrank a lot: let the big copy go
+	}
+	t.scan = scan[:0]
 	t.storeHeavy()
 
 	// Throughput over every live link, as the edge measures it (the bytes its

@@ -109,6 +109,7 @@ func loadEnvKeys() {
 	rescueRecOn.Store(rescueRecFromEnv())                     // er97 (mconn_rescue_rec.go)
 	rescueRstOn.Store(envOn("HS2_MCONN_RESCUE_RST"))          // rr155 (mconn_rescue_rst.go), default off
 	rescueOn.Store(envOn("HS2_MCONN_RESCUE"))                 // er91 (mconn_rescue.go), default on since rel61 (envdef)
+	ul268On.Store(ul268FromEnv())                             // ul268 (mconn_ul268.go), default on, =0 off
 	loadRescue145()                                           // rs145 (mconn_rescue145.go)
 	stripeOverlapOn.Store(envOn("HS2_MCONN_STRIPE_OVERLAP"))  // upov57 (mconn_stripe_overlap.go)
 	stripeUpgIdle.Store(envOn("HS2_MCONN_STRIPE_UPG_IDLE"))   // evac58 (mconn_stripe_upgidle.go)
@@ -116,7 +117,7 @@ func loadEnvKeys() {
 	lbRescueCut = envOn("HS2_LB_RESCUE_CUT")   // stuck59 (lb_rescue_cut.go)
 	l3CutAvoid = envOn("HS2_LB_RESCUE_CUT_L3") // stuck59 (l3_cutavoid.go)
 	lbRescueCallFree = envOn("HS2_LB_RESCUE_CALLFREE")
-	lbCallRescue = envOn("HS2_LB_CALL_RESCUE")
+	lbCallRescue.Store(envOn("HS2_LB_CALL_RESCUE"))
 	lbCallLate = envOn("HS2_LB_CALL_LATE")
 	lbFastVerdict = envOn("HS2_LB_FAST_VERDICT")
 	lbSilent = envOn("HS2_LB_SILENT")

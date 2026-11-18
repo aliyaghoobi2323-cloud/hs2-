@@ -117,7 +117,7 @@ func darkcallLogLine() string {
 		s.switched.Load(), s.covered.Load(), s.short.Load(), s.noCand.Load(), s.rrec.Load(), s.rrRx.Load(), s.rrNo.Load(), s.rearm.Load(),
 		s.okAfter.Load(), s.badAfter.Load(), s.capped.Load(), s.resent.Load()>>10, s.moved.Load()>>10, s.again.Load(), s.uncapAll.Load(),
 		cs221Stat.held.Load(), cs221Stat.heldB.Load()>>10, cs221Stat.skipQ.Load(), cs221Stat.rxLive.Load(), cs221Stat.samePair.Load()) +
-		cs223LogPart() + cs224LogPart() + cs226LogPart() + dc254LogPart() + xs261LogPart() + b262LogPart() + b262RepLogPart() + b270LogPart() + b274LogPart()
+		cs223LogPart() + cs224LogPart() + cs226LogPart() + dc254LogPart() + xs261LogPart() + b262LogPart() + b262RepLogPart() + b270LogPart() + b274LogPart() + b296LogPart()
 }
 
 // dcSub: a sub's link evidence (under m.mu).
@@ -210,9 +210,16 @@ func darkcallLoop() {
 	}
 }
 
+var b296Tick atomic.Uint64
+
 func darkcallTick(now time.Time, nowc int64) {
+	full := b296Tick.Add(1)%b296FullEvery == 0 // b296 backstop
 	rrConns.Range(func(k, _ any) bool {
 		m := k.(*mConn)
+		if m.b296Skip(full) {
+			b296Stat.skipped.Add(1)
+			return true // b296: idle since a visit proved it (mconn_b296.go)
+		}
 		rr := m.darkcallVisit(now, nowc) // cs228: a lite visit's TCP_INFO reads run unlocked
 		if rr {
 			go m.rrStart()
@@ -341,6 +348,12 @@ func (m *mConn) darkcallLiteLocked(now time.Time, nowc int64, lite bool) bool {
 		if now.Sub(d.last) < darkcallGap() {
 			darkcallStat.again.Add(1)
 		}
+	}
+	if lite && m.ul268RecentLocked(now) {
+		// review-rel69k #7: ul268 just rescued this conn (new sub + resend):
+		// a switch now would resend the same range again
+		ul268Scale.dcYield.Add(1)
+		return false
 	}
 	// b264 M3: dc254's txDark switch (and its no-candidate records rescue)
 	// is for call visits only; a cs226 lite visit keeps rel69i's DARK-only
@@ -573,6 +586,7 @@ func (m *mConn) dcRescueLocked(now time.Time, next uint64, rx bool) bool {
 // dcSwitchLocked makes to the primary and puts on it what p holds that the
 // peer may lack (cs189's switch).
 func (m *mConn) dcSwitchLocked(p, to *msub, now time.Time, next uint64) {
+	m.dcSwAt = now // ul268: no data-dark rescue resends it again (review-rel69k #7)
 	var cur uint64
 	if c := p.cur; c != nil && c.seq() {
 		cur += uint64(c.n)

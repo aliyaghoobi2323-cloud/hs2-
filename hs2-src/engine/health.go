@@ -297,7 +297,10 @@ type tcpStat struct {
 	// peer, the retransmission backoff and congestion state, and the rto (µs).
 	bytesRcvd        uint64
 	backoff, caState uint8
-	rtoUs            uint32
+	// unacked: segments in flight not yet acknowledged (b278 l3_b278.go,
+	// ul268 mconn_ul268.go).
+	unacked uint32
+	rtoUs   uint32
 	// The effective path MTU of this socket's sends (effMtu: the kernel's
 	// PMTU, or less when MTU probing lowered the send MSS after a blackhole),
 	// the kernel's PMTU itself, the send MSS and the MSS this side advertised

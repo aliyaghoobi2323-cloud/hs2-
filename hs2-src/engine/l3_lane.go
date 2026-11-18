@@ -178,12 +178,19 @@ func (ln *l3Lane) pick(links []*l3Link, pkt []byte, h uint32) (*l3Link, bool) {
 		l3CutMoved.Add(1)
 		cur = nil
 	}
+	if cur != nil && cur.Alive() && cur.txStuck(now) { // HS2_B278_L3STALL (l3_b278.go)
+		b278Moved.Add(1)
+		cur = nil
+	}
 	if cur != nil && cur.Alive() && (!cur.isHeavy() || now-e.moved < int64(l3LaneMoveGap) && !cur.onStripe()) {
 		cur.stampLane(now)
 		return cur, true
 	}
 	var best *l3Link
-	if l3CutAvoid {
+	if b278On.Load() {
+		best = b278LanePick(links, h, now)
+	}
+	if best == nil && l3CutAvoid {
 		if best = rendezvousOffCut(links, h, true); best == nil {
 			best = rendezvousOffCut(links, h, false)
 		}

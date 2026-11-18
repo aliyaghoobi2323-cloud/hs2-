@@ -22,7 +22,7 @@ func tcpBusy(tc *net.TCPConn) (int64, bool) {
 	var score int64
 	ok := false
 	rc.Control(func(fd uintptr) {
-		info, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+		info, e := tcpInfo(int(fd))
 		if e != nil {
 			return
 		}
@@ -43,7 +43,7 @@ func tcpTraceInfo(tc *net.TCPConn) string {
 	}
 	s := ""
 	rc.Control(func(fd uintptr) {
-		i, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+		i, e := tcpInfo(int(fd))
 		if e != nil {
 			return
 		}
@@ -62,7 +62,7 @@ func tcpSRTT(tc *net.TCPConn) (time.Duration, bool) {
 	var d time.Duration
 	ok := false
 	rc.Control(func(fd uintptr) {
-		if i, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO); e == nil {
+		if i, e := tcpInfo(int(fd)); e == nil {
 			d, ok = time.Duration(i.Rtt)*time.Microsecond, true
 		}
 	})
@@ -82,7 +82,7 @@ func tcpAckState(tc *net.TCPConn) (srtt time.Duration, acked uint64, unacked uin
 		return 0, 0, 0, false, false
 	}
 	rc.Control(func(fd uintptr) {
-		if i, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO); e == nil {
+		if i, e := tcpInfo(int(fd)); e == nil {
 			srtt, acked, unacked, ok = time.Duration(i.Rtt)*time.Microsecond, i.Bytes_acked, i.Unacked, true
 			rtoLoss = i.Ca_state == 4 && i.Backoff > 0 // TCP_CA_Loss after an RTO
 		}
@@ -99,7 +99,7 @@ func tcpDarkInfo(tc *net.TCPConn) (acked uint64, unacked uint32, backoff uint8, 
 		return
 	}
 	rc.Control(func(fd uintptr) {
-		if i, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO); e == nil {
+		if i, e := tcpInfo(int(fd)); e == nil {
 			acked, unacked, backoff, retrans, ok = i.Bytes_acked, i.Unacked, i.Backoff, i.Total_retrans, true
 		}
 	})

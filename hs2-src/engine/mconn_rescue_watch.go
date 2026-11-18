@@ -49,12 +49,21 @@ func (m *LinkManager) rescueWatch(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		ul268DarkOnly.Store(nil) // ul268: this tick's sets only
+		ul268DarkAll.Store(nil)
 		if !rescueOn.Load() || rescueStat.rings.Load() == 0 && rrStat.conns.Load() == 0 {
 			continue
 		}
 		m.mu.Lock()
 		set := m.rescueSilentSetLocked(ctrlNow())
+		var smp []ul268Sample
+		if ul268On.Load() && ul268Iran.Load() { // the exit never acts: no poll there
+			smp = m.ul268SamplesLocked()
+		}
 		m.mu.Unlock()
+		if smp != nil {
+			set = ul268Merge(set, smp) // ul268: data-dark links (TCP_INFO)
+		}
 		rescueSilentLinks(set)
 	}
 }
@@ -87,6 +96,60 @@ func (m *LinkManager) rescueSilentSetLocked(now int64) map[any]bool {
 			}
 			set[ml.link] = true
 		}
+	}
+	return set
+}
+
+// ul268SamplesLocked (caller holds m.mu): the links to sample; TCP_INFO is
+// read later, without the lock. State entries of gone links are dropped.
+func (m *LinkManager) ul268SamplesLocked() []ul268Sample {
+	if m.ul268 == nil {
+		m.ul268 = map[Link]*ul268Link{}
+	}
+	smp := make([]ul268Sample, 0, len(m.links))
+	seen := make(map[Link]bool, len(m.links))
+	for _, ml := range m.links {
+		if ml.mtr == nil || !ml.link.Alive() {
+			continue
+		}
+		st := m.ul268[ml.link]
+		if st == nil {
+			st = &ul268Link{}
+			m.ul268[ml.link] = st
+		}
+		seen[ml.link] = true
+		smp = append(smp, ul268Sample{key: ml.link, path: mlPath(ml), st: st})
+	}
+	for l := range m.ul268 {
+		if !seen[l] {
+			delete(m.ul268, l)
+		}
+	}
+	return smp
+}
+
+// ul268Merge reads each sample's TCP_INFO and adds the dark links to set.
+func ul268Merge(set map[any]bool, smp []ul268Sample) map[any]bool {
+	for i := range smp {
+		smp[i].ts, smp[i].ok = linkTCPStatsOf(smp[i].key.(Link))
+	}
+	dark := ul268DarkSet(smp, monoNano(time.Now()))
+	if len(dark) == 0 {
+		return set
+	}
+	ul268DarkAll.Store(&dark)
+	only := map[any]bool{}
+	for k := range dark {
+		if !set[k] {
+			only[k] = true
+		}
+	}
+	ul268DarkOnly.Store(&only)
+	if set == nil {
+		return dark
+	}
+	for k := range dark {
+		set[k] = true
 	}
 	return set
 }
