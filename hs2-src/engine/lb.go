@@ -161,6 +161,12 @@ type LB struct {
 	drainFloor int
 	drainAt    time.Time
 	judgeAt    time.Time // the last fast-auto reading
+	// b337 (lb_fl337.go): the dialing side's fast lower (HS2_B335_FASTLOWER /
+	// HS2_B337_FL_LOGONLY): its detector, this window's per-path counts and
+	// links in RTO backoff or resending.
+	fl    *fastLowerDet
+	flCnt map[string]flRead
+	flRTO []flStallEv
 	// l3Cut (nil: no TUN): the tunnel's cut path set the judge publishes
 	// into (HS2_LB_RESCUE_CUT_L3, l3_cutavoid.go; setL3Cut).
 	l3Cut *l3CutSet
@@ -168,13 +174,19 @@ type LB struct {
 	pmtuT *pmtuTrack
 	// spare (lb_spare.go): the pool's spare-dial request (nil: none); spareLog
 	// the last such line (unix ns).
-	spare       func(n int)
+	spare       func(n int) int // returns the spares the pool started (0: at its slot cap, in an outage, or enough pending)
+	poolOver    func() bool     // exit: the pool holds more slots than the edge's target (rebal329; nil: unknown)
 	spareLog    atomic.Int64
 	spareGapLog atomic.Int64
+	spareCapLog atomic.Int64 // rebal329: the last "pool started no spare" line (unix ns)
 	// spareWant (lb_spare176.go; nil: unknown) is the edge's serving target
 	// (the exit pool's want); gapBack the per-path backoff of spareForGap's
 	// asks; gapSkipLog the last "edge would not take it" line (unix ns).
-	spareWant  func() int
+	spareWant func() int
+	// b331 HS2_B331_SPAREPATH (lb_sparepath331.go): the edge's per-path
+	// serving counts, the per-path spares and the pool's past-the-cap dial.
+	sp331      *sparePathState
+	sparePast  func() int
 	gapBack    map[string]*gapBackoff
 	gapSkipLog atomic.Int64
 	acc2       map[string]*lb2Acc // low-traffic paths' counts carried over (lb_spare.go)
@@ -188,6 +200,12 @@ type LB struct {
 	// flight, each dial takes the next path of outageOrderLocked (reset by
 	// the first dial that works).
 	outageN int
+
+	// b333 (lb_localaddr.go): source-address failures, per path name: the
+	// last log line and the failures since it.
+	localLog   map[string]time.Time
+	localFailN map[string]int
+	closeWhy   map[any]string // links CloseLinksFrom closed -> why (until release)
 }
 
 // NewLB builds a balancer over paths; exactly one must be Primary.
@@ -268,6 +286,11 @@ func (b *LB) acquireLocked() (i int, probe bool) {
 		}
 	}
 	if j := b.outageRotateLocked(); j >= 0 {
+		b.links[j]++
+		b.dials[j]++
+		return j, false
+	}
+	if j := b.pinLocked(now); j >= 0 { // b331: a spare dialed for this path (lb_sparepath331.go)
 		b.links[j]++
 		b.dials[j]++
 		return j, false
@@ -485,6 +508,9 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 		if dialConnectStage(err) {
 			b.cfails[i]++
 		}
+		if b.localAddrFailLocked(i, err) { // b333: the source address is not on this host
+			return
+		}
 		// rel51: with no live link on any path (held empty) past the start,
 		// the peer itself is down (a restart, a whole-peer outage): every
 		// path refuses alike, so a refusal says nothing about this path. Not
@@ -584,6 +610,7 @@ func (b *LB) release(link any) {
 	if i, ok := b.held[link]; ok {
 		delete(b.held, link)
 		delete(b.hooks, link)
+		delete(b.closeWhy, link)
 		delete(b.qprev, link)
 		b.links[i]--
 		b.dropDrainedLocked()

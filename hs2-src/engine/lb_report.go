@@ -49,6 +49,7 @@ type LBPeerPath struct {
 	LossPct float64 `json:"loss_pct"`          // the sender's smoothed loss, %
 	RawPct  float64 `json:"raw_pct,omitempty"` // its latest reading (-1 none)
 	Cut     bool    `json:"cut,omitempty"`
+	OK      bool    `json:"ok,omitempty"` // b340: cut, but its raw readings are clean again (cutReadsClean)
 	Reason  string  `json:"reason,omitempty"`
 	raw     bool    // RawPct is a reading
 }
@@ -80,6 +81,7 @@ func (b *LB) report() LBReport {
 		if b.judge != nil {
 			if q := b.judge.p[p.Name()]; q != nil {
 				pp.Cut = q.cut
+				pp.OK = cutReadsClean(q) // b340 (lb_b340_skipcut.go)
 				if q.lastRead.Equal(b.judgeAt) {
 					pp.RawPct, pp.raw = 100*q.raw, true
 				}
@@ -140,6 +142,9 @@ func encodeReport(r LBReport) []byte {
 		pf := byte(0)
 		if p.Cut {
 			pf |= 1
+		}
+		if p.OK {
+			pf |= 2 // b340: older readers ignore the bit
 		}
 		out = append(out, pf)
 		out = append(out, str(p.Reason)...)
@@ -238,6 +243,7 @@ func readReport(r io.Reader) (LBReport, bool) {
 			return rep, false
 		}
 		p.Cut = pf&1 != 0
+		p.OK = pf&2 != 0
 		if p.Reason, ok = str(); !ok {
 			return rep, false
 		}

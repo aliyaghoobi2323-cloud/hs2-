@@ -1,8 +1,0 @@
-153c153,157
-<       ip netns exec $MID tc qdisc replace dev $to root netem $(knetem "$LOSS") $x || exit 1
----
->       local xx="$x"   # up148: one direction only (to=mb: Iran->kharej upload; to=ma: download)
->       [ "$to" = "$mb" ] && [ "${UPLOSS_PATH:-x}" = "$k" ] && xx="loss random ${UPLOSS_PCT}"
->       [ "$to" = "$ma" ] && [ "${DNLOSS_PATH:-x}" = "$k" ] && xx="loss random ${DNLOSS_PCT}"
->       ip netns exec $MID tc qdisc replace dev $to root netem $(knetem "$LOSS") $xx || exit 1
->       ip netns exec $MID tc qdisc show dev $to >> "$W/emu-qdisc.txt"

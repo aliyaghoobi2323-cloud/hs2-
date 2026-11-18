@@ -119,6 +119,10 @@ type Session struct {
 
 	die     chan struct{} // flag session has died
 	dieOnce sync.Once
+	// hs2 b307: set (inside dieOnce, just before die closes) so IsClosed is
+	// one atomic load instead of a non-blocking channel receive; the LB pick
+	// loops call it for every link several times per pick (sc307 scale test)
+	dead atomic.Bool
 
 	// socket error handling
 	socketReadError      atomic.Value
@@ -278,6 +282,7 @@ func (s *Session) Accept() (io.ReadWriteCloser, error) {
 func (s *Session) Close() error {
 	var once bool
 	s.dieOnce.Do(func() {
+		s.dead.Store(true)
 		close(s.die)
 		once = true
 	})
@@ -347,13 +352,13 @@ func (s *Session) notifyProtoError(err error) {
 
 // IsClosed does a safe check to see if we have shutdown
 func (s *Session) IsClosed() bool {
-	select {
-	case <-s.die:
-		return true
-	default:
-		return false
-	}
+	return s.dead.Load()
 }
+
+// DeadFlag (hs2 b325) is the session's closed flag itself (true once it is
+// closed), so a caller scanning many sessions can read it without the method
+// call. Read-only for the caller.
+func (s *Session) DeadFlag() *atomic.Bool { return &s.dead }
 
 // NumStreams returns the number of currently open streams
 func (s *Session) NumStreams() int {

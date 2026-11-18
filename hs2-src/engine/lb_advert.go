@@ -187,8 +187,12 @@ type LBAdvert struct {
 	report   func() []byte
 	rep      *LBReport
 	onReport func(LBReport)
-	lastAt   time.Time // the last exchange (either side)
-	log      func(string, ...any)
+	// b331 (lb_sparepath331.go): the edge's per-path count builder and the
+	// exit's listener.
+	serving   func() []edgePathCount
+	onServing func([]edgePathCount)
+	lastAt    time.Time // the last exchange (either side)
+	log       func(string, ...any)
 }
 
 // NewLBAdvert: mine is this side's own list (nil: nothing to announce);
@@ -277,14 +281,13 @@ func (a *LBAdvert) serve(st io.ReadWriteCloser) {
 	if d, ok := st.(interface{ SetDeadline(time.Time) error }); ok {
 		d.SetDeadline(time.Now().Add(infoTimeout))
 	}
-	l, ver, err := readAdvertVer(st)
+	br := bufio.NewReader(st)
+	l, ver, err := readAdvertVer(br)
 	if err != nil {
 		return
 	}
-	if ver >= lbAdvertVerFront { // the peer's front profiles end its message
-		if m, err := readFrontExt(st); err == nil {
-			attachFronts(l, m)
-		}
+	if ver >= lbAdvertVerFront { // the peer's front profiles (and, ver 3, its serving counts) end its message
+		a.readAdvertTail(br, l, ver)
 	}
 	a.received(l)
 	mine := a.getMine()
@@ -311,6 +314,10 @@ func (a *LBAdvert) exchange(ro rawStreamOpener) error {
 	mine := a.getMine()
 	req := append([]byte{kindLBAdvert}, encodeAdvert(mine)...)
 	req = append(req, encodeFrontExt(mine)...) // nil unless a non-default front
+	if sb := a.servBlockOut(); sb != nil {     // b331: the per-path serving counts (lb_sparepath331.go)
+		req[1] = lbAdvertVerServ
+		req = append(req, sb...)
+	}
 	if _, err := st.Write(req); err != nil {
 		return err
 	}

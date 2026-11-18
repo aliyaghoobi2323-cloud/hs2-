@@ -893,10 +893,10 @@ func withOwnList(b []byte, fc fileConfig, f func([]lbIP) ([]lbIP, error)) ([]byt
 // addIPList: add-ip on this side's list l (p = add.IP; weight -1 = split
 // equally; pubIPs = this server's public IPs).
 func addIPList(fc fileConfig, l []lbIP, add lbIP, weight int, pubIPs []string) ([]lbIP, error) {
-	p := net.ParseIP(add.IP)
+	key := lbEntryKey(add.IP) // an IP, or "auto6[:IFACE]" (b333)
 	for _, e := range l {
-		if net.ParseIP(e.IP).Equal(p) {
-			return nil, fmt.Errorf(tr("%s is already in the list", "%s همین حالا در فهرست است"), p)
+		if lbEntryKey(e.IP) == key {
+			return nil, fmt.Errorf(tr("%s is already in the list", "%s همین حالا در فهرست است"), key)
 		}
 	}
 	if len(l) == 0 {
@@ -908,9 +908,9 @@ func addIPList(fc fileConfig, l []lbIP, add lbIP, weight int, pubIPs []string) (
 			prim = pi
 		}
 		if prim == "" { // a wildcard listener: its public IP is the primary
-			prim = firstOther(pubIPs, p.String())
+			prim = firstOther(pubIPs, key)
 		}
-		if prim != "" && prim != p.String() {
+		if prim != "" && prim != key {
 			l = append(l, lbIP{IP: prim})
 		}
 	}
@@ -940,10 +940,10 @@ func addIPList(fc fileConfig, l []lbIP, add lbIP, weight int, pubIPs []string) (
 
 // removeIP: remove-ip on this side's list (the rest split equally).
 func removeIP(l []lbIP, ip string) ([]lbIP, error) {
-	p := net.ParseIP(ip)
+	key := lbEntryKey(ip)
 	var out []lbIP
 	for _, e := range l {
-		if p == nil || !net.ParseIP(e.IP).Equal(p) {
+		if lbEntryKey(e.IP) != key {
 			out = append(out, e)
 		}
 	}
@@ -1088,6 +1088,9 @@ func lbChangeCmd(sub string, args []string) int {
 		// (fe80::1%eth0) or a non-IP is refused HERE — park/unpark went
 		// on with net.ParseIP(...) == nil, i.e. the IP "<nil>".
 		v, ok := userIP(*ip)
+		if _, auto := lbAutoSpec(*ip); auto && (sub == "add-ip" || sub == "remove-ip") {
+			v, ok = lbEntryKey(*ip), true // b333: this server's current IPv6 (lbauto6.go)
+		}
 		if !ok {
 			fmt.Printf(tr("ERROR: --ip %q is not an IP address (IPv4, or IPv6 without a %%zone)\n", "خطا: --ip %q یک آدرس IP نیست (IPv4، یا IPv6 بدون %%zone)\n"), *ip)
 			return 1
@@ -1113,6 +1116,13 @@ func lbChangeCmd(sub string, args []string) int {
 	switch sub {
 	case "add-ip":
 		p := net.ParseIP(*ip)
+		if _, auto := lbAutoSpec(*ip); auto { // b333: follows this server's IPv6 (Hetzner: new one each boot)
+			fmt.Println("lb: " + checkAuto6Line(*ip))
+			nb, err = withOwnList(cur, fc, func(l []lbIP) ([]lbIP, error) {
+				return addIPList(fc, l, lbIP{IP: *ip, SNI: *sni, CertFile: *cert, KeyFile: *key}, *weight, localPublicIPs())
+			})
+			break
+		}
 		if p == nil {
 			fmt.Println(tr("ERROR: --ip must be an IP of this server", "خطا: --ip باید یک IP همین سرور باشد"))
 			return 1

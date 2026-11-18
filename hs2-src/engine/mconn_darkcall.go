@@ -117,7 +117,7 @@ func darkcallLogLine() string {
 		s.switched.Load(), s.covered.Load(), s.short.Load(), s.noCand.Load(), s.rrec.Load(), s.rrRx.Load(), s.rrNo.Load(), s.rearm.Load(),
 		s.okAfter.Load(), s.badAfter.Load(), s.capped.Load(), s.resent.Load()>>10, s.moved.Load()>>10, s.again.Load(), s.uncapAll.Load(),
 		cs221Stat.held.Load(), cs221Stat.heldB.Load()>>10, cs221Stat.skipQ.Load(), cs221Stat.rxLive.Load(), cs221Stat.samePair.Load()) +
-		cs223LogPart() + cs224LogPart() + cs226LogPart() + dc254LogPart() + xs261LogPart() + b262LogPart() + b262RepLogPart() + b270LogPart() + b274LogPart() + b296LogPart()
+		cs223LogPart() + cs224LogPart() + cs226LogPart() + dc254LogPart() + xs261LogPart() + b262LogPart() + b262RepLogPart() + b270LogPart() + b274LogPart() + b296LogPart() + b342LogPart()
 }
 
 // dcSub: a sub's link evidence (under m.mu).
@@ -407,6 +407,11 @@ func (m *mConn) darkcallLiteLocked(now time.Time, nowc int64, lite bool) bool {
 		}
 		return rr
 	}
+	// b342: a call's primary stalled without RTO evidence yet (backoff 0 on
+	// an inflated-RTO link): switch to a copy whose link is acking now
+	if isCall && !lite && b342DCFast.Load() && p != nil && m.b342FastLocked(p, live, now, nowc, next) {
+		return false
+	}
 	if m.iran && anyDark && now.Sub(d.rxAt) >= darkcallAfter() {
 		if m.cs221LiveReadLocked(live, now) {
 			if !d.cs221Held {
@@ -535,8 +540,14 @@ func (m *mConn) dcTraceLocked(live []*msub, now time.Time, nowc int64, next uint
 		pi, len(live), now.Sub(d.rxAt).Milliseconds(), b)
 }
 
+// dcOverLog (b340, lab/rb339 R1): past darkcallLogMax the lines kept
+// coming at this many a minute. The lifetime cap alone was used up by lite
+// (cs226) switches ~25 min into the run, and a call's later 4.3 s stall
+// left no darkcall line at all to tell whether it switched.
+var dcOverLog = logBudget{per: 30}
+
 func (m *mConn) dcLogf(format string, a ...any) {
-	if darkcallStat.logged.Add(1) > darkcallLogMax {
+	if darkcallStat.logged.Add(1) > darkcallLogMax && !dcOverLog.ok(time.Now()) {
 		return
 	}
 	log.Printf(format, a...)

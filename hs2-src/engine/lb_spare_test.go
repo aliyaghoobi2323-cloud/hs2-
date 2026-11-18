@@ -56,12 +56,13 @@ func TestLB2NewPathGetsLinksWithoutIdle(t *testing.T) {
 	b := busyLB(t, v4, 40)
 	var asked atomic.Int32
 	var dials sync.WaitGroup
-	b.setSpare(func(n int) { // the pool: each spare dials once, placed by acquire
+	b.setSpare(func(n int) int { // the pool: each spare dials once, placed by acquire
 		for i := 0; i < n; i++ {
 			asked.Add(1)
 			dials.Add(1)
 			go func() { defer dials.Done(); dialOne(b) }()
 		}
+		return n
 	})
 	v6 := LBPath{Local: "2001:db8:1::1", Remote: "2001:db8:5::94d2",
 		Addr: "[2001:db8:5::94d2]:2082", Weight: 8}
@@ -110,7 +111,7 @@ func TestLB2SpareOffWithoutKey(t *testing.T) {
 		dialOne(b)
 	}
 	asked := 0
-	b.setSpare(func(n int) { asked += n })
+	b.setSpare(func(n int) int { asked += n; return n })
 	b.SetPaths([]LBPath{
 		{Local: "k", Remote: "a", Addr: "a:1", Weight: 50, Primary: true},
 		{Local: "k", Remote: "b", Addr: "b:1", Weight: 50},
@@ -429,7 +430,7 @@ func TestLB2CutPathKeepsProbeLinks(t *testing.T) {
 		b.release(k)
 	}
 	asked := 0
-	b.setSpare(func(n int) { asked = n })
+	b.setSpare(func(n int) int { asked = n; return n })
 	if n := b.fillMin(); n < 2 || asked < 2 {
 		t.Fatalf("cut path at 0 links: %d spares asked", asked)
 	}
@@ -573,7 +574,7 @@ func TestLB2SparePerRound(t *testing.T) {
 	}
 	b := busyLB(t, v4, 40)
 	var asked atomic.Int32
-	b.setSpare(func(n int) { asked.Add(int32(n)) })
+	b.setSpare(func(n int) int { asked.Add(int32(n)); return n })
 	v6 := LBPath{Local: "2001:db8:1::1", Remote: "2001:db8:5::94d2",
 		Addr: "[2001:db8:5::94d2]:2082", Weight: 40}
 	if err := b.SetPaths(append(append([]LBPath(nil), v4...), v6)); err != nil {

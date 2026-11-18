@@ -561,6 +561,7 @@ func (m *mConn) openStripe(avoid []any, raw bool) {
 func (m *mConn) stripeJoinLocked(s *msub) {
 	s.stripe = true
 	m.stN++
+	m.b311MarkHeavy()
 	m.stripeSubWinLocked(s) // HS2_STRIPE_SUB_WIN_MB (smux_autowin.go)
 	s.lastHole = time.Now() // it lacks what was sent before it joined
 	c := getChunk(mRecStripe)
@@ -580,6 +581,7 @@ func (m *mConn) onStripe(s *msub) {
 		s.stJoinAt = time.Now() // HS2_DL240_YOUNG (mconn_dl240.go)
 		m.dl242ArmLocked(s)     // HS2_DL242_RESCUE (mconn_dl242.go)
 		m.stN++
+		m.b311MarkHeavy()
 		if mtr := subMeter(s); mtr != nil && stripeAlone {
 			// the exit's TUN lane: heavy now and while the sub lives, used
 			// or not (exitTraffic.storeHeavy; released in msub.close)
@@ -1052,10 +1054,16 @@ func (m *LinkManager) pickStripeWhy(avoid []any) (Link, func(), bool, bool) {
 // connection runs on what it has; the manager tries again later).
 func (e *mconnEdge) openStripe(avoid []any) (mSub, any, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.ended || !e.first {
+		e.mu.Unlock()
 		return nil, nil, errMConnNoLink
 	}
+	if b312OpenNoLock.Load() {
+		e.mu.Unlock()
+		return e.openStripeNoLock(avoid) // b312 (mconn_b312_open.go)
+	}
+	defer e.mu.Unlock()
+	b312Open.locked.Add(1)
 	l, rel, ok, held := e.lm.pickStripeWhy(avoid)
 	if held {
 		return nil, nil, errStripeSteerHeld // sd151: no retry spin

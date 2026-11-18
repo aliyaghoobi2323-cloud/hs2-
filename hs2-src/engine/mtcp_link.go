@@ -30,6 +30,7 @@ type mtcpLink struct {
 
 	flowMu sync.Mutex
 	flows  map[*countedStream]struct{} // open user streams, for activity sampling
+	copies atomic.Int32                // b302: streams in flows with copyOnly (flowMu writes)
 
 	aid atomic.Uint64 // avoid identity (mconn_avoidkey.go), 0 until first used
 }
@@ -299,6 +300,9 @@ func (c *countedStream) Close() error {
 	if c.done.CompareAndSwap(false, true) {
 		c.link.active.Add(-1)
 		c.link.flowMu.Lock()
+		if _, in := c.link.flows[c]; in && c.copyOnly.Load() {
+			c.link.copies.Add(-1) // b302 (mconn_b302.go)
+		}
 		delete(c.link.flows, c)
 		c.link.flowMu.Unlock()
 	}

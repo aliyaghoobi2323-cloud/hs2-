@@ -340,6 +340,10 @@ func (m *LinkManager) pickPlaneTiers(p mPlane, avoid []any, pool *peerInfo, ok f
 // fast-path placements as read while ranking it (lm_fastpick.go).
 func (m *LinkManager) pickPlaneTiersFP(p mPlane, avoid []any, pool *peerInfo, ok func(*managedLink) bool) (*managedLink, int32) {
 	// HS2_LB_STEER: the path this sub should take (light: the best paths).
+	if p == planeLight && hasSkipCutMark(avoid) { // HS2_B340_SKIPCUT (lb_b340_skipcut.go)
+		ok0 := ok
+		ok = func(ml *managedLink) bool { return !rescueCutKey(ml.link) && (ok0 == nil || ok0(ml)) }
+	}
 	drawn := m.steerDrawLocked(p == planeLight, func(ml *managedLink) bool {
 		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && linkMConn(ml, pool) &&
 			!avoided(ml.link, avoid) && (ok == nil || ok(ml)) && !stripeOn(ml)
@@ -454,11 +458,12 @@ type mconnEdge struct {
 	port int
 	id   uint64
 
-	mu     sync.Mutex  // serialises open (the first sub is role 0) and end
-	first  bool        // a role-0 sub went out
+	mu     sync.Mutex  // serialises the first open (role 0), every install and end
+	first  bool        // a role-0 sub went out (never goes back to false)
 	subs   []*mconnSub // the open subs (a closed one forgets itself)
 	opened int         // subs ever opened (end's result)
 	ended  bool
+	endedA atomic.Bool // b312: ended, readable without mu (set under mu by end)
 
 	// diagnostics (HS2_MCONN_STRIPE_LOG): the first sub's placement
 	pickDur  time.Duration
@@ -476,7 +481,14 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 	// queued behind another one's wait is bounded by its own wait too.
 	t0 := time.Now()
 	e.mu.Lock()
+	if e.first && !e.ended && b312OpenNoLock.Load() {
+		// b312: a join sub's pick, open and header run without e.mu
+		// (mconn_b312_open.go); only its install takes the lock.
+		e.mu.Unlock()
+		return e.openNoLock(p, avoid, fresh, rstJ, t0)
+	}
 	defer e.mu.Unlock()
+	b312Open.locked.Add(1)
 	wait := mconnNextWait
 	if !e.first {
 		wait = mconnFirstWait
@@ -524,7 +536,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 			if _, err = st.Write(mconnHeader(e.port, e.id, role)); err == nil {
 				if (role == mconnRoleJoin || role == mconnRoleRescueJoin || role == mconnRoleRstJoin) && p == planeLight {
 					if cs, ok := st.(*countedStream); ok {
-						cs.copyOnly.Store(true) // a copy of the first sub's bytes: not demand
+						cs.markCopy() // a copy of the first sub's bytes: not demand
 					}
 				}
 				e.first = true
@@ -588,6 +600,7 @@ func (e *mconnEdge) forget(s *mconnSub) {
 func (e *mconnEdge) end() int {
 	e.mu.Lock()
 	e.ended = true
+	e.endedA.Store(true)
 	subs := e.subs
 	e.subs = nil
 	n := e.opened
@@ -676,6 +689,7 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 	}
 	obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
 	mc.tr.setPort(port)
+	mc.cp331SetPort(user) // HS2_CALLPATH_LOG (mconn_cp331.go)
 	// HS2_MCONN_STRIPE needs HS2_MCONN_DEADLINE_FIX: it upgrades raw
 	// connections at full rate, where the stale wake deadline reset 4 of ~30
 	// striped downloads in the lab without the fix
@@ -717,9 +731,32 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 
 // mconnTable is the exit's open multi-link connections by id. A join that
 // arrives before its connection's first sub waits in a slot for it.
+//
+// b307 (sc307 4x, Kharej): one table lock was the exit's top mutex wait
+// once exitTraffic was sharded (join/reserve/remove 2528/1418/1381 s per
+// 20 s). The table is split into mconnShards shards by id; every operation
+// on an id takes only its shard's lock, so its semantics per id are exactly
+// the single-lock table's (a slot lives in one shard for its whole life).
 type mconnTable struct {
+	sh [mconnShards]mconnShard
+}
+
+// mconnShards: number of table shards (power of two).
+const (
+	mconnShardBits = 6
+	mconnShards    = 1 << mconnShardBits
+)
+
+type mconnShard struct {
 	mu sync.Mutex
 	m  map[uint64]*mconnSlot
+	_  [40]byte // keep neighbouring shards' locks off one cache line
+}
+
+// shard: id's shard (ids are random or sequential: a Fibonacci mix spreads
+// both).
+func (t *mconnTable) shard(id uint64) *mconnShard {
+	return &t.sh[(id*0x9E3779B97F4A7C15)>>(64-mconnShardBits)]
 }
 
 type mconnSlot struct {
@@ -729,7 +766,13 @@ type mconnSlot struct {
 	waiters int           // joins waiting for mc
 }
 
-func newMConnTable() *mconnTable { return &mconnTable{m: map[uint64]*mconnSlot{}} }
+func newMConnTable() *mconnTable {
+	t := &mconnTable{}
+	for i := range t.sh {
+		t.sh[i].m = map[uint64]*mconnSlot{}
+	}
+	return t
+}
 
 // exitMConns is the table of an exit whose config has none (tests that call
 // serveStream directly).
@@ -756,12 +799,13 @@ func (t *mconnTable) create(id uint64, mc *mConn) bool {
 // connection ("every sub died") just before the first sub, carrying the whole
 // upload, attached: the upload was lost whole, and the exit reset its target.
 func (t *mconnTable) reserve(id uint64, mc *mConn) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	s := t.m[id]
+	sh := t.shard(id)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	s := sh.m[id]
 	if s == nil {
 		s = &mconnSlot{ready: make(chan struct{})}
-		t.m[id] = s
+		sh.m[id] = s
 	} else if s.mc != nil {
 		return false
 	}
@@ -771,9 +815,10 @@ func (t *mconnTable) reserve(id uint64, mc *mConn) bool {
 
 // publish lets the joins of a reserved connection attach.
 func (t *mconnTable) publish(id uint64, mc *mConn) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if s := t.m[id]; s != nil && s.mc == mc && !s.pub {
+	sh := t.shard(id)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if s := sh.m[id]; s != nil && s.mc == mc && !s.pub {
 		s.pub = true
 		close(s.ready)
 	}
@@ -784,19 +829,20 @@ func (t *mconnTable) publish(id uint64, mc *mConn) {
 // attached (reserved, not yet published) is waited for whatever wait is: that
 // takes microseconds.
 func (t *mconnTable) join(id uint64, wait time.Duration, stop <-chan struct{}) *mConn {
-	t.mu.Lock()
-	s := t.m[id]
+	sh := t.shard(id)
+	sh.mu.Lock()
+	s := sh.m[id]
 	if s == nil {
 		s = &mconnSlot{ready: make(chan struct{})}
-		t.m[id] = s
+		sh.m[id] = s
 	}
 	if s.pub {
-		t.mu.Unlock()
+		sh.mu.Unlock()
 		return s.mc
 	}
 	s.waiters++
 	reserved := s.mc != nil
-	t.mu.Unlock()
+	sh.mu.Unlock()
 	var tmC <-chan time.Time
 	if !reserved {
 		tm := time.NewTimer(wait)
@@ -806,9 +852,9 @@ func (t *mconnTable) join(id uint64, wait time.Duration, stop <-chan struct{}) *
 	select {
 	case <-s.ready:
 	case <-tmC:
-		t.mu.Lock()
+		sh.mu.Lock()
 		reserved = s.mc != nil && !s.pub
-		t.mu.Unlock()
+		sh.mu.Unlock()
 		if reserved { // the first sub came meanwhile: wait for its attach
 			select {
 			case <-s.ready:
@@ -817,11 +863,11 @@ func (t *mconnTable) join(id uint64, wait time.Duration, stop <-chan struct{}) *
 		}
 	case <-stop:
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 	s.waiters--
-	if s.mc == nil && s.waiters == 0 && t.m[id] == s {
-		delete(t.m, id)
+	if s.mc == nil && s.waiters == 0 && sh.m[id] == s {
+		delete(sh.m, id)
 	}
 	if !s.pub {
 		return nil
@@ -832,9 +878,10 @@ func (t *mconnTable) join(id uint64, wait time.Duration, stop <-chan struct{}) *
 // peek returns connection id if its first sub came (nil otherwise); it
 // never waits nor leaves a slot (rr157 end notice).
 func (t *mconnTable) peek(id uint64) *mConn {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if s := t.m[id]; s != nil {
+	sh := t.shard(id)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if s := sh.m[id]; s != nil {
 		return s.mc
 	}
 	return nil
@@ -842,21 +889,36 @@ func (t *mconnTable) peek(id uint64) *mConn {
 
 // remove forgets connection id if it is still mc.
 func (t *mconnTable) remove(id uint64, mc *mConn) {
-	t.mu.Lock()
-	if s := t.m[id]; s != nil && s.mc == mc {
-		delete(t.m, id)
+	sh := t.shard(id)
+	sh.mu.Lock()
+	if s := sh.m[id]; s != nil && s.mc == mc {
+		delete(sh.m, id)
 		if !s.pub {
 			close(s.ready) // never published: its waiting joins get nil
 			s.pub, s.mc = false, nil
 		}
 	}
-	t.mu.Unlock()
+	sh.mu.Unlock()
 }
 
 func (t *mconnTable) size() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return len(t.m)
+	n := 0
+	for i := range t.sh {
+		sh := &t.sh[i]
+		sh.mu.Lock()
+		n += len(sh.m)
+		sh.mu.Unlock()
+	}
+	return n
+}
+
+// has: id has a slot (tests).
+func (t *mconnTable) has(id uint64) bool {
+	sh := t.shard(id)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	_, ok := sh.m[id]
+	return ok
 }
 
 // exitMConnCounted counts a multi-link connection's bytes as one user
@@ -1048,6 +1110,13 @@ func attachExitSub(st *smux.Stream, mc *mConn, role byte, traffic *exitTraffic, 
 	dl76Mark(st)
 	c := traffic.openSub(mtr)
 	mconnStat.exitSubs.Add(1)
+	if b322ExitNoWatch.Load() { // HS2_B322_EXITNOWATCH (mconn_b322_exitwatch.go)
+		attachExitNoWatch(st, exitCountedStream{st, c}, mc, role, func() {
+			traffic.done(c)
+			mconnStat.exitSubs.Add(-1)
+		})
+		return
+	}
 	go func() {
 		select {
 		case <-st.GetDieCh():

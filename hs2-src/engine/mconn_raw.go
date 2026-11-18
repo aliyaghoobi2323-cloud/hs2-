@@ -299,10 +299,12 @@ func (m *mConn) interruptRead() {
 func (m *mConn) setReadLimit(off uint64) {
 	if !mconnDeadlineFix.Load() {
 		m.rLimit.Store(int64(off))
+		setReadLimitHook(m)
 		m.interruptRead()
 	} else {
 		m.mu.Lock()
 		m.rLimit.Store(int64(off))
+		setReadLimitHook(m)
 		if m.rawR.Load() { // after the switch no reader needs waking
 			m.interruptRead()
 		}
@@ -316,6 +318,20 @@ func (m *mConn) setReadLimit(off uint64) {
 // rawReadTestHook (tests only): called by the raw reader between reading an
 // unknown limit and its Read.
 var rawReadTestHook atomic.Pointer[func(*mConn)]
+
+// setReadLimitTestHook (tests only, b312): called by setReadLimit between
+// storing the limit and waking the raw reader. Without HS2_MCONN_DEADLINE_FIX
+// the reader can see the limit, switch to records and start readLoop in that
+// gap; the wake's past deadline then lands on readLoop's stream and kills the
+// first sub ("i/o timeout"). TestStripeOverlapOpensDuringHandshake hit it
+// now and then (the fix is on in production, off in the bare tests).
+var setReadLimitTestHook atomic.Pointer[func(*mConn)]
+
+func setReadLimitHook(m *mConn) {
+	if h := setReadLimitTestHook.Load(); h != nil {
+		(*h)(m)
+	}
+}
 
 func (m *mConn) clearReadDeadline() {
 	if d, ok := m.raw1.rw.(readDeadliner); ok {

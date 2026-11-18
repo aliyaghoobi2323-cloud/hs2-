@@ -270,14 +270,26 @@ func TestListenerSetAddRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := MergeListeners(a).(ListenerSet)
+	// done ends the accept loop: after m.Close() ListenIPs still lists
+	// 127.0.0.1, so the old exit condition never held and the goroutine
+	// spun on Accept errors for the rest of the test binary (allocating:
+	// later AllocsPerRun tests, e.g. TestB325StormPickNoAlloc, failed).
+	done := make(chan struct{})
 	defer m.Close()
+	defer close(done)
 	go func() {
 		for {
 			c, err := m.Accept()
 			if err != nil {
+				select {
+				case <-done:
+					return
+				default:
+				}
 				if strings.Contains(fmt.Sprint(err), "closed") && len(m.ListenIPs()) == 0 {
 					return
 				}
+				time.Sleep(time.Millisecond)
 				continue
 			}
 			go io.Copy(c, c) // echo

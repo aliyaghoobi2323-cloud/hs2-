@@ -110,6 +110,10 @@ const (
 )
 
 type LinkManager struct {
+	b327 b327State // HS2_B327_PICKLIST candidate list (lm_b327_picklist.go)
+	// rjEp: b313's rescue-join memo epoch (under mu's write lock).
+	rjEp uint64
+
 	ul268 map[Link]*ul268Link // ul268 trigger state (rescueWatch, under mu; mconn_ul268.go)
 	// steerGen / steerC (lk165, HS2_LM_FASTPICK): steerDrawLocked's cache,
 	// one per steer tick (lm_steercache.go).
@@ -181,6 +185,7 @@ type LinkManager struct {
 	retireKeepLogAt time.Time    // HS2_RETIRE_KEEP_IDLE log (retire_keep.go), under mu
 	stalledLogAt    time.Time
 	stuckMassLogAt  time.Time
+	b337LogAt       time.Time     // HS2_B337_PATHSTALL held-verdict line (stuck_b337.go), under mu
 	lossPathLogAt   time.Time     // the last "most busy links resend" line (loss.go)
 	promptFloor     rttFloor      // the usual time links that answer promptly take (stuck.go)
 	stuckSlowAt     time.Time     // the last tick the path was slow for most links (stuck.go)
@@ -192,6 +197,9 @@ type LinkManager struct {
 	evacuated       atomic.Int64  // light connections moved off cut paths, not yet logged (lb_evac.go)
 	evacTotal       atomic.Int64  // ... since start (status)
 	evacLogAt       time.Time
+
+	b339Hold map[string]*pathHold   // HS2_B339_PATHHYST per-path stall hysteresis (b339.go), under mu
+	b339Cuts map[string]*cutEpisode // HS2_B339_CUTGRACE cut episodes per path (b339.go), under mu
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
 	drainIdle atomic.Int64
@@ -294,6 +302,13 @@ type idleReclaimer interface {
 type managedLink struct {
 	link Link
 	id   int
+
+	// rjEp/rjBits: b313's per-pick memo of the rescue-join filters
+	// (HS2_B313_RJMEMO, mconn_b313_rjmemo.go); written and read only under
+	// m.mu's write lock, valid while rjEp == LinkManager.rjEp.
+	rjEp   uint64
+	rjBits uint8
+
 	// ccr: us200 (HS2_LINK_CC_REFRESH, link_ccrefresh.go); health goroutine only
 	ccr ccRefreshState
 	// stripeRes: when this new link was set aside for a stripe sub (zero:
@@ -309,7 +324,18 @@ type managedLink struct {
 	stUpN, stDnN atomic.Int32
 
 	dead atomic.Bool
-	born time.Time
+	// sessDead: the link's smux closed flag (b325, HS2_B325_STORMPICK; nil
+	// for other link types), read by the storm pick instead of Alive().
+	sessDead *atomic.Bool
+	// b327Fac: the path's steering factor cached at the last steer tick
+	// (HS2_B327_PICKLIST, written under the write lock); b327FacOK false
+	// until the first tick after the link joined.
+	b327Fac   float64
+	b327FacOK bool
+	// b327SecT/N: unix second and placements in it (st327b pile counter).
+	b327SecT atomic.Int64
+	b327SecN atomic.Int32
+	born     time.Time
 	// users is the number of user connections assigned here. It is raised
 	// inside Pick, under the lock, so a burst of simultaneous connections
 	// spreads across links instead of every one seeing the same counts.
@@ -380,6 +406,8 @@ type managedLink struct {
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
 	cutDrain     bool      // retired off a cut path (HS2_LB_CUT_DRAIN): its slot is replaced
+	cutKey       string    // ... the cut report key of its path (HS2_B339_CUTGRACE, b339.go)
+	cutLate      bool      // ... re-marked: it was already retiring when its path was cut, its slot is not replaced (b339.go)
 	steer        steerLink // HS2_LB_STEER (lb_auto2.go), under LinkManager.mu
 }
 
@@ -409,6 +437,7 @@ func (m *LinkManager) newManaged(l Link, id int, now time.Time) *managedLink {
 	mtr := linkMeterOf(l)
 	setGuardLinkID(mtr, id) // names the link in the post-release stall line
 	ml := &managedLink{link: l, id: id, born: now, servingSince: now, mtr: mtr}
+	ml.sessDead = sessDeadOf(l)  // b325 (lm_b325_stormpick.go)
 	m.stripeAdoptLocked(ml, now) // HS2_MCONN_STRIPE (mconn_stripe_pool.go); nothing when off
 	return ml
 }
@@ -515,6 +544,7 @@ func (m *LinkManager) AddLink(l Link, from string) int {
 	spare := ml.retiring
 	tripped := spare && m.noteSurplusArrivalLocked(now)
 	m.links = append(m.links, ml)
+	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 	n := m.aliveLocked()
 	S, _ := m.countsLocked()
 	m.mu.Unlock()
@@ -580,6 +610,7 @@ func (m *LinkManager) DropLink(l Link, from string) {
 		kept = append(kept, ml)
 	}
 	m.links = kept
+	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 	n := m.aliveLocked()
 	if n == 0 {
 		m.exitInfo.Store(nil) // no link left: the next exit may be another process
@@ -1088,6 +1119,7 @@ func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
 		m.linkSeq++
 		m.noteArrivalLocked(m.now())
 		m.links = append(m.links, m.newManaged(l, id, m.now()))
+		m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 		m.mu.Unlock()
 		if replacement {
 			m.replLog.log("mtcp: dialed replacement link %d (make-before-break)", id)
@@ -1141,7 +1173,9 @@ func (m *LinkManager) drainTick() {
 			continue
 		}
 		kept = append(kept, ml)
-		if drainIdle > 0 && ml.open > 0 && ml.reclaiming.CompareAndSwap(false, true) {
+		if m.b339GraceLocked(ml, now) { // HS2_B339_CUTGRACE: a short cut closes nothing (b339.go)
+			b339Stat.graceHeld.Add(1)
+		} else if drainIdle > 0 && ml.open > 0 && ml.reclaiming.CompareAndSwap(false, true) {
 			reclaim = append(reclaim, ml)
 		}
 		if age := now.Sub(ml.retireSince); age >= heldLogFirst && (ml.heldLogAt.IsZero() || now.Sub(ml.heldLogAt) >= heldLogEvery) {
@@ -1158,6 +1192,7 @@ func (m *LinkManager) drainTick() {
 		}
 	}
 	m.links = kept
+	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 	if m.accept {
 		kept := m.retireCloses[:0]
 		for _, c := range m.retireCloses {
@@ -1173,7 +1208,7 @@ func (m *LinkManager) drainTick() {
 	cutClosed := false
 	for _, ml := range closing {
 		if ml.cutDrain {
-			ml.cutDrain, cutClosed = false, true
+			ml.cutDrain, ml.cutLate, cutClosed = false, false, true
 		}
 	}
 	ctlChanged := false
@@ -1412,6 +1447,7 @@ func (m *LinkManager) sweepReverse() {
 		alive = append(alive, ml)
 	}
 	m.links = alive
+	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 	// The exit holds as many links as it is told, up to its ceiling; an older
 	// exit (no pool control) holds a fixed count. A link it cannot add is a
 	// slot a draining link must give back.
@@ -1520,6 +1556,7 @@ func (m *LinkManager) slotsBackLocked(now time.Time, room, inflight int) []*mana
 		}
 	}
 	m.links = kept
+	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 	return cand
 }
 
@@ -1650,6 +1687,7 @@ func (m *LinkManager) reap() {
 		}
 	}
 	m.links = alive
+	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 	if len(dead) > 0 {
 		m.notePartialLossLocked(m.now(), len(dead), len(alive))
 	}
@@ -2037,6 +2075,16 @@ func (m *LinkManager) sampleHealth() {
 	s := apSample{now: now, open: int(m.users.Load())}
 	nOK, nOld, poolOK, aged := 0, 0, 0, 0
 	var stuckCand []stuckObs
+	perPath := map[string]*pathStallCount{} // HS2_B337_PATHSTALL: waiting / prompt links per path (stuck_b337.go)
+	pathCount := func(ml *managedLink) *pathStallCount {
+		k := b337PathOf(ml)
+		c := perPath[k]
+		if c == nil {
+			c = &pathStallCount{}
+			perPath[k] = c
+		}
+		return c
+	}
 	var lossCand []lossObs
 	var judgedLoss []lossJudged     // what every link judged this tick resends and moves
 	var pressedRates []float64      // what each pressed link moves, bytes/s (its path\'s rate)
@@ -2243,6 +2291,7 @@ func (m *LinkManager) sampleHealth() {
 		waits := !ml.degraded && !ml.draining && !o.wedged && o.ctrlWait >= stuckWait && moved < activeBytes
 		if waits {
 			waitingN++
+			pathCount(ml).wait++
 		}
 		if waits || busy && !ml.degraded && !ml.draining && o.ctrlAns != 0 {
 			busyN++
@@ -2261,6 +2310,7 @@ func (m *LinkManager) sampleHealth() {
 			if rtt := time.Duration(ml.mtr.rttMicros.Load()) * time.Microsecond; busy && !ml.degraded && !ml.draining && !ml.suspect && o.peerSeen &&
 				o.ctrlWait < stuckPrompt && rtt < stuckPrompt && o.ctrlAns != 0 {
 				answering = append(answering, rtt)
+				pathCount(ml).prompt++
 				answeringMoved = append(answeringMoved, moved)
 				lastAns = max(lastAns, o.ctrlAns)
 			}
@@ -2389,14 +2439,26 @@ func (m *LinkManager) sampleHealth() {
 		share := max(stuckMoveFloor, answeringMoved[len(answeringMoved)/2]/2)
 		sort.Slice(stuckCand, func(i, j int) bool { return stuckCand[i].wait > stuckCand[j].wait })
 		room := drainHeadroom(m.max) - stuckNow
+		stalled := b337StalledPaths(perPath) // HS2_B337_PATHSTALL (stuck_b337.go)
+		b337Stat.paths.Add(int64(len(stalled)))
+		hyst := m.b339HoldPathsLocked(stalled, now) // HS2_B339_PATHHYST (b339.go)
+		held := 0
 		for _, c := range stuckCand {
 			if lastAns <= c.sent || c.perTick >= share || room <= 0 {
+				continue
+			}
+			if b339Hold(stalled, hyst, c) {
+				held++
 				continue
 			}
 			room--
 			c.ml.degraded, c.ml.stuck, c.ml.pressed = true, true, false
 			logs = append(logs, fmt.Sprintf("link %d stuck: its traffic has waited %s for an answer while it moved %s in %s (the other links answer in ~%dms) — draining",
 				c.ml.id, fmtDur(c.wait), fmtBytes(c.moved), fmtDur(dt), med.Milliseconds()))
+		}
+		if held > 0 && now.Sub(m.b337LogAt) >= time.Minute {
+			m.b337LogAt = now
+			logs = append(logs, b337HoldLog(stalled, perPath, held))
 		}
 	}
 	// Growable unless every link old enough to have been refused pool control
@@ -2408,6 +2470,7 @@ func (m *LinkManager) sampleHealth() {
 		m.noPoolLogged = true
 	}
 	m.growable = s.growable
+	m.b327Bump()        // HS2_B327_PICKLIST: flags, flowing, heavy, pressure changed
 	if m.steer != nil { // HS2_LB_STEER (lb_auto2.go)
 		m.steerTickLocked(now, dt)
 		logs = append(logs, m.steer.takeLogs()...)
@@ -2567,6 +2630,7 @@ func (m *LinkManager) heal(ctx context.Context) {
 		kept = append(kept, ml)
 	}
 	m.links = kept
+	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
 	inflight := int(m.dialing.Load())
 	freed := m.slotsBackLocked(now, m.max+drainHeadroom(m.max)-len(m.links)-inflight, inflight)
 	for _, ml := range freed {

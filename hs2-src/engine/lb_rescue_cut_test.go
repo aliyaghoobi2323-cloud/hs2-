@@ -14,6 +14,7 @@ func withRescueCut(t *testing.T, on bool) {
 		waitConnLoops(t.Logf, mCloseLinger+mRSTWait+2*time.Second)
 		lbRescueCut = old
 		rescueCutLinks.Range(func(k, _ any) bool { rescueCutLinks.Delete(k); return true })
+		rescueCutCount.Store(0) // b340
 	})
 }
 

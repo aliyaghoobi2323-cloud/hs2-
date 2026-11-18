@@ -90,6 +90,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	}
 	if cfg.Advert != nil {
 		cfg.Advert.OnReport(lm.SteerReport) // the dialing side's path report (lb_report.go)
+		if b331SparePath && lbAuto2 {
+			cfg.Advert.SetServing(lm.edgePathCounts) // b331: per-path serving counts (lb_sparepath331.go)
+		}
 	}
 	// A link carries user connections only once its kindInfo exchange is over,
 	// so each one knows whether the exit routes port tags (routes.go).

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/xtaci/smux"
 )
@@ -38,8 +39,12 @@ type exitConn struct {
 type exitTraffic struct {
 	peers *linkPeers // the live links' meters (throughput)
 
-	mu    sync.Mutex
-	conns map[*exitConn]struct{}
+	// b307 (sc307 scale test): the conn set is split into exitShards
+	// shards by the conn's address, each with its own lock. At 3x one
+	// global t.mu made exitTraffic.add/done the top Kharej lock (mutex
+	// delay ~1230 s per 20 s, every exit stream open/close of ~200k
+	// goroutines); a shard is held only for its own add/delete or copy.
+	sh [exitShards]exitShard
 
 	// sampler state
 	lastAt    time.Time
@@ -50,10 +55,25 @@ type exitTraffic struct {
 
 	snap atomic.Pointer[exitSnap]
 
-	// b296: the sampler's copy of conns (reused); t.mu is held only for the
+	// b296: the sampler's copy of conns (reused); a shard's mu is held only for the
 	// copy, the per-conn math runs without it (add/done on new or closing
 	// exit streams no longer wait for a full scan).
 	scan []*exitConn
+}
+
+// exitShards: number of conn-set shards (power of two).
+const exitShards = 64
+
+type exitShard struct {
+	mu    sync.Mutex
+	conns map[*exitConn]struct{}
+	_     [40]byte // keep neighbouring shard locks off one cache line
+}
+
+// shardOf: c's shard, from its address (Go's heap does not move objects).
+func (t *exitTraffic) shardOf(c *exitConn) *exitShard {
+	h := uint64(uintptr(unsafe.Pointer(c))) * 0x9E3779B97F4A7C15
+	return &t.sh[h>>(64-6)]
 }
 
 // exitSnap is the last sample.
@@ -66,8 +86,12 @@ type exitSnap struct {
 const peakTicks = 30
 
 func newExitTraffic(peers *linkPeers) *exitTraffic {
-	return &exitTraffic{peers: peers, conns: map[*exitConn]struct{}{}, prevB: map[*linkMeter]uint64{},
+	t := &exitTraffic{peers: peers, prevB: map[*linkMeter]uint64{},
 		heavy: map[*linkMeter]int32{}, heavyPrev: map[*linkMeter]int32{}}
+	for i := range t.sh {
+		t.sh[i].conns = map[*exitConn]struct{}{}
+	}
+	return t
 }
 
 // open registers a relayed user connection riding the link metered by mtr
@@ -83,9 +107,10 @@ func (t *exitTraffic) add(c *exitConn) *exitConn {
 	if c.mtr != nil {
 		c.mtr.users.Add(1)
 	}
-	t.mu.Lock()
-	t.conns[c] = struct{}{}
-	t.mu.Unlock()
+	sh := t.shardOf(c)
+	sh.mu.Lock()
+	sh.conns[c] = struct{}{}
+	sh.mu.Unlock()
 	return c
 }
 
@@ -100,10 +125,11 @@ func (t *exitTraffic) done(c *exitConn) {
 	if t == nil {
 		return
 	}
-	t.mu.Lock()
-	_, ok := t.conns[c]
-	delete(t.conns, c)
-	t.mu.Unlock()
+	sh := t.shardOf(c)
+	sh.mu.Lock()
+	_, ok := sh.conns[c]
+	delete(sh.conns, c)
+	sh.mu.Unlock()
 	if ok && c.mtr != nil {
 		c.mtr.users.Add(-1)
 	}
@@ -136,12 +162,15 @@ func (t *exitTraffic) sample(now time.Time) {
 	// fields (prev, lastActive, ewma, steady) are the sampler's own; a conn
 	// closed after the copy is counted once more this tick (as if it had
 	// closed just after the scan).
-	t.mu.Lock()
 	scan := t.scan[:0]
-	for c := range t.conns {
-		scan = append(scan, c)
+	for i := range t.sh {
+		sh := &t.sh[i]
+		sh.mu.Lock()
+		for c := range sh.conns {
+			scan = append(scan, c)
+		}
+		sh.mu.Unlock()
 	}
-	t.mu.Unlock()
 	for _, c := range scan {
 		b := c.bytes.Load()
 		steady := false

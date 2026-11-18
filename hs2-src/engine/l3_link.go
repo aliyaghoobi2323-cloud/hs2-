@@ -330,12 +330,16 @@ type l3Set struct {
 	cut l3CutSet
 	// b278Log: logDrops' logger, for the HS2_B278_TRACE lines (l3_b278.go).
 	b278Log atomic.Pointer[func(string, ...any)]
+	// gen counts changes to links (add/remove; b303 keeps a flow's second
+	// link only while it is unchanged).
+	gen atomic.Uint64
 }
 
 func (s *l3Set) add(l *l3Link) {
 	l.cut = &s.cut
 	s.mu.Lock()
 	s.links = append(s.links, l)
+	s.gen.Add(1)
 	s.mu.Unlock()
 }
 
@@ -349,6 +353,7 @@ func (s *l3Set) remove(dead *l3Link) {
 		}
 	}
 	s.links = out
+	s.gen.Add(1)
 }
 
 // removeDead drops every dead link and reports how many were removed.
@@ -366,6 +371,9 @@ func (s *l3Set) removeDead() int {
 		s.links[i] = nil
 	}
 	s.links = out
+	if n > 0 {
+		s.gen.Add(1)
+	}
 	return n
 }
 
@@ -382,6 +390,7 @@ func (s *l3Set) closeAll() {
 		l.markDead()
 	}
 	s.links = nil
+	s.gen.Add(1)
 }
 
 // pick maps a packet to a live link by rendezvous (highest-random-weight)
@@ -413,8 +422,8 @@ func (s *l3Set) pickAll(pkt []byte) (first, second *l3Link, fp fecPlan, fec bool
 	if s.lane != nil {
 		if l, ok := s.lane.pick(s.links, pkt, h); ok {
 			if s.dup && l != nil && l.canDup() {
-				second = dupSecond(s.links, h, l)
-				second = b278Second(s.links, h, l, second, s.lane.now()) // HS2_B278_L3STALL
+				// HS2_B278_L3STALL + HS2_B303_DUPSTICK (l3_b278.go, l3_b303.go)
+				second = s.dupSecondFor(&s.lane.flows[h&(l3LaneSlots-1)], h, l, s.lane.now())
 				if dupPathsOn && second != nil && l.path != "" {
 					countDupPath(second.path != l.path, true)
 				}
@@ -531,7 +540,7 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 		case <-t.C:
 			if c := [4]int64{b278Moved.Load(), b278DupSkip.Load(), b278Stuck.Load(), b278OtherPath.Load()}; c != b278Last {
 				b278Last = c
-				logf("l3 b278 stall: on %v · lane flows moved off a stuck link %d · dup copies kept off one %d · stuck verdicts %d · dup copies moved off the first's path %d", b278On.Load(), c[0], c[1], c[2], c[3])
+				logf("l3 b278 stall: on %v · lane flows moved off a stuck link %d · dup copies kept off one %d · stuck verdicts %d · dup copies moved off the first's path %d · b303 on %v kept %d picks %d · b308 on %v held %d moved %d · b309 on %v held %d moved %d", b278On.Load(), c[0], c[1], c[2], c[3], b303On.Load(), b303Hit.Load(), b303Pick.Load(), b308On.Load(), b308Held.Load(), b308Moved.Load(), b309On.Load(), b309Held.Load(), b309Moved.Load())
 			}
 			if n := s.drops.Swap(0); n > 0 {
 				logf("l3: dropped %d packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected", n)

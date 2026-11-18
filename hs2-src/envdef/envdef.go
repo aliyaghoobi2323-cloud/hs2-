@@ -191,6 +191,23 @@ var Table = []Key{
 	// crowd connections, single blackhole and quiet runs unchanged
 	// (lab/fl107/results107.txt)
 	{"HS2_LB_CUT_NONEW", "1", Edge},
+	// b331: the exit dials a spare for a recovered PATH under its share of
+	// the edge's SERVING links by >= 2 (past the slot cap; 1/path/30 s,
+	// 6/min); the edge sends per-path serving counts in the advert (optional
+	// block, old peers unaffected) and takes the link as serving per path.
+	// On since rel69p-rc1 (lab/rb331 v4-v6, rb336, rb337: gap 3.9 -> 1.7
+	// links on a recovered path, no call p99 cost after placement).
+	{"HS2_B331_SPAREPATH", "1", Both},
+	// cp331: log a call's sub paths/links on each placement change (Iran,
+	// lab/rb331 v6; log only).
+	{"HS2_CALLPATH_LOG", "0", Edge},
+	// b336: move a call copy sitting on a clearly lossier path (smoothed loss
+	// >= 0.15 % worse for 10 s) onto the best eligible path: fresh sub first,
+	// old one given up through the close handshake once the fresh one read
+	// (Iran; 1/call/30 s, 20/min; lab/rb336). On since rel69p-rc3 (rb338:
+	// abandon + relative damper + 30..300 s per-call backoff, no churn, with
+	// the rescue-cut per-connection backoff HS2_B338_RC_GAP0_MS on).
+	{"HS2_B336_CALLMOVE", "1", Edge},
 	// id125/rk127: a pool shrink keeps live idle user connections on retiring
 	// links (reclaimed only after 60 m idle; the old 5 m rule still applies to
 	// the surplus retiring links above max_links and to cut-path drains);
@@ -361,6 +378,86 @@ var Table = []Key{
 	// HS2_GC296_RINGPOOL: rescue ring buffers come from a per-size-class
 	// sync.Pool (4 KB-8 MB) and are returned when the ring is dropped.
 	{"HS2_GC296_RINGPOOL", "1", Both},
+	// HS2_B302_COPYCNT: linkCopies reads a per-link copy-sub counter instead
+	// of walking every stream on the link under LinkManager.mu.
+	{"HS2_B302_COPYCNT", "1", Both},
+	// HS2_B307_ASYNCCLOSE: msub.close runs the smux Stream.Close (FIN behind
+	// queued link writes) in a goroutine and waits at most 1 ms, so other
+	// closers no longer queue in its Once (sc307 3x: Iran Once 116 s -> 1.6 s).
+	// b315: ON by default (p313 fair A/B: neutral on heavy, ICMP/call p99
+	// equal or better; b310's -20 % was the lab H1 softirq bias); =0 off.
+	{"HS2_B307_ASYNCCLOSE", "1", Both},
+	// HS2_B311_HEAVYSYNC: with the async close on, a heavy (ever-striped or
+	// bulk) connection keeps the synchronous sub close (rel69m order).
+	{"HS2_B311_HEAVYSYNC", "1", Both},
+	// HS2_B303_DUPSTICK: an interactive flow keeps the dup's second link
+	// (dupSecond + b278 pick) while it stays alive, light, not stuck, off cut
+	// and off the first's path, re-picking at most every second.
+	{"HS2_B303_DUPSTICK", "1", Both},
+	// HS2_B308_DUPAVOID: after a lane flow's first copy leaves a stuck or
+	// cut link, its second copy avoids that link's path (and the new
+	// first's path) for 3 s when a third path has a usable link.
+	{"HS2_B308_DUPAVOID", "1", Both},
+	// HS2_B309_DUPSCAN: a second copy left on the first's path, a stuck link
+	// or a cut path walks every other-path link in rank order (light, not
+	// stuck, off cut, off avoided paths); it also avoids the path of a kept
+	// second link it left stuck or cut for 3 s. Nothing valid: as before.
+	{"HS2_B309_DUPSCAN", "1", Both},
+	// HS2_B312_OPENNOLOCK: an edge's join/stripe open picks, opens and
+	// writes its header without the per-connection lock; only the install
+	// takes it (and refuses after end, releasing the pick).
+	{"HS2_B312_OPENNOLOCK", "1", Edge},
+	// HS2_B313_RJMEMO: a rescue join's placement evaluates its per-link
+	// filter once per pick instead of in every scan, and skips scans no link
+	// can pass (same choice, less time under LinkManager.mu).
+	{"HS2_B313_RJMEMO", "1", Edge},
+	// HS2_B313_RJFAST: with HS2_LM_FASTPICK, a rescue join is placed under
+	// LinkManager.mu's read lock (fpPicks CAS, as lk162), falling back to the
+	// write-locked path after a few tries (lab1 A/B: LM mutex -42 %/-18 %).
+	{"HS2_B313_RJFAST", "1", Edge},
+	// HS2_B322_EXITNOWATCH: an exit sub gets no watcher goroutine; its
+	// bookkeeping runs once from the sub's close or the connection's end
+	// (b332: on; st328 lab3: Kharej storm run-queue peak -16 %, sched p99
+	// -16 ms, -4.6 % goroutines created; quiet call equal to the noise).
+	{"HS2_B322_EXITNOWATCH", "1", Exit},
+	// HS2_B327_PICKLIST: a user connection's fast pick scans a per-path
+	// candidate list (best 16 links of each steering group, slack 0) instead
+	// of every link; same choice class and lightest load as the full scan
+	// (b334: on; st327 lab2 5 rounds: storm pick CPU -65..-75 %, open path
+	// -32..-45 %, latency equal within noise). Both sides, as A/B'd.
+	{"HS2_B327_PICKLIST", "1", Both},
+	// HS2_B337_PATHSTALL: a waiting link whose whole path stalls (2+ of its
+	// links wait, outnumbering its prompt ones: a cut path coming back) is
+	// not judged stuck before stuckPathWait (20 s) (ab337: one 5-6 s down-cut
+	// of 1 of 4 paths drained 17-38 links and closed their idle users at 4.5x).
+	{"HS2_B337_PATHSTALL", "1", Edge},
+	// HS2_B339_PATHHYST: a path found stalled whole keeps its links held for
+	// stuckPathWait from that first sample even as part of it answers again
+	// (ab337 X5: 23 backoff stragglers judged at 8 s once some links resumed).
+	{"HS2_B339_PATHHYST", "1", Edge},
+	// HS2_B339_CUTGRACE: drainTick does not reclaim idle / evac / trickling
+	// conns on a cut-drained link until its path's cut has lasted 30 s (no
+	// grace for a path cut again within 120 s). rel69p-rc2 ships it dark
+	// (ab339c: no user-visible gain on lossy cuts with HS2_LB_EVAC off).
+	{"HS2_B339_CUTGRACE", "0", Edge},
+	// HS2_B338_RC_GAP0_MS: rescue-cut per-connection backoff, first drop
+	// immediate, each further drop within 30 s waits GAP0 << n (max 16 s);
+	// 0 = off (rb339: bounds the 148-subs-in-11-s churn loop).
+	{"HS2_B338_RC_GAP0_MS", "500", Both},
+	// HS2_B340_SKIPCUT: light / call / rescue placement skips rescue-cut
+	// marked links while an unmarked one exists (rb340: 0 copies on marked
+	// links vs 6-102 per arm; backoff holds 0).
+	{"HS2_B340_SKIPCUT", "1", Both},
+	// HS2_B340_CUTCLEAR: a cut path that reads clean 3 times in a row (report
+	// OK bit) is lowered, not cut-marked, for the rest of its recovery hold.
+	{"HS2_B340_CUTCLEAR", "1", Both},
+	// HS2_B342_DCFAST: darkcall switches a call's primary that has bytes in
+	// flight and no ack progress for max(3 x srtt, 300 ms) to a live copy on
+	// another path with recent ack progress, without waiting for RTO
+	// evidence (rb342: switch ~0.4 s instead of 1.2-2 s, no flapping, light
+	// users equal or better). Each side its own sending direction; on since
+	// rel69p-rc3.
+	{"HS2_B342_DCFAST", "1", Both},
 	// rel69h (st244/st245/st246): the edge paces lite raw->dual upgrades
 	// through one token bucket, "auto" = max(500, 100 x GOMAXPROCS) a second
 	// (burst rate/10); call upgrades and interactive flows

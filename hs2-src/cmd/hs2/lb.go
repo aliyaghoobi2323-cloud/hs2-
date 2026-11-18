@@ -49,11 +49,13 @@ func lbSideWeights(name string, list []lbIP, prim string, strict bool) (ips []st
 	sum := 0
 	primListed := false
 	for _, e := range list {
-		ip := net.ParseIP(e.IP)
-		if ip == nil || ip.IsUnspecified() {
-			return nil, nil, fmt.Errorf(`"lb.%s": %q is not a valid IP address`, name, e.IP)
+		k := lbEntryKey(e.IP)
+		if _, auto := lbAutoSpec(e.IP); !auto { // b333: "auto6" (lbauto6.go)
+			ip := net.ParseIP(e.IP)
+			if ip == nil || ip.IsUnspecified() {
+				return nil, nil, fmt.Errorf(`"lb.%s": %q is not a valid IP address (or "auto6" / "auto6:IFACE" for this server's current IPv6)`, name, e.IP)
+			}
 		}
-		k := ip.String()
 		if seen[k] {
 			return nil, nil, fmt.Errorf(`"lb.%s": %s is listed twice`, name, k)
 		}
@@ -86,7 +88,7 @@ func lbSideWeights(name string, list []lbIP, prim string, strict bool) (ips []st
 		return nil, nil, fmt.Errorf(`"lb.%s": weights sum to %d, more than 100`, name, sum)
 	}
 	for _, e := range list {
-		k := net.ParseIP(e.IP).String()
+		k := lbEntryKey(e.IP)
 		if k == prim {
 			ips, w = append([]string{k}, ips...), append([]int{e.Weight}, w...)
 		} else {

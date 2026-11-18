@@ -9,7 +9,13 @@ import (
 func setStripeOverlap(t *testing.T, on, peer bool) {
 	t.Helper()
 	old, oldPeer := stripeOverlapOn.Load(), stripeOverlapPeerOK
-	oldK := stripeK.Load()
+	oldK, oldFix := stripeK.Load(), mconnDeadlineFix.Load()
+	// b312: HS2_MCONN_DEADLINE_FIX on, as in production (envdef, both
+	// sides). Off, the exit's raw reader could switch to records between
+	// setReadLimit's limit and its wake, and the wake's stale deadline killed
+	// the first sub mid-handshake ("every sub died", ~0.5-3 % of -race runs;
+	// TestB312OverlapStaleDeadline forces that gap).
+	mconnDeadlineFix.Store(true)
 	stripeOverlapOn.Store(on)
 	stripeOverlapPeerOK = func(*msub) bool { return peer }
 	stripeK.Store(4)
@@ -17,6 +23,7 @@ func setStripeOverlap(t *testing.T, on, peer bool) {
 		stripeOverlapOn.Store(old)
 		stripeOverlapPeerOK = oldPeer
 		stripeK.Store(oldK)
+		mconnDeadlineFix.Store(oldFix)
 	})
 }
 

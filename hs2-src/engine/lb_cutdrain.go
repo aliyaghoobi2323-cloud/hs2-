@@ -108,16 +108,18 @@ func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time, T in
 		return serving, nil
 	}
 	cut := m.cutPaths()
+	m.b339CutTrackLocked(cut, now) // HS2_B339_CUTGRACE (b339.go)
 	for _, ml := range m.links {
 		if ml.cutDrain {
 			if _, ok := cutKeep(cut, mlPath(ml)); !ok || !ml.retiring {
-				ml.cutDrain = false
+				ml.cutDrain, ml.cutLate = false, false
 			}
 		}
 	}
 	if len(cut) == 0 {
 		return serving, nil
 	}
+	m.b339RemarkLocked(cut, now) // HS2_B339_CUTGRACE: links already retiring on a cut path (b339.go)
 	byPath := map[string][]*managedLink{}
 	for _, ml := range serving {
 		p := mlPath(ml)
@@ -145,7 +147,7 @@ func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time, T in
 		if len(byPath[p]) >= lb2Keep {
 			continue
 		}
-		ml.retiring, ml.retireSince, ml.cutDrain = false, time.Time{}, false
+		ml.retiring, ml.retireSince, ml.cutDrain, ml.cutLate = false, time.Time{}, false, false
 		byPath[p] = append(byPath[p], ml)
 		serving = append(serving, ml)
 	}
@@ -178,6 +180,7 @@ func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time, T in
 		room -= len(ls) - keep
 		for _, ml := range ls[keep:] {
 			ml.retiring, ml.retireSince, ml.pressed, ml.cutDrain = true, now, false, true
+			ml.cutKey, ml.cutLate = cutReportKey(cut, p), false
 			gone[ml] = true
 			out = append(out, ml)
 		}
@@ -199,7 +202,7 @@ func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time, T in
 func (m *LinkManager) cutDrainingLocked() int {
 	n := 0
 	for _, ml := range m.links {
-		if ml.cutDrain && ml.retiring && ml.link.Alive() {
+		if ml.cutDrain && !ml.cutLate && ml.retiring && ml.link.Alive() { // b339: a re-marked link's slot was not serving
 			n++
 		}
 	}

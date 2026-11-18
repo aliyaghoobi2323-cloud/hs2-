@@ -30,7 +30,7 @@ var lb2SpareMax = 2
 
 // setSpare installs the pool's spare-dial request: n spares wanted now (the
 // pool starts what is missing, within lb2SpareMax over its target).
-func (b *LB) setSpare(f func(n int)) {
+func (b *LB) setSpare(f func(n int) int) {
 	b.mu.Lock()
 	b.spare = f
 	b.mu.Unlock()
@@ -79,13 +79,17 @@ func (b *LB) fillMin() int {
 	}
 	b.mu.Unlock()
 	if n > 0 {
-		f(n)
+		got := f(n)
 		if len(names) == 0 {
 			return n // HS2_LB_SILENT: the spare is a cooled path's probe (silentProbeDueLocked), not a short path
 		}
 		if b.spareLog.Load() == 0 || time.Since(monoTime(b.spareLog.Load())) >= time.Minute {
 			b.spareLog.Store(monoNano(time.Now()))
-			b.log("lb auto2: %d link(s) short of two per path on %v — spare dial(s) asked of the pool (nothing closed for them)", n, names)
+			if got > 0 { // rebal329: say what the pool did, not what was asked
+				b.log("lb auto2: %d link(s) short of two per path on %v — %d spare dial(s) started by the pool (nothing closed for them)", n, names, got)
+			} else {
+				b.log("lb auto2: %d link(s) short of two per path on %v — the pool started no spare dial (at its slot cap, in an outage, or spares already pending)", n, names)
+			}
 		}
 	}
 	return n
@@ -150,6 +154,9 @@ func (b *LB) spareForGap(now time.Time) bool {
 			n = T
 		}
 		room = b.edgeRoomLocked(under, eff, n, now)
+		if r, ok := b.edgeRoomServLocked(under, eff, now); ok { // b331: the edge's serving frame, per path
+			room = r
+		}
 		if room == 0 || b.gapWaitLocked(under, now) {
 			uname := b.paths[under].Name()
 			b.mu.Unlock()
@@ -159,19 +166,36 @@ func (b *LB) spareForGap(now time.Time) bool {
 			}
 			return false
 		}
-		b.gapAskedLocked(under, now)
 	}
 	k := min(lbSparePerRound, int(underBy), lb2DrainPerMin-len(b.drained), room) // lb_fill17.go; 1 unless HS2_LB_SPARE_PER_ROUND
 	k = max(k, 1)
-	for i := 0; i < k; i++ {
-		b.drained = append(b.drained, now)
-	}
 	f, uname := b.spare, b.paths[under].Name()
 	b.mu.Unlock()
-	f(k)
+	got := f(k)
+	// rebal329: book only spares the pool started. An ask that started no
+	// dial (slot cap: retiring links the edge holds fill the slots) is not a
+	// spare that "did not stay" (lb_spare176.go's backoff), and it is not
+	// counted against lb2DrainPerMin.
+	if got > 0 {
+		b.mu.Lock()
+		if lbSpareEdge {
+			b.gapAskedLocked(under, now)
+		}
+		for i := 0; i < got; i++ {
+			b.drained = append(b.drained, now)
+		}
+		b.mu.Unlock()
+	}
+	if got == 0 {
+		if t := b.spareCapLog.Load(); t == 0 || time.Since(monoTime(t)) >= 10*time.Minute {
+			b.spareCapLog.Store(monoNano(time.Now()))
+			b.log("lb auto2: rebalance — %s is %.1f links under its share, but the pool started no spare dial (at its slot cap: retiring links the edge holds fill the slots; or in an outage, or spares already pending)", uname, underBy)
+		}
+		return false
+	}
 	if t := b.spareGapLog.Load(); t == 0 || time.Since(monoTime(t)) >= time.Minute {
 		b.spareGapLog.Store(monoNano(time.Now()))
-		b.log("lb auto2: rebalance — no idle link to retire; a spare dial asked for %s (%.1f links under its share; the edge retires the surplus once empty)", uname, underBy)
+		b.log("lb auto2: rebalance — no idle link to retire; %d spare dial(s) started for %s (%.1f links under its share; the edge retires the surplus once empty)", got, uname, underBy)
 	}
 	return true
 }
@@ -200,6 +224,9 @@ func (m *LinkManager) arrivalWantedLocked(ml *managedLink) bool {
 		}
 	}
 	if np < lb2Keep {
+		return true
+	}
+	if ok, known := m.arrivalPathLocked(path, ms); known && ok { // b331: per path (lb_sparepath331.go)
 		return true
 	}
 	ms = append(ms, ml)

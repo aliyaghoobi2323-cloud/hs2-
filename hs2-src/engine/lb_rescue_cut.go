@@ -55,6 +55,10 @@ func init() {
 	if v, err := strconv.Atoi(os.Getenv("HS2_LB_RESCUE_CUT_PER_SEC")); err == nil && v > 0 {
 		rescueCutPerSec = int64(v)
 	}
+	// b338: HS2_B338_RC_GAP0_MS sets the first per-connection gap; 0 turns the backoff off
+	if v, err := strconv.Atoi(os.Getenv("HS2_B338_RC_GAP0_MS")); err == nil && v >= 0 {
+		rcGap0 = time.Duration(v) * time.Millisecond
+	}
 }
 
 // rescueCutKey reports whether a sub's key is on a cut path.
@@ -71,14 +75,39 @@ func rescueCutMark(prev map[any]bool, cut []any) map[any]bool {
 	next := make(map[any]bool, len(cut))
 	for _, l := range cut {
 		next[l] = true
-		rescueCutLinks.Store(l, true)
+		if _, had := rescueCutLinks.LoadOrStore(l, true); !had {
+			rescueCutCount.Add(1) // b340 (lb_b340_skipcut.go)
+		}
 	}
 	for l := range prev {
 		if !next[l] {
-			rescueCutLinks.Delete(l)
+			if _, had := rescueCutLinks.LoadAndDelete(l); had {
+				rescueCutCount.Add(-1)
+			}
 		}
 	}
 	return next
+}
+
+// b338: per-connection backoff of the cut drop. A drop is always taken
+// when the connection had none within rcReset; each further one waits
+// rcGap0 << n (n: drops in a row), at most rcGapMax.
+var (
+	rcGap0   = 500 * time.Millisecond
+	rcGapMax = 16 * time.Second
+	rcReset  = 30 * time.Second
+	// rescueCutDamped: cut drops held back by the per-connection backoff.
+	rescueCutDamped atomic.Int64
+)
+
+func rcGapFor(n int) time.Duration {
+	if n > 5 {
+		n = 5
+	}
+	if g := rcGap0 << n; g < rcGapMax {
+		return g
+	}
+	return rcGapMax
 }
 
 // rescueCutAllow takes one from the cut bound.
@@ -203,9 +232,27 @@ func (m *mConn) rescueCutDropLocked(live []*msub, now time.Time) bool {
 			good = s // established: the peer's bytes came over it
 		}
 	}
-	if bad == nil || good == nil || !rescueCutAllow(now) {
+	if bad == nil || good == nil {
 		return false
 	}
+	if rcGap0 > 0 && now.Before(m.rcNext) {
+		// b338 (lab/rb337 CY2): a call with one good copy while most links
+		// sit on cut paths had each replacement placed on a cut link again
+		// and given up at once: ~145 subs a second for 13 s on one call.
+		// The bad copy waits (the good one carries the call).
+		rescueCutDamped.Add(1)
+		return false
+	}
+	if !rescueCutAllow(now) {
+		return false
+	}
+	if !m.rcLast.IsZero() && now.Sub(m.rcLast) < rcReset {
+		m.rcN++
+	} else {
+		m.rcN = 0
+	}
+	m.rcLast = now
+	m.rcNext = now.Add(rcGapFor(m.rcN))
 	rescueCutDrop.Add(1)
 	m.prefPrimary = good
 	m.closeReqLocked(bad)

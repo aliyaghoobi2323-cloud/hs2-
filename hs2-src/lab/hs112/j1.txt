@@ -1,3 +1,0 @@
-T61a bS hs2-r61 hs2-r61 - -
-T61c bS hs2-r61 hs2-r61 - HEAVY_CTL=direct
-P79a bS hs2-d79 hs2-r58 - -

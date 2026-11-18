@@ -1,8 +1,0 @@
-p2u1A0 A u1
-p2u1M0 M u1
-p2u1M1 M u1
-p2u1A1 A u1
-p2u8M0 M u8
-p2u8A0 A u8
-p2d1A0 A d1
-p2d1M0 M d1

@@ -237,6 +237,7 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 		}
 	}
 	callLog(now)
+	m.cp331LogLocked(now)             // HS2_CALLPATH_LOG (mconn_cp331.go)
 	m.callMarkLocked(now)             // HS2_MCONN_STRIPE_CALLFREE (mconn_stripe_callfree.go)
 	m.rescueCallMarkLocked(now, like) // HS2_LB_RESCUE_CALLFREE (lb_rescue_callfree.go)
 	if m.callOn {
@@ -532,18 +533,61 @@ func (m *mConn) callAvoidLocked(avoid []any) []any {
 	return avoid
 }
 
-// pickPlaneCall is pickPlane, or with the mark the call placement.
+// pickPlaneCall is pickPlane, or with the mark the call placement. With
+// HS2_B340_SKIPCUT (lb_b340_skipcut.go) a light sub first goes through the
+// same placement off every cut-marked link; only when that finds none does
+// the placement run with cut links allowed.
 func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) {
+	if skipCutOn(p) && !hasSkipCutMark(avoid) {
+		if l, rel, ok := m.pickPlaneCallOne(p, withSkipCut(avoid)); ok {
+			b340Note(p, l, true)
+			return l, rel, true
+		}
+		b340Fallback.Add(1)
+	}
+	l, rel, ok := m.pickPlaneCallOne(p, avoid)
+	if ok {
+		b340Note(p, l, false)
+	}
+	return l, rel, ok
+}
+
+// pickPlaneCallOne is one pickPlaneCall placement.
+func (m *LinkManager) pickPlaneCallOne(p mPlane, avoid []any) (Link, func(), bool) {
 	avoid, jmk := takeRescueJoinMark(avoid) // rs145 (mconn_rescue145.go)
 	if jmk != nil && p == planeLight {
 		pool := m.exitInfo.Load()
+		fastDone := false
+		if b313RJFast.Load() && lmFastPick.Load() { // b313 (mconn_b313_rjmemo.go)
+			l, rel, ok, done := m.rescueJoinFast(avoid, pool, jmk)
+			if ok {
+				return l, rel, true
+			}
+			fastDone = done
+		}
+		if !fastDone {
+			m.mu.Lock()
+			if ml := m.pickRescueJoinLocked(avoid, pool, jmk); ml != nil {
+				m.placeLocked(ml)
+				m.mu.Unlock()
+				return ml.link, m.releaseFor(ml), true
+			}
+			m.mu.Unlock()
+		}
+	}
+	avoid, movePath, move := takeCallMoveMark(avoid) // HS2_B336_CALLMOVE (mconn_cm336.go)
+	if move && p == planeLight {
+		pool := m.exitInfo.Load()
 		m.mu.Lock()
-		if ml := m.pickRescueJoinLocked(avoid, pool, jmk); ml != nil {
+		ml := m.pickCallRescueLocked(avoid, pool, func(ml *managedLink) bool { return mlPath(ml) == movePath })
+		if ml != nil {
 			m.placeLocked(ml)
 			m.mu.Unlock()
 			return ml.link, m.releaseFor(ml), true
 		}
 		m.mu.Unlock()
+		cmNoLink.Add(1)
+		return nil, nil, false // no link on the target path: no move
 	}
 	avoid, stuckPath, stuck := takeCallStuckMark(avoid) // HS2_LB_CALL_STUCK (lb_call_stuck.go)
 	avoid, cresc := takeCallRescueMark(avoid)           // HS2_LB_CALL_RESCUE (lb_call_rescue.go)
@@ -664,13 +708,8 @@ func linkCopies(l Link) int {
 	if !ok {
 		return 0
 	}
-	n := 0
-	ml.flowMu.Lock()
-	for cs := range ml.flows {
-		if cs.copyOnly.Load() {
-			n++
-		}
+	if b302CopyCnt.Load() { // b302 (mconn_b302.go)
+		return int(ml.copies.Load())
 	}
-	ml.flowMu.Unlock()
-	return n
+	return linkCopiesWalk(ml)
 }

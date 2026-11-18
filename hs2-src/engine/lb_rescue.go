@@ -157,7 +157,14 @@ func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
 // less (or cut) per the dialing side's fresh report. Caller holds m.mu.
 func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	st := m.steer
-	if lbCallRescue.Load() && lbCallStuck.Load() || lbCallLate { // HS2_LB_CALL_STUCK, HS2_LB_CALL_LATE (lb_call_late.go)
+	if b336CallMove.Load() { // HS2_B336_CALLMOVE (mconn_cm336.go)
+		m.cmSnapLocked(byPath, time.Now())
+		if o := cmMoves.Load() + cmRefused.Load(); o != st.cmLogged {
+			st.cmLogged = o
+			st.logs = append(st.logs, cmLogLine())
+		}
+	}
+	if lbCallRescue.Load() && lbCallStuck.Load() || lbCallLate || b336CallMove.Load() { // HS2_LB_CALL_STUCK, HS2_LB_CALL_LATE (lb_call_late.go), HS2_B336_CALLMOVE
 		st.callPaths = callPathMark(st.callPaths, byPath)
 		if o := callStuckOpened.Load(); o != st.stuckLogged {
 			st.stuckLogged = o
@@ -173,19 +180,23 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	}
 	var low, cut []any
 	good := false // some live path is not lowered: there is somewhere to go
+	clean := 0    // b340: cut paths left unmarked (read clean again)
 	if st.active {
 		for p, ls := range byPath {
 			f, ok := st.repFactor[p]
 			if !ok {
 				continue
 			}
-			if !st.repCut[p] && f > rescueFactor {
+			if !st.repCut[p] && f > rescueFactor && !(st.fastLowered(p) && st.fastSomeOK()) { // HS2_B335_FASTLOWER: a fast-lowered IP counts as lowered
 				good = true
 				continue
 			}
+			if st.repCut[p] && b340CutClear.Load() && st.repOK[p] {
+				clean++ // b340: the cut lifted (clean readings), the hold not yet over: lowered, not cut
+			}
 			for _, ml := range ls {
 				low = append(low, ml.link)
-				if st.repCut[p] {
+				if st.repCut[p] && !(b340CutClear.Load() && st.repOK[p]) {
 					cut = append(cut, ml.link)
 				}
 			}
@@ -207,7 +218,7 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	}
 	if d := rescueDiagRawCapped.Load() + rescueDiagRawUp.Load() + rescueCutRefused.Load(); len(low) > 0 && d != st.rescueCutLogged {
 		st.rescueCutLogged = d
-		st.logs = append(st.logs, fmt.Sprintf("lb rescue cut: %d of %d marked link(s) on cut paths; light raw conn checks on marked links: budget-capped %d (on cut paths %d), upgraded with the budget %d; cut copies raw %d, other %d, bad subs given up %d (refused by the cut bound %d)", len(cut), len(low), rescueDiagRawCapped.Load(), rescueDiagRawCappedCut.Load(), rescueDiagRawUp.Load(), rescueCutRaw.Load(), rescueCutOther.Load(), rescueCutDrop.Load(), rescueCutRefused.Load()))
+		st.logs = append(st.logs, fmt.Sprintf("lb rescue cut: %d of %d marked link(s) on cut paths; light raw conn checks on marked links: budget-capped %d (on cut paths %d), upgraded with the budget %d; cut copies raw %d, other %d, bad subs given up %d (refused by the cut bound %d, held by the per-connection backoff %d); light placements while marked: on a cut link %d, kept off %d, no unmarked link %d (skipcut %v); cut paths read clean again %d", len(cut), len(low), rescueDiagRawCapped.Load(), rescueDiagRawCappedCut.Load(), rescueDiagRawUp.Load(), rescueCutRaw.Load(), rescueCutOther.Load(), rescueCutDrop.Load(), rescueCutRefused.Load(), rescueCutDamped.Load(), b340OnCut.Load(), b340Skipped.Load(), b340Fallback.Load(), b340SkipCut.Load(), clean))
 	}
 	if s := time.Now().Unix(); len(low) > 0 && s-censusLogged.Load() >= 10 {
 		censusLogged.Store(s)

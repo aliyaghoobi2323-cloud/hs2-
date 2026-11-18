@@ -50,6 +50,11 @@ type lbRuntime struct {
 	// (the announcement, else the remembered ones), for the plain tls paths'
 	// certificate check (tlscarrier.DialPath.PeerTargetNames). Read lock-free.
 	targetNames atomic.Pointer[[]string]
+	// b333 (lbauto6.go): the lb section as written (with its auto6 specs;
+	// nil = none), the specs' current addresses and the last auto6 line.
+	raw       *lbConfig
+	auto      map[string]string
+	autoLogAt time.Time
 }
 
 var (
@@ -89,8 +94,23 @@ func lbOwnAdvert(fc fileConfig) []engine.LBAdvertIP {
 	var ips []string
 	var w []int
 	var err error
+	// b333: an auto6 entry with no address now is not announced; the others
+	// share its weight (scaled to 100).
+	var kept []lbIP
+	for _, e := range local {
+		if !lbAutoUnresolved(e) {
+			kept = append(kept, e)
+		}
+	}
+	dropped := len(kept) != len(local)
+	local = kept
 	if lp == "" {
 		ips, w, err = lbWildcardAdvert(local)
+	} else if dropped {
+		ips, w, err = lbSideWeights("local", local, lp, false)
+		if err == nil {
+			ips, w = scaleTo100(ips, w)
+		}
 	} else {
 		ips, w, err = lbSideWeights("local", local, lp, true)
 	}
@@ -117,7 +137,13 @@ func lbWildcardAdvert(list []lbIP) ([]string, []int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// drop the unlisted wildcard member ("") lbSideWeights adds
+	oi, ow := scaleTo100(ips, w) // drops the unlisted wildcard member ""
+	return oi, ow, nil
+}
+
+// scaleTo100 drops the unlisted member "" and scales the weights to sum to
+// 100 (largest remainder; all zero = equal shares).
+func scaleTo100(ips []string, w []int) ([]string, []int) {
 	var oi []string
 	var ow []int
 	sum := 0
@@ -129,7 +155,7 @@ func lbWildcardAdvert(list []lbIP) ([]string, []int, error) {
 		sum += w[i]
 	}
 	if len(oi) == 0 || sum == 100 {
-		return oi, ow, nil
+		return oi, ow
 	}
 	if sum == 0 {
 		for i := range ow {
@@ -150,7 +176,7 @@ func lbWildcardAdvert(list []lbIP) ([]string, []int, error) {
 		ow[rs[k%len(rs)].i]++
 		tot++
 	}
-	return oi, ow, nil
+	return oi, ow
 }
 
 // lbPathsAdvert builds the dialing side's paths with the remote addresses
@@ -267,6 +293,14 @@ func setupLB(fc fileConfig, lb *engine.LB, ln net.Listener, logf func(string, ..
 		onPeer = rt.applyAdvert
 	}
 	rt.adv = engine.NewLBAdvert(lbOwnAdvert(fc), onPeer, logf)
+	lbAutoMu.Lock()
+	if lbAutoStartRaw != nil {
+		rt.raw, rt.auto, rt.autoLogAt = lbAutoStartRaw, lbAutoStartRes, time.Now()
+		if auto6Loop {
+			go rt.runAuto6(nil)
+		}
+	}
+	lbAutoMu.Unlock()
 	if lb != nil {
 		rt.frontsPath = peerFrontsPath(configPath)
 		rt.loadFrontsLocked("start")
@@ -381,10 +415,31 @@ func reloadLB(why string) {
 		rt.logf("lb: reload (%s): %v — keeping the current lb settings", why, err)
 		return
 	}
-	if reflect.DeepEqual(next.LB, rt.fc.LB) {
+	cur := rt.fc.LB
+	if rt.raw != nil {
+		cur = rt.raw
+	}
+	if reflect.DeepEqual(next.LB, cur) {
 		rt.logf("lb: reload (%s): lb section unchanged", why)
 		rt.loadedAt = time.Now()
 		return
+	}
+	// b333: resolve the auto6 specs of the new section (lbauto6.go)
+	rawLB := next.LB
+	if len(lbLocalAutos(next)) > 0 {
+		res, err := resolveAutos(next, rt.auto)
+		if err != nil {
+			rt.logf("lb: auto6: cannot read this server's IPv6 addresses: %v", err)
+		}
+		startRes := rt.raw == nil
+		rt.raw, rt.auto = rawLB, res
+		next = applyAutos(next, res)
+		rt.logf("lb: auto6 (reload): %s", auto6Words(res))
+		if startRes && auto6Loop {
+			go rt.runAuto6(nil)
+		}
+	} else {
+		rt.raw, rt.auto = nil, nil
 	}
 	rt.fc = next
 	rt.loadedAt = time.Now()

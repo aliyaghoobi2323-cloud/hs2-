@@ -196,6 +196,7 @@ func (m *mConn) dc254SilenceLocked(p *msub, live []*msub, now time.Time, nowc in
 		if !d.silent {
 			d.silent = true
 			dc254Stat.silentRx.Add(1)
+			m.flStallNoteLocked(p, live, now) // b336 (lb_flstall336.go): per-IP stall evidence for the fast lower
 			ev := dc254LinkEvidence(live, now, nowc)
 			if ev != "" {
 				dc254Stat.silentLink.Add(1)

@@ -76,9 +76,7 @@ func TestUL268Index(t *testing.T) {
 		t.Fatalf("after del: %v", got)
 	}
 	ul268IdxDel(s2)
-	ul268Idx.mu.Lock()
-	_, left := ul268Idx.m["L1"]
-	ul268Idx.mu.Unlock()
+	_, left := ul268IdxHas("L1", s2)
 	if left {
 		t.Fatal("empty link entry kept")
 	}
@@ -338,9 +336,7 @@ func TestUL268IndexSkipsBulk(t *testing.T) {
 	m := newMConn(268_001, true, nil)
 	m.mode = planeLight
 	in := func(s *msub) bool {
-		ul268Idx.mu.Lock()
-		defer ul268Idx.mu.Unlock()
-		_, ok := ul268Idx.m[s.key][s]
+		ok, _ := ul268IdxHas(s.key, s)
 		return ok
 	}
 	m.mu.Lock()

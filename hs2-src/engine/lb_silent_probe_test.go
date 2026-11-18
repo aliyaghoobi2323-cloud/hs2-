@@ -144,7 +144,7 @@ func TestSilentProbeDueAsksSpare(t *testing.T) {
 		now := time.Unix(1000, 0)
 		b.now = func() time.Time { return now }
 		asked := 0
-		b.setSpare(func(n int) { asked += n })
+		b.setSpare(func(n int) int { asked += n; return n })
 		for k := 0; k < 6; k++ {
 			b.dialVia(func(p LBPath) (any, error) { return new(int), nil })
 		}

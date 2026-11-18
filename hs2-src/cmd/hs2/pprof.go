@@ -58,6 +58,7 @@ func startPprof() {
 	mux.HandleFunc("/debug/hs2halfclose", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, engine.HalfCloseStats())
 	})
+	mux.HandleFunc("/debug/hs2sched", serveSched) // b322: runtime/metrics for storm diag
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Printf("pprof: %v", err)

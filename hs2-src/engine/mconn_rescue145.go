@@ -147,6 +147,9 @@ func linkFresh(mtr *linkMeter, now int64) bool {
 // pickRescueJoinLocked (under m.mu): a fresh link off the left paths,
 // preferring another Iran IP; nil when there is none.
 func (m *LinkManager) pickRescueJoinLocked(avoid []any, pool *peerInfo, mk *rescueJoinMark) *managedLink {
+	if b313RJMemo.Load() { // b313 (mconn_b313_rjmemo.go)
+		return m.pickRescueJoinMemoLocked(avoid, pool, mk)
+	}
 	now := ctrlNow()
 	hosts := map[string]bool{}
 	for p := range mk.paths {

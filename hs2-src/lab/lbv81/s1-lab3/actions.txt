@@ -1,6 +1,0 @@
-1110 rst on
-1230 rst off 2
-1501 edge killed 1357948
-1501 edge started 1414201
-1621 exit killed 1357915
-1621 exit started 1417732

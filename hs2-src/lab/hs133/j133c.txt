@@ -1,3 +1,0 @@
-qn4 Q hs2-r63m hs2-r63m - HEAVY_CTL=direct,HEAVY_P=8
-qo4 Q hs2-r63m hs2-r63m HS2_MCONN_STRIPE_KEEPSTALL=0 HEAVY_CTL=direct,HEAVY_P=8
-qn5 Q hs2-r63m hs2-r63m - HEAVY_CTL=direct,HEAVY_P=8

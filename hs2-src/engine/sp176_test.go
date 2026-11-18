@@ -100,7 +100,7 @@ func TestLBSpareEdgeFrame(t *testing.T) {
 			t.Cleanup(func() { lbSpareEdge = old })
 			b := spare176LB(t)
 			var asked int
-			b.setSpare(func(n int) { asked += n })
+			b.setSpare(func(n int) int { asked += n; return n })
 			tgt := tc.target
 			b.setSpareWant(func() int { return tgt })
 			got := b.spareForGap(b.now())
@@ -143,7 +143,7 @@ func TestLBSpareGapBackoff(t *testing.T) {
 	b.links = []int{10, 22, 22, 23} // A really under: 10 of 77, share 19
 	b.mu.Unlock()
 	var asked int
-	b.setSpare(func(n int) { asked++ })
+	b.setSpare(func(n int) int { asked++; return n })
 	b.setSpareWant(func() int { return 64 })
 	now := b.now()
 	var at []int

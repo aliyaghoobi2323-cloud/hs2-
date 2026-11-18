@@ -5440,11 +5440,19 @@ lb_add(){ # cfg
   local cfg="$1" s side ip w sni
   read -rp "  Which side? i) Iran  k) Kharej: " s </dev/tty || return 0
   case "$s" in i|I) side=iran ;; k|K) side=kharej ;; *) warn "Invalid choice."; return 0 ;; esac
-  read -rp "  $(lb_side_label "$side") address (IPv4 or IPv6): " ip </dev/tty || return 0
-  lb_is_ip "$ip" || { warn "Not a valid IPv4 or IPv6 address: $ip"; return 0; }
-  ip=$(lb_norm_ip "$ip")
+  if [ "$side" = "$(lb_own_side "$cfg")" ]; then
+    read -rp "  $(lb_side_label "$side") address (IPv4 or IPv6, or auto6 = this server's current IPv6): " ip </dev/tty || return 0
+  else
+    read -rp "  $(lb_side_label "$side") address (IPv4 or IPv6): " ip </dev/tty || return 0
+  fi
+  case "$ip" in
+    auto6|auto6:?*) # b333: hs2 resolves it to this server's current global IPv6 (new one after a reboot: no edit needed)
+      [ "$side" = "$(lb_own_side "$cfg")" ] || { warn "auto6 is only for this server's own list."; return 0; } ;;
+    *) lb_is_ip "$ip" || { warn "Not a valid IPv4 or IPv6 address: $ip"; return 0; }
+       ip=$(lb_norm_ip "$ip") ;;
+  esac
   [ -z "$(lb_find "$side" "$ip")" ] || { warn "$ip is already in the list."; return 0; }
-  if [ "$side" = "$(lb_own_side "$cfg")" ] && ! lb_local_ips | grep -qxF "$ip"; then
+  if [ "$side" = "$(lb_own_side "$cfg")" ] && [ "${ip%%:*}" != auto6 ] && ! lb_local_ips | grep -qxF "$ip"; then
     warn "$ip is not on this server (ip addr) — it must be added to the interface before applying."
   fi
   sni=""
@@ -6336,7 +6344,7 @@ nm_lb(){
       l|L) lb_live "$NM_U" "$NM_CFG" ;;
       2) nm_lbx history -u "$NM_U"; nm_pause ;;
       3) nm_lbx suggest -u "$NM_U"; nm_pause ;;
-      4) nm_ask ip "$(nm_t "Local IP to add: " "IP محلی برای افزودن: ")"
+      4) nm_ask ip "$(nm_t "Local IP to add (or auto6 = this server's current IPv6, follows a new one after a reboot): " "IP محلی برای افزودن (یا auto6 = IPv6 فعلی این سرور؛ بعد از ریبوت خودش IP تازه را می‌گیرد): ")"
          [ -n "$ip" ] || continue
          ex=()
          if [ "$NM_MODE" = advanced ]; then

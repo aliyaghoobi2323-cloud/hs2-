@@ -441,6 +441,7 @@ type msub struct {
 	gaveEnd    uint64        // ... up to this end offset
 	rsLo, rsHi uint64        // cs223: the range the last darkcall switch resent onto it
 	dcLeft     bool          // cs224: a darkcall switch left it and it has stayed dark since
+	dcB342No   bool          // b342: a fast-switch no-candidate episode counted (under m.mu)
 	b270ResAt  time.Time     // b270: last txDark resend look (mconn_b270.go)
 	b270End    uint64        // b270: end of the chunks a txDark resend already covered
 	b270Trig   bool          // b270: half dead at the last visit
@@ -461,6 +462,7 @@ type msub struct {
 
 	hdr   [mDataHdr]byte // reader only
 	rxEnd uint64         // reader (then under m.mu): end offset of the last byte read on it
+	rxAny atomic.Bool    // rb339: set once rxEnd > 0 (read without the reader, e.g. by CALLMOVE)
 
 	tr       mtraceSub // HS2_MCONN_TRACE per-sub counters (under m.r.mu)
 	callLate bool      // HS2_LB_CALL_LATE: its call copy is late, no pair copy on it (under m.mu)
@@ -471,6 +473,7 @@ type msub struct {
 }
 
 func (s *msub) close() {
+	t0, by := s.b311TraceStart() // HS2_B311_TRACE (mconn_b311.go)
 	s.closeOnce.Do(func() {
 		obs.msubsLive.Add(-1)
 		ul268IdxDel(s) // ul268 link index
@@ -478,12 +481,43 @@ func (s *msub) close() {
 		if mtr := s.stMtr.Swap(nil); mtr != nil {
 			mtr.stripeN.Add(-1)
 		}
-		s.rw.Close()
-		if s.onClose != nil {
-			s.onClose()
+		if s.b311SyncClose() { // key off, or a heavy connection (b311)
+			s.closeRW(s.rw, s.onClose)
+			s.b311TraceEnd(t0, by, false)
+			return
 		}
-		s.rwClosed.Store(true)
+		// b307: see mconn_b307_close.go
+		rw, onClose := s.rw, s.onClose
+		fin := make(chan struct{})
+		go func() {
+			if d := b307TestCloseDelay; d > 0 {
+				time.Sleep(d) // tests only: a stream close that goes on alone
+			}
+			s.closeRW(rw, onClose)
+			s.b311TraceEnd(t0, by, true)
+			close(fin)
+		}()
+		tm := time.NewTimer(b307CloseWait)
+		select {
+		case <-fin:
+			tm.Stop()
+		case <-tm.C:
+			b307Close.async.Add(1)
+			go func() { // the close goes on alone: finish what close owes
+				<-fin
+				s.closeLate()
+			}()
+		}
 	})
+}
+
+// closeRW closes s's stream, then runs onClose and marks rw closed.
+func (s *msub) closeRW(rw mSub, onClose func()) {
+	rw.Close()
+	if onClose != nil {
+		onClose()
+	}
+	s.rwClosed.Store(true)
 }
 
 // push queues c on s (under m.mu).
@@ -565,6 +599,9 @@ type mrecv struct {
 type mConn struct {
 	id   uint64
 	iran bool
+	// b311: it striped or moved to bulk; its subs' closes wait for their
+	// streams (mconn_b311.go)
+	b311Heavy atomic.Bool
 	// ul268 vs darkcall (mconn_ul268_scale.go), under mu
 	u268At time.Time // ul268 started a data-dark rescue of this conn
 	dcSwAt time.Time // darkcall switched this conn's primary
@@ -572,6 +609,23 @@ type mConn struct {
 	// timer's idle proof (seq+1; 0: none), side by side for the timer's scan
 	dcWr     atomic.Uint64
 	dcIdleAt atomic.Uint64
+	cp331    cp331State // HS2_CALLPATH_LOG (mconn_cp331.go), under mu
+
+	// HS2_B336_CALLMOVE (mconn_cm336.go), under mu
+	cmSince    time.Time   // the current gap since
+	cmFrom     string      // its worst path
+	cmAt       time.Time   // no move before
+	cmOpenedAt time.Time   // the last trigger
+	cmKey      any         // the moving copy's key (nil: none pending)
+	cmLive     []any       // the subs' keys at the trigger
+	cmTo       string      // the target path
+	cmHist     []time.Time // b338: this call's move starts within cmWindow (backoff)
+	cmDampOn   bool        // b338: the damper holds this call's gap back
+
+	// b338: rescue-cut drops of this connection (lb_rescue_cut.go), under mu
+	rcNext time.Time // no cut drop before
+	rcLast time.Time // the last cut drop
+	rcN    int       // drops in a row (each within rcReset of the previous)
 
 	open mOpener
 
@@ -664,6 +718,8 @@ type mConn struct {
 	stripeState // HS2_MCONN_STRIPE (mconn_stripe.go)
 	rescueState // HS2_MCONN_RESCUE (mconn_rescue.go)
 	zsState     // zs291 (mconn_zs291.go)
+
+	b322w b322Watch // HS2_B322_EXITNOWATCH: exit subs without a watcher (mconn_b322_exitwatch.go)
 
 	r mrecv
 
@@ -807,9 +863,13 @@ func newMConnExit(id uint64) *mConn {
 // attach adds a sub that arrived for this connection (Kharej). The role (0:
 // first, 1: join) matters only to the caller; a sub is a light sub until a
 // BULK record arrives on it.
-func (m *mConn) attach(sub mSub, role byte) {
+func (m *mConn) attach(sub mSub, role byte) { m.attachWith(sub, role, nil) }
+
+// attachWith is attach with onClose run once when the sub closes (b322:
+// also when attach refuses it).
+func (m *mConn) attachWith(sub mSub, role byte, onClose func()) {
 	if role == mconnRoleFirstRaw || role == mconnRoleFirstRawRescue {
-		m.attachRaw(sub, nil)
+		m.attachRaw(sub, onClose)
 		if role == mconnRoleFirstRawRescue {
 			m.rescueEnable()
 		}
@@ -823,12 +883,16 @@ func (m *mConn) attach(sub mSub, role byte) {
 		}
 		m.mu.Unlock()
 		sub.Close()
+		if onClose != nil {
+			onClose()
+		}
 		return
 	}
 	if m.rscCap {
 		rescueStat.joins.Add(1) // er92 diagnostic (mconn_rescue.go)
 	}
 	s := m.addSubLocked(sub, nil, false)
+	s.onClose = onClose
 	m.sendCond.Broadcast()
 	m.mu.Unlock()
 	m.startSub(s)
@@ -1571,6 +1635,7 @@ func (m *mConn) switchLocked(b *msub) {
 	b.bulk.Store(true)
 	m.tr.ev("switch to bulk sub %d: BULK + %d requeued bytes (%d records)", b.idx, qb, len(q)-len(ctrl)-1)
 	m.mode, m.bulk = planeBulk, b
+	m.b311MarkHeavy()
 	for _, s := range m.subs {
 		ul268IdxDel(s) // ul268: a bulk conn is neither raw- nor records-rescue eligible (planeBulk is final)
 	}
@@ -1586,6 +1651,9 @@ func (m *mConn) switchLocked(b *msub) {
 func (s *msub) noteRx(end uint64) {
 	if end > s.rxEnd {
 		s.rxEnd = end
+		if !s.rxAny.Load() {
+			s.rxAny.Store(true)
+		}
 	}
 }
 
@@ -2259,6 +2327,7 @@ func (m *mConn) end(err error, rst bool) {
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	close(m.die)
+	m.b322Died() // HS2_B322_EXITNOWATCH (mconn_b322_exitwatch.go)
 	m.rawEnded()
 	m.stripeEnded()
 	obs.mconnOpen.Add(-1)
@@ -2452,6 +2521,12 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				}
 			}
 			if g, d := m.callLateLocked(live, now); g || d > 0 { // HS2_LB_CALL_LATE (lb_call_late.go)
+				hs = hs || g
+				if d > 0 {
+					at(d)
+				}
+			}
+			if g, d := m.callMoveLocked(live, now); g || d > 0 { // HS2_B336_CALLMOVE (mconn_cm336.go)
 				hs = hs || g
 				if d > 0 {
 					at(d)

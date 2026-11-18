@@ -203,12 +203,16 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			own = fc.LB.Iran
 		}
 		for _, e := range own {
+			if _, auto := lbAutoSpec(e.IP); auto { // b333 (lbauto6.go)
+				warn(`"lb": %s`, checkAuto6Line(e.IP))
+				continue
+			}
 			if ip := net.ParseIP(e.IP); ip != nil && !localIP(ip) {
 				bad(`"lb": %s is not an IP of this server — it cannot listen on or dial from it`, e.IP)
 			}
 		}
 		if dials {
-			if paths, err := lbPaths(fc); err == nil {
+			if paths, err := lbPaths(lbCheckResolved(fc)); err == nil {
 				warn("lb on (%s): %d paths, configured weights: %s", lbModeName(fc), len(paths), lbSummary(paths))
 			}
 		}

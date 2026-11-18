@@ -65,6 +65,8 @@ type l3Flow struct {
 	winBytes uint64
 	rate     uint32
 	fec      *l3FecFlow
+	// dup2: the flow's kept second-copy link (HS2_B303_DUPSTICK, l3_b303.go).
+	dup2 l3DupKeep
 }
 
 // l3Lane is the lane state of one l3Set.

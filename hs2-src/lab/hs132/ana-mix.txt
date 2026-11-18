@@ -1,6 +1,0 @@
-mxA1 A_off mbps=1073.0 call99=506.003 crowd99=432.896 ping99=416.0 echo99=349.763 game99=376.734 slow500=1.08% eps=10 eplen=2.8 worst=786 rss_ir=576.3 rss_kh=859.0 cpu_kh=2.32 gc_kh=0/0ms/-% gc_ir=0/0ms/-% ks_kh=0/0/0/0/0/0 ks_ir=0/0/0/0/0/0
-mxA2 A_off mbps=860.5 call99=261.813 crowd99=241.73 ping99=198.0 echo99=197.652 game99=205.897 slow500=0.00% eps=0 eplen=0.0 worst=0 rss_ir=885.1 rss_kh=795.0 cpu_kh=2.26 gc_kh=0/0ms/-% gc_ir=0/0ms/-% ks_kh=0/0/0/3/3/350 ks_ir=3066/7111/372/0/0/0
-mxB1 A_off VOID noheavy
-mxB2 A_off mbps=190.0 call99=188.38 crowd99=186.25 ping99=163.0 echo99=164.219 game99=169.631 slow500=0.00% eps=0 eplen=0.0 worst=0 rss_ir=2672.4 rss_kh=715.8 cpu_kh=1.84 gc_kh=0/0ms/-% gc_ir=0/0ms/-% ks_kh=-/-/-/-/-/- ks_ir=3041/136383/6241/0/0/0
-mxC1 A_off mbps=1450.4 call99=423.513 crowd99=391.61 ping99=338.0 echo99=298.815 game99=348.386 slow500=0.53% eps=5 eplen=1.7 worst=985 rss_ir=1043.6 rss_kh=919.1 cpu_kh=2.76 gc_kh=0/0ms/-% gc_ir=0/0ms/-% ks_kh=0/0/0/0/0/0 ks_ir=-/-/-/-/-/-
-mxC2 A_off mbps=157.4 call99=181.214 crowd99=186.579 ping99=168.0 echo99=180.664 game99=164.625 slow500=0.00% eps=0 eplen=0.0 worst=0 rss_ir=587.5 rss_kh=828.0 cpu_kh=1.78 gc_kh=0/0ms/-% gc_ir=0/0ms/-% ks_kh=0/0/0/0/2/14014 ks_ir=-/-/-/-/-/-

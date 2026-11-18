@@ -428,6 +428,7 @@ func runCmd(args []string) {
 	if err := validateLB(fc); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	fc = lbResolveStart(fc, log.Printf) // b333: "auto6" -> this server's current IPv6 (lbauto6.go)
 	if err := validateFront(fc); err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -658,7 +659,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 				if scout {
 					dp.Connect = 2 * time.Second
 				}
-				return tlscarrier.DialPathFront(ctx, dp)
+				c, err := tlscarrier.DialPathFront(ctx, dp)
+				lbDialFailed(err) // b333: a gone source address re-resolves auto6 at once
+				return c, err
 			}
 		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)

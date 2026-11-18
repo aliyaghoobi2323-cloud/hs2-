@@ -64,6 +64,8 @@ func (f *dcFake) read(s *msub) (*net.TCPConn, string, int64, uint64, uint32, uin
 		return tc, p, now, 1, 100, 3, 9, true
 	case "noback":
 		return tc, p, silent, 1, 100, 0, 0, true
+	case "stall0": // b342: no ack progress, backoff 0, no retransmits, rx fresh
+		return tc, p, now, 1, 100, 0, 0, true
 	}
 	return tc, p, now, f.tick.Add(1), 10, 0, 0, true
 }

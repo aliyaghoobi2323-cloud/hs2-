@@ -149,6 +149,9 @@ func (b *LB) Run(ctx context.Context) {
 		case <-r.C:
 			if b.isAuto2() {
 				b.rebalance2()
+				if b331SparePath {
+					b.sparePathTick(b.now()) // lb_sparepath331.go
+				}
 			} else {
 				b.rebalance()
 			}
@@ -207,6 +210,7 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 	if lbRecDebug && lbSilent {
 		dbgBo, dbgNew = make([]uint8, n), make([]int, n)
 	}
+	fl337 := flOn() && flStallOn && b.auto2On()
 	for _, r := range rs {
 		if _, ok := b.held[r.key]; !ok {
 			continue // ended meanwhile
@@ -225,10 +229,19 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 		}
 		segs[r.path] += cur.segsOut - prev.segsOut
 		retr[r.path] += cur.retrans - prev.retrans
+		if fl337 && (r.st.backoff > 0 || cur.retrans-prev.retrans >= flStallRtLinkK && flLinkLossy(cur.retrans-prev.retrans, cur.segsOut-prev.segsOut)) { // b337 (lb_fl337.go)
+			b.flRTO = append(b.flRTO, flStallEv{link: r.key, path: b.paths[r.path].Name()})
+		}
 		acked[r.path] += cur.acked - prev.acked
 		sil[r.path].add(cur.acked-prev.acked, cur.retrans-prev.retrans, r.st.backoff)
 		if cur.acked-prev.acked >= qBusyBytes && r.st.minRttUs > 0 && r.st.rttUs >= r.st.minRttUs {
 			delays[r.path] = append(delays[r.path], float64(r.st.rttUs-r.st.minRttUs)/1000)
+		}
+	}
+	if fl337 { // b337 (lb_fl337.go): this window's raw counts, per path
+		b.flCnt = make(map[string]flRead, n)
+		for j, p := range b.paths {
+			b.flCnt[p.Name()] = flRead{retr[j], segs[j]}
 		}
 	}
 	auto2 := b.auto2On()

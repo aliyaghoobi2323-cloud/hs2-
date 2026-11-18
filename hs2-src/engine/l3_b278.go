@@ -141,22 +141,35 @@ func b278LanePick(links []*l3Link, h uint32, now int64) *l3Link {
 // a second copy there saves nothing. Another path's not-stuck link (light
 // first) when there is one; else as before, minus stuck links.
 func b278Second(links []*l3Link, h uint32, first, second *l3Link, now int64) *l3Link {
+	l, moved := b278SecondMoved(links, h, first, second, now)
+	if moved {
+		b278OtherPath.Add(1)
+	}
+	return l
+}
+
+// b278SecondMoved is b278Second without the b278OtherPath count; moved
+// reports that the copy was moved off the first's path (b303 counts moves
+// per flow, not per packet).
+func b278SecondMoved(links []*l3Link, h uint32, first, second *l3Link, now int64) (*l3Link, bool) {
 	if second == nil || !b278On.Load() {
-		return second
+		return second, false
+	}
+	// HS2_B309_DUPSCAN (l3_b309.go): every other-path link in rank order
+	if l := b309Fix(links, h, first, second, "", "", now); l != second {
+		return l, second.path == first.path
 	}
 	if first != nil && first.path != "" && second.path == first.path {
 		other := func(l *l3Link) bool { return l.path != "" && l.path != first.path }
 		if l := dupSecondWhere(links, h, first, func(l *l3Link) bool { return other(l) && !l.isHeavy() }); l != nil && !l.txStuck(now) {
-			b278OtherPath.Add(1)
-			return l
+			return l, true
 		}
 		if l := dupSecondWhere(links, h, first, other); l != nil && !l.txStuck(now) {
-			b278OtherPath.Add(1)
-			return l
+			return l, true
 		}
 	}
 	if !second.txStuck(now) {
-		return second
+		return second, false
 	}
 	b278DupSkip.Add(1)
 	var skip [b278Tries]*l3Link
@@ -171,11 +184,11 @@ func b278Second(links []*l3Link, h uint32, first, second *l3Link, now int64) *l3
 			return true
 		})
 		if l == nil || !l.txStuck(now) {
-			return l
+			return l, false
 		}
 		skip[try] = l
 	}
-	return nil
+	return nil, false
 }
 
 // b278TraceICMP logs one ICMP echo (lab trace).

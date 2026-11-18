@@ -66,8 +66,13 @@ func TestSides(t *testing.T) {
 		{"HS2_REFILL_WAIT_BYTES", "1", ""},
 		{"HS2_START_DIAL", "", "1"},
 		{"HS2_LB_FAST_VERDICT", "", ""},
+		{"HS2_B335_FASTLOWER", "", ""}, // b335: lab key, off
 		{"HS2_LB_SILENT", "", "1"},
 		{"HS2_LB_CUT_NONEW", "1", ""},
+		{"HS2_B331_SPAREPATH", "1", "1"},
+		{"HS2_CALLPATH_LOG", "0", ""},
+		{"HS2_B336_CALLMOVE", "1", ""},
+		{"HS2_B342_DCFAST", "1", "1"},
 		{"HS2_RETIRE_KEEP_IDLE", "1", ""},
 		{"HS2_MCONN_STRIPE_DL_FAIR", "1", ""},
 		{"HS2_MCONN_RESCUE", "1", "1"},
@@ -160,7 +165,95 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 111 {
-		t.Fatalf("table has %d keys, want 111", len(Table))
+	if len(Table) != 132 { // rc3: + HS2_B342_DCFAST; b337: + HS2_B337_PATHSTALL; b331: + HS2_B331_SPAREPATH, HS2_CALLPATH_LOG, HS2_B336_CALLMOVE; b339: + HS2_B339_PATHHYST; rc2: + HS2_B339_CUTGRACE, HS2_B338_RC_GAP0_MS, HS2_B340_SKIPCUT, HS2_B340_CUTCLEAR
+		t.Fatalf("table has %d keys, want 132", len(Table))
+	}
+}
+
+// b315: the b307 async close is on by default, with b311's heavy sync on,
+// and both b313 rescue-join keys are on.
+func TestB315AsyncCloseOn(t *testing.T) {
+	want := map[string]string{"HS2_B307_ASYNCCLOSE": "1", "HS2_B311_HEAVYSYNC": "1",
+		"HS2_B313_RJMEMO": "1", "HS2_B313_RJFAST": "1"}
+	for _, k := range Table {
+		if v, ok := want[k.Name]; ok {
+			if k.Value != v {
+				t.Fatalf("%s default %q, want %q", k.Name, k.Value, v)
+			}
+			delete(want, k.Name)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing keys: %v", want)
+	}
+}
+
+// b332: the b322 exit no-watch key is on by default, on the exit only.
+func TestB332ExitNoWatchOn(t *testing.T) {
+	for _, k := range Table {
+		if k.Name == "HS2_B322_EXITNOWATCH" {
+			if k.Value != "1" || k.Side != Exit {
+				t.Fatalf("HS2_B322_EXITNOWATCH = %q/%v, want \"1\"/exit", k.Value, k.Side)
+			}
+			return
+		}
+	}
+	t.Fatal("HS2_B322_EXITNOWATCH missing")
+}
+
+// b334: the b327 pick list is on by default, on both sides.
+func TestB334PickListOn(t *testing.T) {
+	n := 0
+	for _, k := range Table {
+		if k.Name == "HS2_B327_PICKLIST" {
+			n++
+			if k.Value != "1" || k.Side != Both {
+				t.Fatalf("HS2_B327_PICKLIST = %q/%v, want \"1\"/both", k.Value, k.Side)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("HS2_B327_PICKLIST appears %d times, want 1", n)
+	}
+}
+
+// b338 (rel69p-rc1): SPAREPATH on both sides, PATHSTALL on (edge),
+// CALLPATH_LOG off; rel69p-rc3: CALLMOVE on (edge), DCFAST on (both); the fast-lower lab keys stay out of the
+// table (off unless set in the environment).
+func TestB338Defaults(t *testing.T) {
+	want := map[string]struct {
+		v    string
+		side Side
+	}{
+		"HS2_B331_SPAREPATH":  {"1", Both},
+		"HS2_B337_PATHSTALL":  {"1", Edge},
+		"HS2_B336_CALLMOVE":   {"1", Edge},
+		"HS2_CALLPATH_LOG":    {"0", Edge},
+		"HS2_B339_PATHHYST":   {"1", Edge},
+		"HS2_B339_CUTGRACE":   {"0", Edge},
+		"HS2_B338_RC_GAP0_MS": {"500", Both},
+		"HS2_B340_SKIPCUT":    {"1", Both},
+		"HS2_B340_CUTCLEAR":   {"1", Both},
+		"HS2_B342_DCFAST":     {"1", Both},
+	}
+	seen := map[string]int{}
+	for _, k := range Table {
+		switch k.Name {
+		case "HS2_B335_FASTLOWER", "HS2_B337_FL_LOGONLY", "HS2_B337_UNCUT_DEBUG", "HS2_LB_SWAP", "HS2_B338_CM_HOLD_MS":
+			t.Fatalf("%s must not be in the table", k.Name)
+		}
+		w, ok := want[k.Name]
+		if !ok {
+			continue
+		}
+		seen[k.Name]++
+		if k.Value != w.v || k.Side != w.side {
+			t.Fatalf("%s = %q/%v, want %q/%v", k.Name, k.Value, k.Side, w.v, w.side)
+		}
+	}
+	for n := range want {
+		if seen[n] != 1 {
+			t.Fatalf("%s appears %d times, want 1", n, seen[n])
+		}
 	}
 }

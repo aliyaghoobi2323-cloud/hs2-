@@ -78,6 +78,7 @@ func loadEnvKeys() {
 	keepStallLazy.Store(keepStallLazyFromEnv())            // hs128
 	stripeRebuildOn.Store(envOn("HS2_MCONN_STRIPE_REBUILD"))
 	lbCutDrain = envOn("HS2_LB_CUT_DRAIN")
+	b331SparePath = envOn("HS2_B331_SPAREPATH")   // b331 (lb_sparepath331.go)
 	slowSkipCopy = envOn("HS2_LB_SLOW_SKIP_COPY") // lb89 (lb_copyslow81.go)
 	stripeQWin = msFromEnv(envDefault("HS2_MCONN_STRIPE_QWIN_MS"), 0)
 	smuxAutoWin = autoWinFromEnv(envDefault)
@@ -120,6 +121,7 @@ func loadEnvKeys() {
 	lbCallRescue.Store(envOn("HS2_LB_CALL_RESCUE"))
 	lbCallLate = envOn("HS2_LB_CALL_LATE")
 	lbFastVerdict = envOn("HS2_LB_FAST_VERDICT")
+	b335FastLower = envOn("HS2_B335_FASTLOWER") // lb_fastlower335.go
 	lbSilent = envOn("HS2_LB_SILENT")
 	lbSilentRegrow = envOn("HS2_LB_SILENT_REGROW") // bh101 lab key, off (lb_silent.go)
 	retireKeepIdle = envOn("HS2_RETIRE_KEEP_IDLE") // id125 (retire_keep.go)

@@ -167,9 +167,7 @@ func TestRescueRstEndNoticeTable(t *testing.T) {
 	if rstStat.endNoConn.Load() != nc0+1 {
 		t.Fatalf("unknown id not counted: %s", rescueRstLogLine())
 	}
-	tbl.mu.Lock()
-	_, left := tbl.m[id+1]
-	tbl.mu.Unlock()
+	left := tbl.has(id + 1)
 	if left {
 		t.Fatal("a slot was left for the unknown id")
 	}

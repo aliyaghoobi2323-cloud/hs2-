@@ -44,6 +44,8 @@ var fastPickStat struct {
 	held, plane atomic.Uint64 // placements made on the fast path
 	retry       atomic.Uint64 // scans repeated after a lost race
 	fallback    atomic.Uint64 // picks the write lock decided (races lost, hold on)
+	// b325: the user-connection (pickHeldFast) share of retry / fallback
+	heldRetry, heldFallback atomic.Uint64
 }
 
 // curPicks is the link's placements since the last sample, fast ones
@@ -88,20 +90,38 @@ func (m *LinkManager) pickHeldFast() (l Link, release func(), ok, done bool) {
 	defer m.mu.RUnlock()
 	if m.hold.on {
 		fastPickStat.fallback.Add(1)
+		fastPickStat.heldFallback.Add(1)
 		return nil, nil, false, false
 	}
+	storm := b325StormPick.Load()
+	list := b327PickList.Load()
 	for try := 0; try < fastPickTries; try++ {
-		ml, fp := m.pickLockedFP(0)
+		var ml *managedLink
+		var fp int32
+		ok := false
+		if list {
+			ml, fp, ok = m.pickListFP() // HS2_B327_PICKLIST (lm_b327_picklist.go)
+		}
+		if ok {
+			// chosen from the candidate list
+		} else if storm {
+			ml, fp = m.pickStormFP(0) // HS2_B325_STORMPICK (lm_b325_stormpick.go)
+		} else {
+			ml, fp = m.pickLockedFP(0)
+		}
 		if ml == nil {
 			return nil, nil, false, true // no link at all, as pickHeld
 		}
 		if m.placeFast(ml, fp) {
 			fastPickStat.held.Add(1)
+			b327PileNote(ml) // st327b debug: per-link placements per second
 			return ml.link, m.releaseFor(ml), true, true
 		}
 		fastPickStat.retry.Add(1)
+		fastPickStat.heldRetry.Add(1)
 	}
 	fastPickStat.fallback.Add(1)
+	fastPickStat.heldFallback.Add(1)
 	return nil, nil, false, false
 }
 

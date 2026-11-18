@@ -1,9 +1,0 @@
-m1 bS hs2-d79 hs2-k117 - HEAVY_CTL=direct
-m2 bS hs2-r60 hs2-k117 - HEAVY_CTL=direct
-m3 bS hs2-k117 hs2-r60 - HEAVY_CTL=direct
-n1 bS hs2-k117 hs2-k117 - HEAVY_CTL=direct
-u5 Q hs2-k115c hs2-k115c HS2_MCONN_STRIPE_KEEPSTALL=1 HEAVY_CTL=direct,HEAVY_P=8,HEAVY=up
-v5 Q hs2-k115c hs2-k115c - HEAVY_CTL=direct,HEAVY_P=8,HEAVY=up
-z1 Q hs2-k117 hs2-k117 - HEAVY_CTL=direct,HEAVY_P=1
-z2 Q hs2-k117 hs2-k117 - HEAVY_CTL=direct,HEAVY_P=8
-z3 Q hs2-k117 hs2-k117 - HEAVY_CTL=direct,HEAVY_P=1,HEAVY=up

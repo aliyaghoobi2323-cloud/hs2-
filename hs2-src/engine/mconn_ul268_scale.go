@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"hash/maphash"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -63,9 +64,28 @@ func ul268ScaleLogLine() string {
 
 // ---- the index ---------------------------------------------------------------
 
-var ul268Idx struct {
+// b318: the index is sharded by link key (ul268Shards locks). One global
+// mutex made every sub add/remove of every conn queue on it; in an hourly
+// reconnect storm (kharej xray restart: thousands of closes and opens within
+// ~1 s) that was the top Iran mutex wait (ul268IdxDel/Add) and fell into
+// starvation-mode handoffs. Each link's entry lives in exactly one shard, so
+// every operation on one key takes one shard lock; ul268ConnsOn locks one
+// shard per key in turn (same result: the visit is a snapshot anyway).
+const ul268Shards = 64
+
+type ul268IdxShard struct {
 	mu sync.Mutex
 	m  map[any]map[*msub]struct{}
+	_  [48]byte // keep shards on separate cache lines
+}
+
+var (
+	ul268Idx     [ul268Shards]ul268IdxShard
+	ul268IdxSeed = maphash.MakeSeed()
+)
+
+func ul268IdxShardOf(k any) *ul268IdxShard {
+	return &ul268Idx[maphash.Comparable(ul268IdxSeed, k)%ul268Shards]
 }
 
 // ul268IdxAdd (under m.mu): s of an Iran conn joins its link's entry.
@@ -73,17 +93,18 @@ func ul268IdxAdd(s *msub) {
 	if s.key == nil || s.u268Idx.Swap(true) {
 		return
 	}
-	ul268Idx.mu.Lock()
-	if ul268Idx.m == nil {
-		ul268Idx.m = map[any]map[*msub]struct{}{}
+	sh := ul268IdxShardOf(s.key)
+	sh.mu.Lock()
+	if sh.m == nil {
+		sh.m = map[any]map[*msub]struct{}{}
 	}
-	e := ul268Idx.m[s.key]
+	e := sh.m[s.key]
 	if e == nil {
 		e = map[*msub]struct{}{}
-		ul268Idx.m[s.key] = e
+		sh.m[s.key] = e
 	}
 	e[s] = struct{}{}
-	ul268Idx.mu.Unlock()
+	sh.mu.Unlock()
 }
 
 // ul268IdxDel: s leaves the index (idempotent).
@@ -91,22 +112,36 @@ func ul268IdxDel(s *msub) {
 	if !s.u268Idx.Swap(false) {
 		return
 	}
-	ul268Idx.mu.Lock()
-	if e := ul268Idx.m[s.key]; e != nil {
+	sh := ul268IdxShardOf(s.key)
+	sh.mu.Lock()
+	if e := sh.m[s.key]; e != nil {
 		delete(e, s)
 		if len(e) == 0 {
-			delete(ul268Idx.m, s.key)
+			delete(sh.m, s.key)
 		}
 	}
-	ul268Idx.mu.Unlock()
+	sh.mu.Unlock()
+}
+
+// ul268IdxHas (tests): is s indexed under k; and does k have an entry.
+func ul268IdxHas(k any, s *msub) (in, entry bool) {
+	sh := ul268IdxShardOf(k)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, entry := sh.m[k]
+	_, in = e[s]
+	return in, entry
 }
 
 func ul268IdxLen() (links, subs int) {
-	ul268Idx.mu.Lock()
-	defer ul268Idx.mu.Unlock()
-	for _, e := range ul268Idx.m {
-		links++
-		subs += len(e)
+	for i := range ul268Idx {
+		sh := &ul268Idx[i]
+		sh.mu.Lock()
+		for _, e := range sh.m {
+			links++
+			subs += len(e)
+		}
+		sh.mu.Unlock()
 	}
 	return
 }
@@ -114,12 +149,12 @@ func ul268IdxLen() (links, subs int) {
 // ul268ConnsOn: the conns with a sub on one of keys (each once), and per
 // conn the dark keys it has a sub on.
 func ul268ConnsOn(keys []any) ([]*mConn, map[*mConn][]any) {
-	ul268Idx.mu.Lock()
-	defer ul268Idx.mu.Unlock()
 	var out []*mConn
 	by := map[*mConn][]any{}
 	for _, k := range keys {
-		for s := range ul268Idx.m[k] {
+		sh := ul268IdxShardOf(k)
+		sh.mu.Lock()
+		for s := range sh.m[k] {
 			if s.m == nil {
 				continue
 			}
@@ -128,6 +163,7 @@ func ul268ConnsOn(keys []any) ([]*mConn, map[*mConn][]any) {
 			}
 			by[s.m] = append(by[s.m], k)
 		}
+		sh.mu.Unlock()
 	}
 	return out, by
 }

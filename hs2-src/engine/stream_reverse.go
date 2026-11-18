@@ -133,8 +133,15 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	}
 	pool := newExitPool(ctx, min, max, dial, logf)
 	if lb != nil {
-		lb.setSpare(func(n int) { pool.addSpares(n) }) // HS2_LB_AUTO2 spare dials (lb_spare.go)
-		lb.setSpareWant(pool.target)                   // HS2_LB_SPARE_EDGE (lb_spare176.go)
+		lb.setSpare(pool.addSpares)   // HS2_LB_AUTO2 spare dials (lb_spare.go); returns the dials started
+		lb.setSpareWant(pool.target)  // HS2_LB_SPARE_EDGE (lb_spare176.go)
+		lb.setPoolOver(pool.overWant) // rebal329: honest rebalance log (exit_honest329.go)
+		if b331SparePath {
+			lb.setSparePast(pool.addSparePast) // b331 (lb_sparepath331.go)
+			if cfg.Advert != nil {
+				cfg.Advert.OnServing(lb.setEdgeCounts)
+			}
+		}
 		go lb.Run(ctx)
 	}
 	if lb != nil && cfg.Advert != nil { // the path report after each advert answer (lb_report.go)
@@ -230,6 +237,9 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 	sess.Close()
 	if lbRetired.Load() {
 		return "retired by the lb rebalance (idle link moved to a path under its share)"
+	}
+	if w := cfg.RevLB.closeReason(car); w != "" { // b333: its source address is gone (auto6)
+		return w
 	}
 	if ctx.Err() == nil {
 		// Nothing here closed this link on purpose, yet it ended without a
