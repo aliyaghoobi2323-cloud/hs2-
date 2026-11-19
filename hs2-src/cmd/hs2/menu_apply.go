@@ -272,7 +272,7 @@ func acquireLock(pid int, force bool, now time.Time) (release func(), err error)
 				l.Owner, l.PID, l.TTY, time.Unix(l.Time, 0).Format("15:04:05"))
 		}
 	}
-	os.MkdirAll(filepath.Dir(adminLockPath), 0o755)
+	os.MkdirAll(filepath.Dir(adminLockPath), runDirMode())
 	b, _ := json.Marshal(adminLock{Owner: who, PID: pid, TTY: tty, Time: now.Unix()})
 	if err := writeFileAtomic(adminLockPath, b); err != nil {
 		return nil, err

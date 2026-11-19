@@ -68,15 +68,14 @@ func loadStats(path string) *statsFile {
 }
 
 func saveStats(path string, sf *statsFile) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), runDirMode()); err != nil {
 		return err
+	}
+	if runShared() && os.MkdirAll(statusRunDir, runDirMode()) == nil {
+		markRunShared() // b376
 	}
 	b, _ := json.Marshal(sf)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeFileAtomicMode(path, b, runFileMode()) // sec370: 0600 (HS2_RUN_SHARED=1: 0644)
 }
 
 // statusRTT is the link round trip the status reports: the control RTT, else

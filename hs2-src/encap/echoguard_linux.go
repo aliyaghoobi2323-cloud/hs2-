@@ -313,6 +313,18 @@ func SweepStaleEchoGuards(legacy bool) []string {
 // there holds one.
 var echoMarkDir = "/run/hs2/icmp-echo-ignore"
 
+// mkEchoMarkDir (b376): creates echoMarkDir and any missing parent (/run/hs2
+// after a reboot) 0700, like the status writer, or 0755 with
+// HS2_RUN_SHARED=1, so /run/hs2 does not come back world-readable on hosts
+// that use the fallback. Existing directories are left as they are.
+func mkEchoMarkDir() error {
+	mode := os.FileMode(0o700)
+	if os.Getenv("HS2_RUN_SHARED") == "1" {
+		mode = 0o755
+	}
+	return os.MkdirAll(echoMarkDir, mode)
+}
+
 func netnsID() string {
 	l, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
@@ -333,8 +345,8 @@ func acquireEchoIgnoreMarked() error {
 	weSet := echoWeSet
 	echoMu.Unlock()
 	if weSet {
-		_ = os.MkdirAll(echoMarkDir, 0o755)
-		_ = os.WriteFile(echoMarkPath(), nil, 0o644)
+		_ = mkEchoMarkDir()
+		_ = os.WriteFile(echoMarkPath(), nil, 0o600)
 	}
 	return nil
 }

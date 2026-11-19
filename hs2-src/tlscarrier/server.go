@@ -15,7 +15,10 @@ import (
 // connection: authorised tunnel, or probe/browser to be served real content.
 type Server struct {
 	SharedKey []byte
-	Cert      tls.Certificate
+	// Peers: where authenticated link IPs are learned (b388, the reality
+	// pre-hello exemption); nil = DefaultPeers.
+	Peers *PeerAllow
+	Cert  tls.Certificate
 	// GetCertificate, if set, supplies the certificate per handshake instead of
 	// the static Cert. It lets the certificate be hot-swapped after a renewal
 	// without restarting the tunnel (see cmd/hs2 certReloader): new connections
@@ -205,7 +208,16 @@ func (s *Server) handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		return
 	}
 	tconn.SetDeadline(time.Time{})
+	s.peers().Learn(raw.RemoteAddr())
 	onTunnel(&Carrier{conn: tconn})
+}
+
+// peers: the allowlist an authenticated link's IP is learned into (b388).
+func (s *Server) peers() *PeerAllow {
+	if s.Peers != nil {
+		return s.Peers
+	}
+	return DefaultPeers
 }
 
 // logRare logs at most once every 30 seconds.

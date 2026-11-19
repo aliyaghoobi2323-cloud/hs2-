@@ -223,12 +223,10 @@ func unsetKey(m map[string]any, ck configKey) {
 	}
 }
 
+// writeFileAtomic writes b to path with mode 0600 through a fresh O_EXCL
+// temp file (sec370: a stale ".tmp" left by a crash no longer lends its mode).
 func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeFileAtomicMode(path, b, 0o600)
 }
 
 func sortedKeys() []string {

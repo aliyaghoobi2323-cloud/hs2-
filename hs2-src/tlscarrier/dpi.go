@@ -42,6 +42,7 @@ func init() { LoadEnvKeys() }
 // (envdef; engine.ApplyDefaults calls it once the table is active).
 func LoadEnvKeys() {
 	QuietIdle = envdef.Get("HS2_QUIET_IDLE") == "1"
+	loadPeerExemptKey()
 	Resume = envdef.Get("HS2_TLS_RESUME") == "1"
 	AuthPad = envdef.Get("HS2_AUTH_PAD") == "1"
 	CoverNginx = envdef.Get("HS2_COVER_NGINX") == "1"

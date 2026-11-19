@@ -3498,7 +3498,7 @@ Final checks (lab 1, clean `git archive` of b49dbc89, the code of this
 branch): gofmt 0 files (third_party/utls excluded), `go vet ./...` rc=0,
 `-race -run "QueueCtl|QDelay|QLoss|QUpLog|QRunner"` (engine) ok,
 `go test ./... -timeout 40m` rc=0 (682 s). Binary (CGO_ENABLED=0,
--trimpath, -s -w) in `C:\h2w\bin61q`: sha256
+-trimpath, -s -w) in `<work>\bin61q`: sha256
 fdbbd99bce652366629336308160b49fc093b783965d0960385459266ad290b2.
 
 Left: FAST with the fix (u8, n≥10 per arm); d1/u1/idle at n≥6; the
@@ -3568,7 +3568,7 @@ Final checks (lab 1, clean `git archive` of 294bf240 — this branch's code;
 qctl62 changes docs only): gofmt 0 files (third_party/utls excluded),
 `go vet ./...` rc=0, `-race -run "QueueCtl|QDelay|QLoss|QUpLog|QRunner"`
 (engine) ok, `go test ./... -timeout 40m` rc=0 (697 s). Binary
-(CGO_ENABLED=0, -trimpath, -s -w) in `C:\h2w\bin62q`: sha256
+(CGO_ENABLED=0, -trimpath, -s -w) in `<work>\bin62q`: sha256
 fdbbd99bce652366629336308160b49fc093b783965d0960385459266ad290b2 — the
 same as qctl61's (same code, reproducible build).
 

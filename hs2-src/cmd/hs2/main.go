@@ -290,7 +290,7 @@ func main() {
 		rollbackCmd(os.Args[2:])
 	case "ports":
 		portsCmd(os.Args[2:])
-	case "alert":
+	case "alert", "watch": // watch: the b352 name for the same checker
 		alertCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])

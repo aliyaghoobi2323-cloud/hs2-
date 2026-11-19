@@ -480,11 +480,6 @@ func utf8Locale() bool {
 	return false
 }
 
-func isTTY(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
-
 func termWidth() int {
 	if c, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && c > 0 {
 		return c

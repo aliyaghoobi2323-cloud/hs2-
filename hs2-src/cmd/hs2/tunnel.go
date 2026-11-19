@@ -9,7 +9,7 @@ package main
 //	hs2 tunnel code    -u U [--public-ip IP]         connection code for the peer
 //	hs2 tunnel clone   -u U --to-code [--public-ip IP] code that recreates THIS side elsewhere
 //	hs2 tunnel edit    -u U [--section S] [--set k=v …] [--confirm-within 5m] [--yes]
-//	hs2 tunnel renew   -u U [--pick-ip] [--upgrade-from BIN] [--yes] [--confirm-within 5m]
+//	hs2 tunnel renew   -u U [--pick-ip] [--upgrade-from BIN [--sha256 HEX]] [--yes] [--confirm-within 5m]
 //	hs2 tunnel start|stop|restart -u U [--yes]
 //	hs2 tunnel logs    -u U [-n 80] [-f]
 //	hs2 tunnel delete  -u U [--yes --confirm-name U]

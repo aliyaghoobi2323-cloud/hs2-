@@ -161,6 +161,8 @@ type rescueRing struct {
 	winN  int   // bytes added since winT0
 	rate  int   // bytes/s of the last window
 	big   int   // bytes of buf above rrRingCap, counted in rrStat.big
+	infl  int   // b375: the conn's in-flight bytes + one lite queue (cap floor)
+	floor bool  // b375: HS2_B375_RINGFLOOR applies to this conn (b375InflLocked)
 	// mb174: the big budget's tiers and the shrink (mconn_rescue_bigring.go)
 	susN  int   // full windows in a row whose rate needs more than rrRingCap
 	call  bool  // the conn is copied as a call (callOn), set by rrKeepLocked
@@ -189,7 +191,7 @@ func rescueMemTake(n int) bool {
 
 func (r *rescueRing) capB() int {
 	if r.rec {
-		return rrCapFor(r.rate)
+		return r.b375Cap() // b375: in-flight floor + young window (rrCapFor when off)
 	}
 	if r.u268 {
 		return ul268RawCap(r.uRate)
@@ -819,7 +821,7 @@ func (m *mConn) rescueStart() {
 	if fresh {
 		rescueStat.fresh.Add(1)
 	}
-	rtrace("%x iran RESCUE(%d,%d) fresh=%v raw1 %v join %v", m.id, bi, ri, fresh, linkName(m.rscOld.key), linkName(key))
+	rtrace("%x iran RESCUE(%d,%d) fresh=%v raw1 %v join %v%s", m.id, bi, ri, fresh, linkName(m.rscOld.key), linkName(key), m.rtTagLocked())
 	ended := m.ended
 	m.tr.ev("rescue: RESCUE(%d,%d) on sub %d", bi, ri, s2.idx)
 	m.mu.Unlock()
@@ -954,10 +956,11 @@ func (m *mConn) onRescueAck(s *msub, bk, rk uint64) bool {
 	old := m.rscOld
 	m.rescueForgetLocked()
 	m.tr.ev("rescue: ACK(%d,%d), resent %d late=%v", bk, rk, len(data), late)
+	tg := m.rtTagLocked()
 	m.mu.Unlock()
 	m.wmu.Unlock()
 	rescueStat.acked.Add(1)
-	rtrace("%x iran ACK(%d,%d) after %v", m.id, bk, rk, time.Since(m.rscT0).Round(time.Millisecond))
+	rtrace("%x iran ACK(%d,%d) after %v%s", m.id, bk, rk, time.Since(m.rscT0).Round(time.Millisecond), tg)
 	go old.close()
 	return true
 }
@@ -1001,10 +1004,11 @@ func (m *mConn) onRescueNak(s *msub, bk, rk uint64) bool {
 	reraw := m.rawR.Load()
 	old := m.rscOld
 	m.tr.ev("rescue: NAK(%d,%d), resent %d, raw reader to %d (at %d)", bk, rk, len(data), bk, got)
+	tg := m.rtTagLocked()
 	m.mu.Unlock()
 	m.wmu.Unlock()
 	rescueStat.nakd.Add(1)
-	rtrace("%x iran NAK(%d,%d) after %v, raw reader %v to %d (at %d)", m.id, bk, rk, time.Since(m.rscT0).Round(time.Millisecond), reraw, bk, got)
+	rtrace("%x iran NAK(%d,%d) after %v, raw reader %v to %d (at %d)%s", m.id, bk, rk, time.Since(m.rscT0).Round(time.Millisecond), reraw, bk, got, tg)
 	if reraw {
 		r := &m.r
 		r.mu.Lock()

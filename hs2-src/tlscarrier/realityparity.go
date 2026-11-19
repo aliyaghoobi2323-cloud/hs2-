@@ -238,6 +238,16 @@ type preCount struct {
 }
 
 func (r *RealityServer) preAcquire(a net.Addr) (release func(), ok bool) {
+	// b388: a peer IP (configured or authenticated in 24 h) skips the per-/24
+	// and listener counts and has its own per-IP bound instead.
+	if PeerExemptOn.Load() {
+		if rel, exempt, eok := r.Peers.acquire(a); exempt {
+			if !eok {
+				realityReject("prehello_cap_peer")
+			}
+			return rel, eok
+		}
+	}
 	k := clientNet(a)
 	p := &r.pre
 	p.mu.Lock()

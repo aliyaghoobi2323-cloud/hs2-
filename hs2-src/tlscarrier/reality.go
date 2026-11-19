@@ -365,6 +365,8 @@ type RealityStats struct {
 	// (it did not answer within authTargetBudget; rel44).
 	HelloLate int64            `json:"target_hello_late,omitempty"`
 	Rejected  map[string]int64 `json:"rejected,omitempty"`
+	// Peers: the pre-hello cap's peer exemption (b388).
+	Peers *PeerAllowSnap `json:"peer_exempt,omitempty"`
 }
 
 // authTargetBudget bounds the target's part of an authenticated link (its
@@ -397,6 +399,10 @@ func RealityStatsNow() RealityStats {
 		}
 	}
 	realityStats.mu.Unlock()
+	if PeerExemptOn.Load() {
+		ps := DefaultPeers.Snap()
+		s.Peers = &ps
+	}
 	return s
 }
 
@@ -614,6 +620,9 @@ type RealityServer struct {
 	TLSUntil time.Time
 	// Counters of this listener (one per lb IP): reality / tls / cover.
 	Counters FrontCounters
+	// Peers: the peer IP allowlist exempt from the pre-hello cap (b388;
+	// NewRealityServer sets DefaultPeers, nil = no exemption).
+	Peers *PeerAllow
 	// concurrent cover splices: this listener and per client /24 (/64)
 	fbMu            sync.Mutex
 	fbAll           int
@@ -701,7 +710,7 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 		return nil, err
 	}
 	r := &RealityServer{prof: *p, inner: inner, priv: priv, certKey: ck, issuer: iss, replay: newReplayMem(),
-		shortIDs: map[[8]byte]bool{}, names: map[string]bool{}}
+		shortIDs: map[[8]byte]bool{}, names: map[string]bool{}, Peers: DefaultPeers}
 	for _, s := range p.ShortIDs {
 		id, _ := parseShortID(s)
 		r.shortIDs[id] = true
@@ -1550,6 +1559,7 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 	tconn.SetDeadline(time.Time{})
 	realityStats.authed.Add(1)
 	r.Counters.Reality.Add(1)
+	r.Peers.Learn(raw.RemoteAddr())
 	onTunnel(&Carrier{conn: tconn})
 }
 

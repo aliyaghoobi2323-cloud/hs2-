@@ -354,9 +354,11 @@ func (m *mConn) rrRetryLocked(s *msub) bool {
 	m.rrPhase = 0
 	m.rrWait.Store(false)
 	if rs169Fix.Load() { // rs169: the retry's snapshot extends this one (writes since may roll the ring past Rk)
+		m.b375CoverLocked(^uint64(0)) // b375: the first rrStart's hold into the snapshot (rare path)
 		m.rrSnapP, m.rrSnapP0 = m.rrSnap, m.rrSnap0
 	}
 	m.rrSnap = nil
+	m.b375ReleaseLocked()
 	m.rrDead = s.key
 	m.lightOpening = true
 	rs145Stat.retry.Add(1)

@@ -84,6 +84,8 @@ func fixCommand(f fixAction, unit string, hours float64) []string {
 		return []string{"lb", "park", "-u", unit, "--ip", f.Arg, "--hours", strconv.FormatFloat(hours, 'f', -1, 64), "--yes"}
 	case "cert":
 		return []string{"certbot", "renew", "--dry-run"}
+	case "perms":
+		return []string{"doctor", "--perms-fix"}
 	}
 	return nil
 }
@@ -120,7 +122,7 @@ func filterCat(fs []finding, cat string) []finding {
 }
 
 func saveFixes(path string, fixes []fixAction, now time.Time) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), runDirMode()); err != nil {
 		return err
 	}
 	b, _ := json.Marshal(savedFixes{At: now.Unix(), Fixes: fixes})
@@ -241,6 +243,8 @@ func fixSafety(kind string) string {
 		return tr("the IP's share goes to 0; a timer restores it when the time is up (also after a reboot)", "سهم این IP صفر می‌شود؛ زمان‌سنج پس از پایان مدت برش می‌گرداند (حتی پس از ری‌بوت)")
 	case "stats":
 		return tr("adds hs2-stats.timer (one sample every 5 min, a few ms); off again in menu 9", "hs2-stats.timer اضافه می‌شود (هر ۵ دقیقه یک نمونه، چند میلی‌ثانیه)؛ در منوی ۹ خاموش می‌شود")
+	case "perms":
+		return tr("only chmod: group/other access removed (dirs 0700, files 0600); nothing restarts", "فقط chmod: دسترسی گروه/دیگران برداشته می‌شود (پوشه 0700، فایل 0600)؛ چیزی ری‌استارت نمی‌شود")
 	case "cert":
 		return tr("dry run: changes nothing; the real renewal is `certbot renew` then restart the tunnel", "اجرای آزمایشی: چیزی تغییر نمی‌کند؛ تمدید واقعی `certbot renew` و سپس ری‌استارت تونل است")
 	}

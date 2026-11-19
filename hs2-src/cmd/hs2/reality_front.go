@@ -113,6 +113,7 @@ func validateRealityTarget(f *tlscarrier.FrontProfile) error {
 // realityAcceptor wraps the tls front's Server as the listen side of the
 // tunnel's front.
 func realityAcceptor(fc fileConfig, srv *tlscarrier.Server, logf func(string, ...any)) tlscarrier.Acceptor {
+	syncPeerExempt(fc, logf)
 	def := tunnelAcceptor(fc, srv, logf)
 	if lbOn(fc) { // per-IP fronts (phase 3), swapped on SIGHUP
 		return newFrontMux(fc, def, srv, logf)
@@ -178,4 +179,42 @@ func realityCmd(args []string) {
 		fmt.Println(realityUsage)
 		os.Exit(2)
 	}
+}
+
+// syncPeerExempt (b388, sec353 1a) loads the reality pre-hello exemption's
+// static part from the config: the other side's lb IPs (the addresses our own
+// links come from) and the per-IP bound 2*max_links+8. Called at start and on
+// every reload (frontMux.rebuild); IPs that authenticate a link are learned at
+// run time (tlscarrier.PeerAllow, 24 h).
+func syncPeerExempt(fc fileConfig, logf func(string, ...any)) {
+	var ips []string
+	if lbOn(fc) {
+		_, remote, _, _ := lbLists(fc)
+		for _, e := range remote {
+			ips = append(ips, e.IP)
+		}
+	}
+	_, max, _ := linkEnvelope(fc)
+	tlscarrier.DefaultPeers.SetStatic(ips)
+	tlscarrier.DefaultPeers.SetBound(max)
+	if logf != nil && tlscarrier.PeerExemptOn.Load() && tunnelOrIPReality(fc) {
+		s := tlscarrier.DefaultPeers.Snap()
+		logf("front: reality pre-hello cap: %d configured peer IPs exempt (+ IPs that authenticated a link in 24 h), %d pre-hello conns per peer IP", s.Static, s.Bound)
+	}
+}
+
+// tunnelOrIPReality: some listening IP of fc serves a reality or "both" front.
+func tunnelOrIPReality(fc fileConfig) bool {
+	if k := tunnelFront(fc).NormKind(); k == tlscarrier.FrontReality || k == tlscarrier.FrontBoth {
+		return true
+	}
+	for _, e := range lbLocalList(fc) {
+		if e.Front == nil {
+			continue
+		}
+		if k := e.Front.NormKind(); k == tlscarrier.FrontReality || k == tlscarrier.FrontBoth {
+			return true
+		}
+	}
+	return false
 }

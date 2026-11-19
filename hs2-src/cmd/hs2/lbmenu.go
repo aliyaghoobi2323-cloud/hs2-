@@ -596,7 +596,7 @@ func saveParks(unit string, ps []lbPark) error {
 		os.Remove(parkPath(unit))
 		return nil
 	}
-	os.MkdirAll(parkDir, 0o755)
+	os.MkdirAll(parkDir, 0o700)
 	b, _ := json.MarshalIndent(ps, "", "  ")
 	return writeFileAtomic(parkPath(unit), b)
 }

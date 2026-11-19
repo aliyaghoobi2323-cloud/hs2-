@@ -107,6 +107,7 @@ func newRealityLab(t *testing.T, target string, mod func(*FrontProfile)) *realit
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.Peers = NewPeerAllow() // b388: per lab, not the process-wide list
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

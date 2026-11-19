@@ -15,6 +15,11 @@ awk '/^case "\$\{1:-\}" in$/{exit} {print}' "$INST" > "$T/core.sh"
 cat > "$T/hs2" <<'B'
 #!/bin/bash
 echo "$*" >> "$T/calls"
+if [ "${CODEFILE:-0}" = 1 ] && [ "$1 ${2:-} ${3:-}" = "tunnel join --help" ]; then echo "  -code-file string" >&2; exit 0; fi
+# b376: the flag early, then a long help (a reader that stops at the match
+# would SIGPIPE this writer), then the usual flag-package exit 2
+if [ "${CODEFILE:-0}" = 2 ] && [ "$1 ${2:-} ${3:-}" = "tunnel join --help" ]; then echo "  -code-file string" >&2; for i in $(seq 1 20000); do echo "  -opt$i  some long help text for the option number $i" >&2; done; exit 2; fi
+if [ "$1 ${2:-} ${3:-}" = "tunnel join --code-file" ]; then echo "JOINCODE=$(cat "$4")" >> "$T/calls"; exit 0; fi
 [ "${OLDBIN:-0}" = 1 ] && [ "$1" = tunnel ] && { echo "unknown command"; exit 2; }
 case "$1 ${2:-}" in
   "dashboard --header") echo "testhost · 2 tunnels"; exit 0 ;;
@@ -33,7 +38,7 @@ B
 chmod +x "$T/hs2"
 cat > "$T/inner.sh" <<'INNER'
 source "$T/core.sh"
-BIN="$T/hs2"; export T OLDBIN
+BIN="$T/hs2"; export T OLDBIN CODEFILE
 MENU_CONF="$T/menu.conf"; UNIT_DIR="$T/units"; mkdir -p "$UNIT_DIR"
 printf 'lang=en\nmode=%s\ncolor=off\n' "${MODE:-simple}" > "$MENU_CONF"
 hr(){ :; }
@@ -43,7 +48,7 @@ tunnel_manager(){ echo "CLASSIC-TM" >> "$T/calls"; }
 nm_main
 echo "MENU_DONE"
 INNER
-run(){ rm -f "$T/calls"; printf "$1" | script -qec "T='$T' OLDBIN=${OLDBIN:-0} MODE=${MODE:-simple} LANG=en_US.UTF-8 LC_ALL= LC_CTYPE= bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'; }
+run(){ rm -f "$T/calls"; printf "$1" | script -qec "T='$T' OLDBIN=${OLDBIN:-0} CODEFILE=${CODEFILE:-0} MODE=${MODE:-simple} LANG=en_US.UTF-8 LC_ALL= LC_CTYPE= bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'; }
 
 out=$(run '2\n0\n0\n')
 check "screen lists the tunnels via hs2 tunnel list" 'echo "$out" | grep -q "hs2-b   inactive" && grep -q "^tunnel list --lang en" "$T/calls"'
@@ -58,6 +63,14 @@ out=$(MODE=advanced run '2\na\nkharej\n\n0\n0\n')
 check "advanced mode: wizard with --advanced" 'grep -q "^tunnel create --advanced --lang en" "$T/calls"'
 out=$(run '2\nj\nhs2://v2.ABC\n\n0\n0\n')
 check "join with a pasted code" 'grep -q "^tunnel join hs2://v2.ABC --lang en" "$T/calls"'
+out=$(CODEFILE=1 run '2
+j
+hs2://v2.ABC
+
+0
+0
+')
+check "join (sec370): a binary with --code-file gets the code on fd 3, never in argv" 'grep -q "^JOINCODE=hs2://v2.ABC$" "$T/calls" && grep -q "^tunnel join --code-file /dev/fd/3 --lang en" "$T/calls" && ! grep -q "^tunnel join hs2://" "$T/calls"'
 out=$(run '2\nj\n\n0\n0\n')
 check "join with an empty code does nothing" '! grep -q "^tunnel join" "$T/calls"'
 

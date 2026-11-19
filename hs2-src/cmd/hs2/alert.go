@@ -137,7 +137,11 @@ func parseAlertConf(text string) (alertCfg, error) {
 		case "summary_items":
 			c.SummaryItems, err = validList(v, summaryItemNames, "summary_items")
 		default:
-			// unknown keys are ignored (newer menu, older binary)
+			// b352 watchdog keys; unknown keys are ignored (newer menu, older binary)
+			var ok bool
+			if ok, err = parseWatchKey(&c.watchCfg, k, v); ok && err != nil {
+				err = fmt.Errorf("line %d: %v", ln, err)
+			}
 		}
 		if err != nil && !strings.HasPrefix(err.Error(), "line ") {
 			err = fmt.Errorf("line %d: %v", ln, err)
@@ -301,6 +305,9 @@ func runAlertOnce(cfg alertCfg, cfgPath, unit, stateDir string, dry bool) {
 	}
 	if dueSummary(cfg, st, now) {
 		msgs = append(msgs, alertMsg{Key: "summary", Sev: sevInfo, Text: takeSummary(cfg, st, now)})
+	}
+	if m := applyRollback(cfg, st, unit, msgs, now, dry); m != nil {
+		msgs = append(msgs, *m)
 	}
 	if dry {
 		for _, m := range msgs {
@@ -498,8 +505,13 @@ func collectAlertSnap(cfg alertCfg, cfgPath, unit string, now time.Time) alertSn
 			s.UptimeS = (up - us) / 1e6
 		}
 	}
-	s.Panics = journalPanics(unit)
-	s.Status = readAlertStatus(statusPath(cfgPath), now)
+	journal := journalWindow(unit)
+	s.Panics = parsePanicLines(journal)
+	sb, serr := os.ReadFile(statusPath(cfgPath))
+	if serr == nil {
+		s.Status = parseAlertStatus(sb, now)
+	}
+	collectWatch(cfg, &s, sb, serr, journal)
 	s.PSI60 = readPSI60("/proc/pressure/cpu")
 	var fc fileConfig
 	if b, err := os.ReadFile(cfgPath); err == nil {
@@ -556,13 +568,19 @@ func monotonicNowUs() int64 {
 	return int64(f * 1e6)
 }
 
-// journalPanics: panic/fatal lines of the last 2 minutes.
-func journalPanics(unit string) []panicLine {
+// journalWindow: the unit's journal of the last 2 minutes (short-unix), read
+// once per check for the panic rule and the b352 journal rules.
+func journalWindow(unit string) string {
 	b, err := exec.Command("journalctl", "-u", unit, "--since", "-2min", "-o", "short-unix", "--no-pager", "-q").Output()
 	if err != nil {
-		return nil
+		return ""
 	}
-	return parsePanicLines(string(b))
+	return string(b)
+}
+
+// journalPanics: panic/fatal lines of the last 2 minutes.
+func journalPanics(unit string) []panicLine {
+	return parsePanicLines(journalWindow(unit))
 }
 
 func parsePanicLines(out string) []panicLine {

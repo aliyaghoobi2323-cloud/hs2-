@@ -204,12 +204,13 @@ get_cert(){ printf "%s|%s" "$TEST_CERT" "$TEST_KEY"; }
 
     def run(self, s, call, steps, timeout=120, extra=None):
         """Run installer function(s) on server s through a pty. steps are
-        (prompt regex, answer) — answer may be a function of the output so far.
-        Returns (rc, output)."""
+        (prompt regex, answer[, seconds to wait for it, default 60]) — answer
+        may be a function of the output so far. Returns (rc, output)."""
         script = self.PRELUDE + call + "\n"
         p = Pty(["ip", "netns", "exec", NS[s], "bash", "-c", script], self.env(s, extra))
-        for rx, ans in steps:
-            if not p.expect(rx, 60, auto=OPTIONAL):
+        for st in steps:
+            rx, ans, wait = st[0], st[1], (st[2] if len(st) > 2 else 60)
+            if not p.expect(rx, wait, auto=OPTIONAL):
                 p.finish(3)
                 return -99, p.out + "\n<<no prompt /%s/>>" % rx
             if callable(ans):
@@ -559,9 +560,15 @@ def scenarios(w):
         binp = os.path.join(w.root(s), "usr/local/bin/hs2")
         menup = os.path.join(w.root(s), "usr/local/bin/hs2-menu")
         open(menup, "w").close()
-        # wiping every tunnel needs the phrase typed, not a single 'y' (U14)
+        # wiping every tunnel needs the phrase typed, not a single 'y' (U14).
+        # f379: the second prompt comes only after the backup (~2.6 s) and
+        # every remove_tunnel (~11.6 s each under fakesd on lab2: stop, two 1 s
+        # sleeps, daemon-reload, reset-failed, cleanup). The iran side has 5
+        # tunnels here, ~61 s in all, so the fixed 60 s per-prompt wait timed
+        # out with the prompt arriving just after it (rc=-99). Wait per tunnel.
         rc, out = w.run(s, "uninstall", [(r"Type REMOVE ALL to wipe every tunnel", "REMOVE ALL"),
-                                         (r"Also remove the hs2 program and the hs2-menu command\?[^\n]*\[y/N\]: ", drop)],
+                                         (r"Also remove the hs2 program and the hs2-menu command\?[^\n]*\[y/N\]: ", drop,
+                                          60 + 30 * len(units))],
                         timeout=200)
         left = sh("pgrep -af '%s'" % binp).stdout.strip()
         ifs = [c["iface"] for c in cfgs if c and c.get("carrier") != "mtcp"]

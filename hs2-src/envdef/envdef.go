@@ -458,6 +458,27 @@ var Table = []Key{
 	// users equal or better). Each side its own sending direction; on since
 	// rel69p-rc3.
 	{"HS2_B342_DCFAST", "1", Both},
+	// HS2_B388_PEEREXEMPT (sec353 1a): the reality front's pre-hello cap
+	// (64 per client /24) exempts peer IPs (the other side's lb IPs, re-read
+	// on reload, plus IPs that authenticated a link in 24 h); each such IP has
+	// its own bound of 2*max_links+8 pre-hello conns (rq387: a same-/24
+	// neighbour with 64 idle conns pushed our refill off reality). Listening
+	// side only; no wire change.
+	{"HS2_B388_PEEREXEMPT", "1", Both},
+	// HS2_B375_RRCOVER: an er97 records rescue covers the exit's missing
+	// range [Rk, Bi) from the retired subs' queued, in-write and kept chunks
+	// below the records ring (rb372 B2 k7: a heavy call ended nocover with
+	// 62.5 KB still queued/kept on Iran). Hold-not-copy since 000e2ccf; on
+	// in rel69q-rc1, off again since rel69q-rc2: sk393 drop-storm opens
+	// p50/p99 +30-40 % with it on (key off = rel69p-rc3), and it never
+	// extended a snapshot in any lab run (ext 0). "1" enables it.
+	{"HS2_B375_RRCOVER", "0", Both},
+	// HS2_B375_RINGFLOOR: a records ring's cap is at least the conn's
+	// in-flight bytes (largest sub queue + written-unacked) and the young
+	// window's rate; 1 = calls and conns with a full lite queue
+	// (HS2_B375_RINGFLOOR_QKB, 32), 2 = every records conn. Dark: rb375 saw
+	// +150-380 MB RSS and ring grow/shrink churn with it on everywhere.
+	{"HS2_B375_RINGFLOOR", "0", Both},
 	// rel69h (st244/st245/st246): the edge paces lite raw->dual upgrades
 	// through one token bucket, "auto" = max(500, 100 x GOMAXPROCS) a second
 	// (burst rate/10); call upgrades and interactive flows

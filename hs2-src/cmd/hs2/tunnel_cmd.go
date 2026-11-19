@@ -506,7 +506,8 @@ func runCreate(s tunnelSpec, o createOpts, h tunHostEnv, c creator) int {
 		return 0
 	}
 	cc, _ := decodeCode(code)
-	fmt.Println(tr("── Connection code — on the OTHER server run:", "── کد اتصال — روی سرور مقابل اجرا کنید:"))
+	fmt.Println(tr("── Connection code — on the OTHER server run `hs2 tunnel join` and paste the code when asked (it stays out of shell history), or run:",
+		"── کد اتصال — روی سرور مقابل `hs2 tunnel join` را اجرا کنید و کد را وقتی خواست بچسبانید (در تاریخچهٔ shell نمی‌ماند)، یا اجرا کنید:"))
 	fmt.Println("   hs2 tunnel join '" + code + "'")
 	fmt.Println(tr("   (contains the shared key: treat it like a password)", "   (شامل کلید مشترک است: مثل رمز عبور نگه دارید)"))
 	fmt.Println(tr("   check: ", "   بررسی: ") + shortCode(cc))
@@ -527,6 +528,7 @@ func tunnelJoinCmd(args []string) {
 	yes := fs.Bool("yes", false, "non-interactive")
 	dry := fs.Bool("dry-run", false, "only print")
 	within := fs.Duration("confirm-within", 5*time.Minute, "--update: confirm window")
+	codeFile := fs.String("code-file", "", "read the code from this file (- = stdin) instead of the command line, so it stays out of ps and shell history")
 	lang := langFlag(fs)
 	// accept the code before or after the flags
 	var code string
@@ -539,8 +541,11 @@ func tunnelJoinCmd(args []string) {
 	if code == "" && len(pos) > 0 {
 		code = pos[0]
 	}
-	if code == "" {
-		die("usage: hs2 tunnel join <code> [flags]")
+	// sec370: the code may come from a no-echo prompt, stdin or a file
+	argCode := code
+	code, err := joinCodeSource(argCode, *codeFile, os.Stdin, isTTY(os.Stdin), promptCodeNoEcho, os.Stderr)
+	if err != nil {
+		die("%v", err)
 	}
 	c, err := decodeCode(code)
 	if err != nil {
@@ -548,6 +553,9 @@ func tunnelJoinCmd(args []string) {
 			die("%v", err)
 		}
 		die(tr("%v", "%v"), err)
+	}
+	if argCode == "" || argCode == "-" {
+		fmt.Println(tr("code read, check: ", "کد خوانده شد، بررسی: ") + shortCode(c))
 	}
 	if c.V == 1 {
 		fmt.Println(tr("note: a classic link (v1) from an older hs2 — read as compatible; the peer can upgrade for v2 codes.", "توجه: لینک کلاسیک (v1) از hs2 قدیمی‌تر — سازگار خوانده شد؛ سمت مقابل می‌تواند برای کد v2 به‌روز شود."))
@@ -874,7 +882,8 @@ func tunnelRenewCmd(args []string) {
 	fs := flag.NewFlagSet("tunnel renew", flag.ExitOnError)
 	unit := unitFlag(fs, "hs2", "tunnel")
 	pick := fs.Bool("pick-ip", false, "choose the best local source IP toward the peer (ping each)")
-	upg := fs.String("upgrade-from", "", "install this hs2 binary first (old one kept as .prev, restored if the tunnel does not come back)")
+	upg := fs.String("upgrade-from", "", "install this hs2 binary first (old one kept as .prev, restored if the tunnel does not come back); its sha256 must match --sha256 or BIN.sha256 beside it")
+	upgHash := fs.String("sha256", "", "expected sha256 of the --upgrade-from binary (default: read BIN.sha256 beside it)")
 	within := fs.Duration("confirm-within", 5*time.Minute, "confirm window")
 	yes := fs.Bool("yes", false, "do not ask")
 	dry := fs.Bool("dry-run", false, "only print")
@@ -884,7 +893,7 @@ func tunnelRenewCmd(args []string) {
 	path, fc, cur := loadUnit(*unit)
 	fmt.Println(tr("binary: ", "باینری: ") + versionLine())
 	if *upg != "" && !*dry {
-		if err := upgradeBinary(*upg, cleanUnit(*unit)); err != nil {
+		if err := upgradeBinary(*upg, *upgHash, cleanUnit(*unit)); err != nil {
 			die("%v", err)
 		}
 	} else if *upg == "" {
@@ -1122,10 +1131,7 @@ func (realCreator) install(s tunnelSpec, cfgPath string, cfg []byte) error {
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfgPath+".tmp", cfg, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(cfgPath+".tmp", cfgPath); err != nil {
+	if err := writeFileAtomic(cfgPath, cfg); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(systemdDir, s.Name+".service"), []byte(unitFileText(s.Name, s.Role, cfgPath)), 0o644); err != nil {
@@ -1212,32 +1218,30 @@ func selfSignedCert(certPath, keyPath, domain, ip string) error {
 	return os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600)
 }
 
-// upgradeBinary installs src as the hs2 binary (after it answers `version`),
+// upgradeBinary installs src as the hs2 binary (after its sha256 is verified
+// and the verified copy answers `version`),
 // keeps the old one as .prev, restarts unit and puts the old binary back if
 // the tunnel does not stay up. The other tunnels pick the new binary up at
 // their next restart.
-func upgradeBinary(src, unit string) error {
-	out, err := exec.Command(src, "version").Output()
-	if err != nil || !strings.Contains(string(out), "hs2") {
-		return fmt.Errorf("%s does not run as hs2 (%v) — not installed", src, err)
-	}
-	b, err := os.ReadFile(src)
+func upgradeBinary(src, wantHash, unit string) error {
+	// sec370: verify before exec — src is never run; the verified copy is
+	// staged as hs2BinPath.new and runs `version` from there.
+	ver, err := stageVerifiedBinary(src, wantHash, hs2BinPath+".new", os.Getenv("HS2_ALLOW_UNVERIFIED") == "1")
 	if err != nil {
 		return err
 	}
 	prev := hs2BinPath + ".prev"
 	if old, err := os.ReadFile(hs2BinPath); err == nil {
 		if err := os.WriteFile(prev, old, 0o755); err != nil {
+			os.Remove(hs2BinPath + ".new")
 			return err
 		}
 	}
-	if err := os.WriteFile(hs2BinPath+".new", b, 0o755); err != nil {
-		return err
-	}
 	if err := os.Rename(hs2BinPath+".new", hs2BinPath); err != nil {
+		os.Remove(hs2BinPath + ".new")
 		return err
 	}
-	fmt.Println(tr("binary upgraded to: ", "باینری به‌روز شد به: ") + strings.TrimSpace(string(out)))
+	fmt.Println(tr("binary upgraded to: ", "باینری به‌روز شد به: ") + ver)
 	exec.Command("systemctl", "restart", unit).Run()
 	if (realCreator{}).healthy(unit) {
 		// A drop-in whose ExecStart= names another binary (a classic

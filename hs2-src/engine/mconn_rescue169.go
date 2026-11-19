@@ -209,6 +209,9 @@ func (m *mConn) rescueLateResendLocked(s *msub, late bool, rk uint64, data []byt
 // [rk, Bi) too: resend it now (the retry's own answer then has nothing to
 // do). Not covered, or no longer waiting: ignored.
 func (m *mConn) rrLateAnsLocked(s *msub, nak bool, bk, rk uint64) bool {
+	if m.rrPhase == 1 && m.rrSub != nil {
+		m.b375CoverLocked(rk) // b375: the retry's hold, read only if the ring falls short
+	}
 	if m.rrPhase != 1 || m.rrSub == nil || rk < m.rrBi && rk < m.rrSnap0 {
 		m.mu.Unlock()
 		rs169Stat.lateRR.Add(1)

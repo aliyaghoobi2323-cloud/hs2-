@@ -90,6 +90,9 @@ func (r *rescueRing) shrinkIdle(now int64) {
 		return
 	}
 	want := max(rrCapFor(r.rateNow(now)), len(r.buf)-r.big)
+	if b375RingFloor.Load() != 0 {
+		want = max(want, min(r.infl, rrRingMax)) // b375: not below the in-flight floor
+	}
 	if want > len(r.buf)/2 {
 		r.lowT0 = 0
 		return

@@ -32,14 +32,14 @@ import (
 )
 
 // alertRuleNames are the alert kinds `disable=` / `hs2 alert rule` accept.
-var alertRuleNames = []string{"unit", "restart", "panic", "dead", "links", "ipcut", "flap", "rtt", "psi", "cert", "probe", "fallback", "rtarget"}
+var alertRuleNames = append([]string{"unit", "restart", "panic", "dead", "links", "ipcut", "flap", "rtt", "psi", "cert", "probe", "fallback", "rtarget"}, watchRuleNames...)
 
 // summaryItemNames are the parts of the daily summary, in order.
 var summaryItemNames = []string{"users", "mbit", "rtt", "cuts", "restarts", "alerts"}
 
 // alertConfKeys: what `conf set` may write (bot_token only via `conf token`).
-var alertConfKeys = []string{"chat_id", "proxy", "lang", "summary_time", "summary_items", "quiet_hours", "disable",
-	"resend_min", "rtt_factor", "rtt_min_add_ms", "cpu_pressure_pct", "cert_days", "flap_cuts", "probe", "host", "api_url", "log_file"}
+var alertConfKeys = append([]string{"chat_id", "proxy", "lang", "summary_time", "summary_items", "quiet_hours", "disable",
+	"resend_min", "rtt_factor", "rtt_min_add_ms", "cpu_pressure_pct", "cert_days", "flap_cuts", "probe", "host", "api_url", "log_file"}, watchConfKeys...)
 
 var (
 	reChatID   = regexp.MustCompile(`^(-?[0-9]{3,20}|@[A-Za-z0-9_]{4,64})$`)
@@ -208,15 +208,10 @@ func setConfKeys(text string, kv map[string]string) string {
 
 // writeAlertConf writes the file atomically with mode 600 (it holds the token).
 func writeAlertConf(path, text string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // sec370: 0700
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(text), 0o600); err != nil {
-		return err
-	}
-	_ = os.Chmod(tmp, 0o600)
-	return os.Rename(tmp, path)
+	return writeFileAtomic(path, []byte(text))
 }
 
 func notRootHint(err error) string {

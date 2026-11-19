@@ -571,7 +571,10 @@ per GB on each server. `HS2_TUN_OFFLOAD=0` and `HS2_RAW_BATCH=0` turn each
 part off; a kernel that refuses the offload gets plain packets (the start
 line says so). `HS2_PPROF=127.0.0.1:6060` serves CPU profiles on the loopback
 address for measuring a busy server (off unless set; any non-loopback
-address is refused). On the same listener `/debug/hs2sched` prints a few
+address is refused). On a production box prefer `HS2_PPROF=unix` (sec370): a
+unix socket `/run/hs2/pprof-<pid>.sock`, mode 0600, that only root can
+connect to (`unix:/path` picks the path; `curl --unix-socket PATH http://x/debug/pprof/`).
+A loopback port is open to every local user. On the same listener `/debug/hs2sched` prints a few
 runtime/metrics counters (goroutines created/live/runnable, allocations, CPU,
 the scheduler-latency histogram), cheap enough to poll at 10 Hz.
 
@@ -903,6 +906,12 @@ Restore the old behaviour:
   since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
   are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
   512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69q** (reality peer exemption, security hardening): `Environment=HS2_B388_PEEREXEMPT=0` (both sides;
+  peer IPs count against the 64-per-/24 pre-hello cap again), `Environment=HS2_RUN_SHARED=1` (world-readable `/run/hs2`
+  status files again), `HS2_KEEP_PERMS=1` for `bash install.sh upgrade` (existing file modes left as they are),
+  `HS2_ALLOW_UNVERIFIED=1` for `tunnel renew --upgrade-from` without a sha256; `HS2_B375_RRCOVER` and
+  `HS2_B375_RINGFLOOR` are off by default, the watchdog rules are switched with `alert.conf`, and the sd381 stop fix
+  has no key (see CHANGELOG rel69q);
 - **before rel69p / rel69o / rel69n** (pick list, path-stall hold and hysteresis, spare per path, rescue-cut backoff,
   cut-mark skip/clear, call move, fast darkcall switch; exit sub watchers; async sub close, copy counter, dup stick/avoid/scan,
   lock-free join opens): `Environment=HS2_B327_PICKLIST=0 HS2_B331_SPAREPATH=0 HS2_B338_RC_GAP0_MS=0 HS2_B340_SKIPCUT=0
@@ -1266,6 +1275,9 @@ older behaviour.
 | `HS2_B338_RC_GAP0_MS` (b338, rel69p-rc2) | 500 (`=0` off) | both | rescue-cut per-connection backoff: the first drop is taken, each further drop on the same conn within 30 s waits 0.5 s << n (max 16 s); counted as `held by the per-connection backoff N` on the `lb rescue cut` line (rb339: bounds a 148-subs-in-11-s loop) |
 | `HS2_B340_SKIPCUT` (b340, rel69p-rc2) | on (`=0` off) | both | light / call / rescue placement first skips links marked by rescue-cut, falling back to them only when no unmarked link exists (rb340: 0 copies placed on marked links, backoff idle) |
 | `HS2_B342_DCFAST` (b342, rel69p-rc3) | on (`=0` off) | both | darkcall switches a call's primary that has bytes in flight and no ack progress for max(3 x srtt, 300 ms) to another live copy on another path, not cut-marked, with recent ack progress of its own, without waiting for RTO backoff; never to a stalled or unheard copy; one action per 3 s darkcall gap (rb342: switch at ~0.4 s instead of 1.2-2 s, no flapping). Counters `b342 dcfast on sw N nocand N maxage ms` on the darkcall stat line; log `darkcall b342 fast` |
+| `HS2_B388_PEEREXEMPT` (b388, sec353 1a) | on (`=0` off) | both | the reality front's pre-hello cap (64 connections per client /24 before the ClientHello) exempts peer IPs: the other side's lb IPs (re-read on reload) and IPs that authenticated a link in the last 24 h; each peer IP has its own bound of 2*max_links+8 pre-hello connections. A same-/24 neighbour can no longer push our own link refill off reality. Probe answers are unchanged. Counters `reality.peer_exempt` in the status file, reject reason `prehello_cap_peer` |
+| `HS2_B375_RRCOVER` (b375, rel69q-rc1; off since rel69q-rc2) | off (`=1` on) | both | rel69q-rc2: off by default (sk393: drop-storm opens p50/p99 +30-40 % with it on, never covered in any lab run). With `=1`, an er97 records rescue (`HS2_MCONN_RESCUE_REC`) covers the exit's missing range [Rk, Bi) from the retired subs' queued, in-write and kept (sent-list) chunks below the records ring, byte-exact (the exit drops offsets it has); only a range nothing holds still ends the conn (nocover). rb372 B2 k7: a 2 Mbit call ended nocover with 62.5 KB still on Iran. Counters `b375 on floor F ext N (KB) full N short N infl N` on the rescue-rec stat line |
+| `HS2_B375_RINGFLOOR` (b375) | off (`=1` calls + heavy queue, `=2` all) | both | a records ring's cap is at least the conn's in-flight bytes (largest sub queue + written-unacked from darkcall's tcp_info, at least one lite queue; never shrunk below it) and the young window's rate, up to `HS2_MCONN_RESCUE_REC_MAXKB`, growth from the big budget. `=1` only for calls and conns whose largest sub queue reached `HS2_B375_RINGFLOOR_QKB` (32 KB, sticky). Covers bytes written into a dark socket and kept nowhere. Dark: rb375 (on for every conn) +150-380 MB RSS and ring grow/shrink churn |
 | `HS2_B340_CUTCLEAR` (b340, rel69p-rc2) | on (`=0` off) | both | the report carries a per-path OK bit (3 clean raw readings in a row while cut); the steering side keeps such a path lowered but no longer cut-marked, so rescue-cut stops dropping copies on a recovered path |
 | `HS2_B336_CALLMOVE` lab hook `HS2_B338_CM_HOLD_MS` (lab) | unset | Iran (edge) | a move is not released before it is this old (lab only; not in the table) |
 | `HS2_B331_SPAREPATH` (b331/b336, rel69p) | on (`=0` off) | both | the exit dials one spare (past its slot cap, never past max_links) for a recovered PATH that is >= 2 links under its share of the edge's serving links and whose Iran IP is also under the edge's target (1/path/30 s, 6/min, not for a path whose factor was < 0.95 in the last minute); the edge sends per-path serving counts and per-IP targets as an optional advert block (advert ver 3, block magic 0xB3 ver 2; old peers skip it, an old edge sends none and the exit keeps the old behaviour) and takes an arriving link as serving when its path is under its share. Logs `sparepath` |
@@ -1275,6 +1287,12 @@ older behaviour.
 | `HS2_B337_FL_LOGONLY` (b337) | off (`=1` on) | both | runs the fast-lower detector alone and logs `lb fastlower: IP X WOULD be lowered (log only)` / would-be lift lines; nothing acts on it (wins over `HS2_B335_FASTLOWER=1`). Not in the default table |
 | `HS2_B337_UNCUT_DEBUG` (b337, lab) | off (`=1` on) | Kharej (exit) | one `lb uncutdbg:` line per judge reading (at most every 4 s) for every path not cut: segs, raw resent %, ewma, target and why nothing happened. Not in the default table |
 | `HS2_UL257_STUCK` (ul257, rel69j) | on (`=0` off) | Iran (edge) | a raw upload whose writer sat blocked in its first sub's Write for >= 60 % of a full 1 s sample, under 30 Mbit/s, after >= 1 MB, opens its second stripe sub at once instead of waiting for 4 good samples (a sample that moved nothing counts as an upload); app-limited flows never block, so light users never trigger it; logs "ul257 stuck raw upload" |
+| `HS2_ALLOW_UNVERIFIED` (sec370, also install.sh) | off (`=1` on) | both | `hs2 tunnel renew --upgrade-from BIN` checks BIN's sha256 against `--sha256 HEX` or `BIN.sha256` beside it **before** anything runs (`BIN.sha256` counts only when BIN and it are root-owned regular files in a directory that is not group/world-writable; otherwise pass `--sha256`) (BIN itself is never executed; the verified copy is staged and runs `version`). A mismatch is always refused; with no expected hash the upgrade is refused unless this key is `1` (prints the full sha256). Not in the default table |
+| `HS2_PPROF` (sec370 adds `unix`) | off | both | `unix` / `unix:/abs/path`: profiles on a 0600 root-only unix socket (default `/run/hs2/pprof-<pid>.sock`, dir created 0700; a stale socket is replaced, any other file is not); `127.0.0.1:PORT`: loopback TCP as before (labs). Anything else is refused. Not in the default table |
+| `HS2_PPROF_CMDLINE` (sec370) | off (`=1` on) | both | puts `/debug/pprof/cmdline` back on the pprof listener (removed by default: it is not needed for profiling). Not in the default table |
+| `HS2_HEAPDUMP_DIR` (sec370) | `/var/lib/hs2/heap` | both | where `/debug/hs2heapdump` (with `HS2_MEM_OBJS`) writes `hs2heap-<pid>-<ns>.dump/.labels`: on disk, not the `/run` tmpfs (a big heap could fill it); dir created 0700 (the default dir is re-tightened to 0700), partial files removed on error, refused when the filesystem has less free space than the heap, files 0600 with O_EXCL (was a fixed world-readable `/tmp/hs2heap-<pid>` path). The dump holds key material: delete it after use. Not in the default table |
+| `HS2_RUN_SHARED` (sec370) | off (`=1` on) | both | keeps the old world-readable `/run/hs2` status files and 24 h stats file (0644 in a 0755 dir) for a local non-root reader; by default they are 0600 in a 0700 dir, like the configs. Set it for the tunnel units and the stats timer; a daemon or stats run with it leaves the marker `/run/hs2/run-shared`, and the installer / `hs2 doctor --perms` then leave `/run/hs2` and `/var/lib/hs2/stats-*.json` alone (so `--perms-fix` never fights the unit's setting). Not in the default table |
+| `HS2_KEEP_PERMS` (sec370, install.sh) | off (`=1` on) | both | `bash install.sh upgrade` no longer tightens existing files (`fix_perms`: `/etc/hs2`, `/var/lib/hs2`, `/run/hs2` → dirs 0700, files owner-only; symlinks and the ACME webroot untouched). `hs2 doctor --perms` lists loose files, `--perms-fix` fixes them; the deep doctor offers it as a numbered fix. Not in the default table |
 
 **Rescue: what it covers and its limits.** `HS2_MCONN_RESCUE` saves a
 *light* connection (web, API, IM, calls) whose path goes silent for 1.5 s
@@ -1578,6 +1596,11 @@ journalctl -u hs2 -f
   clean IP), x-ui user churn and node-sync errors, and hs2's own health
   (links, LB cuts, restarts, panics). Read-only; a missing tool is skipped
   with a note. In the menu: **9) Server doctor**, and **Diagnose** per tunnel.
+- **`hs2 doctor --perms`** (sec370) lists hs2 files and dirs (`/etc/hs2`,
+  `/var/lib/hs2`, `/run/hs2`) that other local users can read; `--perms-fix`
+  makes them owner-only (dirs 0700, files 0600). `bash install.sh upgrade` does
+  the same unless `HS2_KEEP_PERMS=1`; `/run/hs2` is left alone while a unit runs
+  with `HS2_RUN_SHARED=1`.
 - **`hs2 ports -c /etc/hs2/config.json`** — the user ports and where each one
   goes, as this server knows it (see *per-port targets* above); with `add`,
   `remove`, `default` or `udp` it changes this server's half (also in the
@@ -1713,13 +1736,13 @@ screens):
 hs2 tunnel list [--json|--names] [--lang fa]     # state, role, direction, carrier, address, ports
 hs2 tunnel create [--advanced] [--dry-run]       # interactive wizard
 hs2 tunnel create --from-json spec.json --yes    # non-interactive (same checks)
-hs2 tunnel join '<code>' [--user-ports P] [--expose A] [--cert self|PEM --key PEM] [--yes]
+hs2 tunnel join ['<code>' | - | --code-file F] [--user-ports P] [--expose A] [--cert self|PEM --key PEM] [--yes]
 hs2 tunnel join --update '<code>'                # update an existing tunnel from a newer code (safe apply)
 hs2 tunnel code  -u U [--show]                   # connection code for the other server
 hs2 tunnel clone -u U --to-code                  # code that recreates THIS side on another server
 hs2 tunnel edit  -u U [--section network|transport|security|performance|lb]
 hs2 tunnel edit  -u U --set key=value [--set …] [--confirm-within 5m] [--dry-run]
-hs2 tunnel renew -u U [--pick-ip] [--upgrade-from BIN] [--dry-run]   # backup, binary, rebuild, best IP, safe apply
+hs2 tunnel renew -u U [--pick-ip] [--upgrade-from BIN [--sha256 HEX]] [--dry-run]   # backup, binary, rebuild, best IP, safe apply
 hs2 tunnel start|stop|restart -u U [--yes]
 hs2 tunnel logs  -u U [-n 80] [-f]
 hs2 tunnel delete -u U                           # two-step confirm, backup first
@@ -1767,7 +1790,13 @@ over the phone — it is not enough to join. `hs2 tunnel join` takes the other
 role with the same direction, so in reverse mode the Iran side is the
 listener and holds the certificate. A code from a newer hs2 is refused with
 "upgrade hs2 on this server"; a classic installer link (`hs2://…`, v1) is
-still read (tcp/tun carriers).
+still read (tcp/tun carriers). **Keep the code out of argv** (sec370): it holds the
+shared key, and on the command line it lands in shell history and in
+`/proc/<pid>/cmdline`, which every local user can read. Run `hs2 tunnel join`
+with no code and paste it at the no-echo prompt (stdin is read when it is not
+a terminal), or `hs2 tunnel join -` (stdin) or `--code-file FILE` (`-` =
+stdin). `hs2-menu` hands it over on fd 3. The argv form still works and prints
+a warning.
 
 **Edit** shows a section (secrets masked, bilateral fields marked), and
 `--set` goes through the semantic diff + `hs2 apply --confirm-within`
@@ -1779,7 +1808,7 @@ is routed through its interface.
 
 **Renew / migrate** backs up the current config to the history, shows the
 binary version (`--upgrade-from /path/to/new/hs2` installs a new binary first:
-it must answer `version`, the old one is kept as `/usr/local/bin/hs2.prev`
+its sha256 must match `--sha256 HEX` or `/path/to/new/hs2.sha256` beside it before anything runs (sec370; `HS2_ALLOW_UNVERIFIED=1` for a binary with no hash), the verified copy must answer `version`, the old one is kept as `/usr/local/bin/hs2.prev`
 and put back if the tunnel does not stay up after its restart), fills keys newer releases expect (`max_links` auto, a missing
 `cover_seed`), with `--pick-ip` pings the peer from each local public IP and
 picks the lowest RTT as `bind_local_ip` (the current one is kept within
@@ -2055,6 +2084,29 @@ sent]`. An Iran server that cannot reach `api.telegram.org` is detected by
 the reachability check, which says to set a `proxy` (socks5/http, e.g. a
 local xray socks inbound). Without root the screen says so and changes
 nothing (`alert.conf` and the timers belong to root).
+
+**Watchdog rules (b352, rel69q; `hs2 watch` = `hs2 alert`).** The same 60 s
+alert check (never inside the tunnel process) also reads the status file age,
+the user count, per-path loss, the journal and `/proc`. Each rule needs N bad
+checks in a row, sends one message per incident and one "resolved". They run
+wherever alerts are on for a tunnel; `disable=NAME` or `hs2 alert rule NAME off`
+silences one, and a numeric threshold `=0` turns its rule off.
+
+| rule | `alert.conf` key (default) | fires when |
+|---|---|---|
+| `stale` | `stale_s` (90) | the status file is older than this while the unit is up |
+| `loss` | `loss_pct` (5) | a path's down or up loss is above this for 3 checks |
+| `dark` | `dark_loss_pct` (50) | a path that carried links in the last 24 h is drained to 0 links / target 0 **and** its loss is >= this (or it is cut) for 3 checks; critical; once active it resolves only below 20 % loss; a path that never had links is not judged |
+| `disk` / `mem` | `disk_pct` (90, crit at +5) / `mem_pct` (92) | `/` or `/var/log` used, RAM used (1 - MemAvailable/MemTotal) |
+| `cpuidle` | `cpu_idle_pct` (10) | host CPU idle below this for 10 checks (upgrade hint) |
+| `usersdrop` | `users_drop_pct` (50), `users_min` (50), `users_drop_skip` (`00-06`) | users fell by more than this % within 3 min from at least `users_min`; the minutes in `users_drop_skip` of each hour are not judged (the hourly xray restart) |
+| `subdied` | `sub_died_min` (30) | "every sub died" lines per check >= this and 5x the usual |
+| `newerr` | `new_errors` (on) | an error kind never seen before (after a 1 h learning time) |
+| `tprobe`, `tprobeslow`, `tprobex3` | `probe_target` (off), `probe_factor` (2), `probe_loss_pct` (20) | TCP connects through the tunnel: p90 above baseline x factor (+20 ms), failures above the %, p90 >= 3x baseline |
+| `peer` | `peer_probe` (off) | the other side's tunnel port does not accept a TCP connect |
+| `rollback` | `rollback` (`off` \| `dry` \| `on`), `rollback_hours` (6), `rollback_dropin` | a severe alert within `rollback_hours` of a release puts the previous ExecStart drop-in back once (default off) |
+
+The tunnel manager's Monitoring screen has these under **Alerts -> w**.
 
 **Screen 7** runs `hs2 doctor --deep --fixes` for all checks or one category:
 

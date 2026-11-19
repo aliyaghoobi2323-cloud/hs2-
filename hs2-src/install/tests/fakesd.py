@@ -120,26 +120,41 @@ def supervise(u):
     stopping = {"v": False}
     child = {"p": None}
 
+    def reaped(p, timeout):
+        # sd381: never p.wait()/p.poll() here. This handler runs INSIDE the main
+        # loop's blocking child["p"].wait(), which holds Popen._waitpid_lock, so a
+        # nested p.wait(t) can never take the lock: it always ran the full t even
+        # when the daemon exited at once (every fake stop took TimeoutStopSec + 1 s
+        # = ~9 s, b370's ~9.6 s per remove_tunnel). Reap the pid directly.
+        deadline = time.time() + timeout
+        while True:
+            try:
+                pid, _ = os.waitpid(p.pid, os.WNOHANG)
+            except ChildProcessError:
+                return True
+            if pid:
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.02)
+
     def on_term(*_):
         # KillMode=mixed: SIGTERM to the main process, then SIGKILL to whatever
         # is left of its process group (the cgroup, for real systemd).
         stopping["v"] = True
         p = child["p"]
-        if p and p.poll() is None:
-            p.send_signal(signal.SIGTERM)
+        if p and p.returncode is None:
             try:
-                p.wait(float(conf["TimeoutStopSec"]))
-            except subprocess.TimeoutExpired:
+                p.send_signal(signal.SIGTERM)
+            except OSError:
                 pass
+            reaped(p, float(conf["TimeoutStopSec"]))
         if p:
             try:
                 os.killpg(p.pid, signal.SIGKILL)
             except OSError:
                 pass
-            try:
-                p.wait(1)
-            except subprocess.TimeoutExpired:
-                pass
+            reaped(p, 1)
         os._exit(0)
 
     signal.signal(signal.SIGTERM, on_term)

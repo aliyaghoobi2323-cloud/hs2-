@@ -121,6 +121,7 @@ func TestRescueRstSurvives(t *testing.T) {
 // The lost bytes reach back past the ring: the conn ends (errMConnLost or
 // the peer's RST), within the grace, on both sides.
 func TestRescueRstBeyondRing(t *testing.T) {
+	setB375(t, false) // b375's in-flight floor would hold these 40 KB (TestB375RstNowCovered)
 	setRst(t, true, true)
 	oldSecs := rrRateSecs
 	rrRateSecs = 0

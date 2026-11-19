@@ -19,6 +19,64 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel69q — GitHub release 2026-11-19: rel69p + sec370 security phase 1 + b352 watchdog rules (`hs2 watch`) + b388 reality peer exemption + b375 records-rescue cover (off) + sd381 fast stop
+
+Source = b389 `1c832439` (the rel69q-rc2 build commit); the commits after it add files under `hs2-src/lab/` only.
+rel69q = rel69p + sec370 security phase 1 (b370, with the b376/b378/f379 review fixes) + b352 watchdog rules
+(`hs2 watch`) + b388 reality peer exemption + b375 records-rescue cover and ring floor (both **off**) + the sd381
+shutdown fix. envdef 132 -> 135 keys (`HS2_B388_PEEREXEMPT`, `HS2_B375_RRCOVER`, `HS2_B375_RINGFLOOR`). **No wire
+change and no capability bit**: every new behaviour is local to one side (b388 on the listening side; b375 uses the
+existing RREC frames), so the two sides can be upgraded in any order (kharej first, as usual).
+
+| change | key (default) | side | off / escape hatch |
+|---|---|---|---|
+| b388: the reality front's pre-hello cap (64 per client /24 before the ClientHello) exempts peer IPs (the other side's lb IPs, re-read on reload, and IPs that authenticated a link in the last 24 h); each peer IP has its own bound 2*max_links+8. Probe answers unchanged. Status `reality.peer_exempt`, reject reason `prehello_cap_peer` | `HS2_B388_PEEREXEMPT` (**on**) | both | `=0` |
+| b375: an er97 records rescue covers the exit's missing range from the retired subs' queued / in-write / kept chunks (held by reference) instead of ending the conn (nocover). Off since rel69q-rc2 (lab: drop-storm opens +30-40 % in 3 runs with it on; it never extended a rescue in any lab run) | `HS2_B375_RRCOVER` (**off**) | both | `=1` on |
+| b375: records ring floor (cap >= the conn's in-flight bytes) + young window | `HS2_B375_RINGFLOOR` (**off**) | both | `=1` calls + heavy queue, `=2` all |
+| sec370 verify-before-exec: `hs2 tunnel renew --upgrade-from BIN` reads BIN once and checks its sha256 against `--sha256 HEX` or `BIN.sha256` **before** anything runs; BIN itself is never executed (the verified copy is staged and answers `version`). `BIN.sha256` is trusted only when BIN and it are root-owned regular files in a directory that is not group/world-writable (and on ext4/xfs/btrfs); otherwise pass `--sha256`. A mismatch is always refused | on | both | `HS2_ALLOW_UNVERIFIED=1` (no expected hash: allowed, full sha256 printed) |
+| sec370 `HS2_PPROF=unix` / `unix:/abs/path`: profiles on a root-only 0600 unix socket (default `/run/hs2/pprof-<pid>.sock`); loopback TCP still accepted for labs; `/debug/pprof/cmdline` removed | off (unset) | both | `HS2_PPROF_CMDLINE=1` puts cmdline back |
+| sec370 heap dumps (`/debug/hs2heapdump`) go to a 0700 dir on disk, files 0600 O_EXCL, refused when free space < heap (was a fixed world-readable `/tmp` path) | `HS2_HEAPDUMP_DIR` (`/var/lib/hs2/heap`) | both | set another dir |
+| sec370 join code kept out of argv: `hs2 tunnel join` with no code reads it at a no-echo prompt (stdin when not a terminal), `hs2 tunnel join -`, `--code-file FILE`; `hs2-menu` hands it over on fd 3 | on | both | the argv form still works (prints a warning) |
+| sec370 permissions: `/etc/hs2`, `/var/lib/hs2`, `/run/hs2` dirs 0700, files 0600 (status files, 24 h stats, configs, history); `bash install.sh upgrade` tightens files left by older releases (`fix_perms`, never follows symlinks, ACME webroot untouched); `hs2 doctor --perms` lists loose files, `--perms-fix` fixes them (also a numbered deep-doctor fix) | on | both | `HS2_RUN_SHARED=1` (old world-readable `/run/hs2` + stats for a local non-root reader; leaves the marker `/run/hs2/run-shared` that the installer and doctor respect), `HS2_KEEP_PERMS=1` (installer upgrade does not tighten) |
+| b352 watchdog rules in the existing 60 s alert check (`hs2 watch` = `hs2 alert`): `stale`, `loss`, **`dark`** (a path that carried links in the last 24 h drained to 0 links / target 0 with loss >= `dark_loss_pct` 50 % or cut, 3 checks, critical, resolves below 20 %), `disk`, `mem`, `cpuidle`, `usersdrop` (skips minutes `00-06` of each hour), `subdied`, `newerr`, optional `tprobe*` / `peer` probes and auto-`rollback` (off). Menu: Monitoring -> Alerts -> w | on where alerts are on; probes + rollback off | both | `disable=NAME`, `hs2 alert rule NAME off`, threshold `=0` |
+| sd381: a shutdown closes the carrier (`context.AfterFunc`), so an idle udp/auto/noise dial side stops in ~50 ms instead of up to the 3 s exit guard (l3mtcp was not affected) | no key | both | none (stop path only) |
+
+Installer: the rel69p installer plus the sec370 / b352 parts of b389: menu **Alerts -> w** (watchdog checks:
+probes, disk/RAM/CPU-idle thresholds, auto-rollback), `fix_perms` on `upgrade` (`HS2_KEEP_PERMS=1` skips it,
+`HS2_RUN_SHARED=1` or its marker leaves `/run/hs2` alone), and the menu's join hands the code to hs2 on fd 3
+(`--code-file /dev/fd/3`; an older binary without `--code-file` gets it in argv as before). `install.sh` and
+`hs2-src/install/install.sh` are the same file.
+
+Lab results (production-like harness: a crowd of light users, 8 call streams, a game, ping, heavy flows, path
+cuts, a data-dark path, hourly-style reconnect storms and drop storms; A/B arms in parallel on split CPU halves,
+swapped between runs, plus A/A runs for the noise floor):
+- rel69q-rc1 vs rel69p-rc3, 5 swapped pairs: equal within the A/A floor on every metric — ICMP per-minute p99 223
+  vs 240 ms, crowd p99 274 vs 283 ms, call per-stream p99 385 vs 367 ms (stream-paired 20/20 of 40), call stalls
+  >= 1 s 26 vs 25 events, heavy up/down within noise (Wilcoxon p 0.32 / 0.41); CPU, RSS, goroutines and fds equal;
+  0 panics, 0 open failures in storms.
+- sd381: an idle udp dial side under `systemctl stop`: median 3046 ms -> 51 ms (10 stops each).
+- Drop-storm opens: rc1 with RRCOVER on was slower in 3 runs (p50/p99 +30-40 %), so rc2 ships it off; rc2 vs rel69p
+  in the same hour: ratios 0.90 / 0.96 / 1.05 against an A/A floor of 1.16 -> equal.
+- Found, not a regression (present in rel69p too): a one-way data-dark of the link that carries the other side's
+  call primary can stall that call for up to ~8 s; a fix is queued for a later release.
+
+Release gate on the build commit: gofmt and `go vet ./...` clean, `go test ./...` passed (engine 961 s), -race on
+cmd/hs2, envdef and the rescue/defaults engine tests passed on rc2; the full `-race ./engine` ran on rc1 (identical
+code except the RRCOVER default; one load flake, 4/4 on rerun); the installer test scripts passed.
+
+Release binary (production tunnel 1 since 2026-11-19 13:06 UTC, tunnel 2 since 16:07 UTC): `hs2-linux-amd64` sha256
+`13a120a433b91f716595c3005975f262f4705a4e7644ed469301e791bab6f5ed`, `hs2 version` shows `[build rel69q-rc2]` (the
+exact production bytes are published, so the stamp is the release candidate's name). Built from a `git archive` of
+`1c832439` (LF) with `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.buildTag=rel69q-rc2"`,
+go1.27.3, static; the build is reproducible (same command, same sha256). The public Go source differs from that
+commit only in redacted server addresses (tests and two comments); the public installer additionally keeps the rel69p
+live load-balancing screen and its menu test (installer only, not in the binary).
+
+Rollback to rel69p behaviour: `HS2_B388_PEEREXEMPT=0` (both), `HS2_RUN_SHARED=1` (units and stats timer),
+`HS2_KEEP_PERMS=1` for the installer, `HS2_ALLOW_UNVERIFIED=1` for a hash-less `--upgrade-from`, `disable=` the
+watchdog rules you do not want, or run the rel69p binary (sha256 c0e04036...). RRCOVER and RINGFLOOR are already
+off; the sd381 stop fix has no key.
+
 ## rel69p — GitHub release 2026-11-19: rel69m + rel69n scale/locking + rel69o exit watchers, auto6 + rel69p pick list, path-stall handling, spare per path, cut-mark fixes, call move, fast darkcall switch
 
 rel69n and rel69o ran in production but were never published on their own; this entry covers **rel69m -> rel69p**.
@@ -618,7 +676,7 @@ LMFast, -count=2) after that fix: one test-only race left — cs193's setDarkcal
 process-wide rescue sweeper (started by an earlier rescue test in the same process) reads it for its log line;
 production never writes rrRingCap after init. Darkcall tests alone -race -count=3 ok. Open: make that helper
 race-safe. Binary (git archive, CGO_ENABLED=0 -trimpath -s -w; non-test source identical to this commit): sha256
-c5c784e71d99e55f4d3ec90efb7df16644f1a2f9b4b73581b651b5154115e4e5 (C:\h2w\bin68b).
+c5c784e71d99e55f4d3ec90efb7df16644f1a2f9b4b73581b651b5154115e4e5 (<work>\bin68b).
 
 ## rel68 — release candidate: rel67b + fp185 + sp176 + wj178 + ou180 + hc183 + rr166 + dl188 (both sides; not yet released)
 
@@ -654,7 +712,7 @@ upstream session_test.go:301 vet note unchanged since v1.5.24); go test ./... ok
 ./engine ok (1269 s); smux go test ./... -count=1 ok; targeted -race (HalfClose|Rescue|RS169|Pick|LMFast|Steer|
 Spare|Hyst|Ramp|Deadband|CallStuck|Stripe|DlCopies|Close|SlowTail|Trunc, -count=2) ok (1150 s). No failure, no
 flake. Binary (from 3ca298b3, git archive, CGO_ENABLED=0 -trimpath -s -w): sha256
-b280ac393867b4744faebba29d3ae3210924e32e4bef3bb2c6fc140359855771 (C:\h2w\bin68).
+b280ac393867b4744faebba29d3ae3210924e32e4bef3bb2c6fc140359855771 (<work>\bin68).
 
 ## dl188 — HS2_MCONN_STRIPE_DL_COPIES fixed (raw upgrade) + fair cap DL_COPIES_MAX; pick-none histogram
 
@@ -883,7 +941,7 @@ rel65 = rel64 (e63d5864) + race147 (b56) + sg154 (b63) + cd152 (b61) + the strip
   (1.60 → 1.74 GB); Iran unchanged. Mixed runs fine: new edge + rel63c exit acked 0.946 (JOINPICK on), rel63c edge +
   new exit NAK 4 (SCALE on the exit); exit refused 0 in both. Details hs2-src/lab/rs146/RESULTS.txt.
 - Binary bin146 (`CGO_ENABLED=0 -trimpath -ldflags="-s -w"`, lab1): sha256
-  `71b1f003035c451b1cf1295b91ed2541b4ebe5b5f15328690e5876c923d397b5` (C:\h2w\bin146). Tests (lab1, under lab load):
+  `71b1f003035c451b1cf1295b91ed2541b4ebe5b5f15328690e5876c923d397b5` (<work>\bin146). Tests (lab1, under lab load):
   gofmt clean, vet clean, `go test ./...` ok except 3 timing tests (TestCPUMeter, TestMConnLitePingsDualAndStall,
   TestMeteredConnBlockedTime) that pass 3/3 rerun on the idle lab; `-race ./engine` 0 races, 2 timing failures
   (TestDgDialsInFlightCount, TestL3DupEndToEndStuckLink) pass 3/3 rerun idle with -race, as do the rescue145/retry tests.
@@ -892,7 +950,7 @@ rel65 = rel64 (e63d5864) + race147 (b56) + sg154 (b63) + cd152 (b61) + the strip
 - HS2_MCONN_RESCUE_JOINPICK=1: rescue join only on a link with fresh progress (read < HS2_MCONN_RESCUE_FRESH_MS=1000, or nothing pending), preferring another Iran IP than every left path; falls back to the old pick.
 - HS2_MCONN_RESCUE_RETRY=1: a raw/records rescue join lost before its answer is replaced once on another path (RESCUE/RREC sent again, records since Bi resent from the records ring).
 - HS2_MCONN_RESCUE_SCALE=1: records/raw ring budgets = one full ring per ring conn, bounded by HS2_MCONN_RESCUE_RAMPCT=4 % of MemTotal, never below the fixed budgets.
-- Lab A/B n=4 (13 paths, crowd 6000, 1-IP and 2-IP outages): acked 90.9 % -> 99.1 %, exit NAK 80 -> 0, crowd fails -8..13 %, p99 flat, kharej RSS +270 MB. hs2-src/lab/rs145/RESULTS.txt. Binary C:\h2w\bin145\hs2-linux-amd64 (sha 620c4f01).
+- Lab A/B n=4 (13 paths, crowd 6000, 1-IP and 2-IP outages): acked 90.9 % -> 99.1 %, exit NAK 80 -> 0, crowd fails -8..13 %, p99 flat, kharej RSS +270 MB. hs2-src/lab/rs145/RESULTS.txt. Binary <work>\bin145\hs2-linux-amd64 (sha 620c4f01).
 
 ## rel63c — rel62k3 + `HS2_MCONN_STRIPE_KEEPSTALL` default on (both sides) + per-path MTU view
 
@@ -901,7 +959,7 @@ raw boundary fix) + the rel63 keepstall branch (b46 7fdc4a46, squashed) + mt135 
 `HS2_LB_PMTU_HINT` default off). The only new default is KEEPSTALL (Both); envdef table 65 keys.
 Unlike rel62k*, rel63c is meant for both sides (dark survival needs both on rel63c).
 - Binary (`CGO_ENABLED=0 -trimpath -ldflags="-s -w"`, lab2 go toolchain, tree d4a3023b): sha256
-  `f0d48eaef4152dc3279bc693dc2cf9ae985f94468b103de508bf8a38ea63b081` (C:\h2w\bin63c).
+  `f0d48eaef4152dc3279bc693dc2cf9ae985f94468b103de508bf8a38ea63b081` (<work>\bin63c).
 - Tests (lab2, r63c): gofmt clean, `go vet ./...` clean, `go test ./...` ok, `-race ./engine` 0 races,
   `HS2_RC134_STRESS=1` x10 30/30, smux ok, installer sh tests ok after syncing `hs2-src/install/install.sh`
   with the root `install.sh` (mt135 had changed only the root copy; release_files_test).
@@ -1366,7 +1424,7 @@ Verification (lab1 + lab3; lab2 left to u8lazy):
 - Mixed versions (lab3, 130 s upload + light users, FAST on): rel58 Iran /
   rel54 kharej 864 Mbit/s, rel54 / rel58 911, rel58 / rel54c 831, rel54c /
   rel58 831 — 0 crowd/conn/echo/call/game failures, 0 panic.
-- Binary 4d8c55da, sha256 `8190ce6b…74d32`; `C:\h2w\bin58\`.
+- Binary 4d8c55da, sha256 `8190ce6b…74d32`; `<work>\bin58\`.
 - Open for the operator: u8 echo p99 +12 % (p 0.01) and the P download
   −20 % (n=4, noisy); the u8 cost may be mem70's relay change (agent u8lazy
   is testing `HS2_RELAY_LAZY`).
@@ -1419,7 +1477,7 @@ now says "12 keys from defaults" (rel54b: 11). Turn it off with
   /ping loss): rel54c Iran / r31 kharej 773 Mbit/s (crowd p99 122, echo 160
   in that run; repeat 910, crowd 81.9, echo 79.8; rel54b control 1006, 87.8,
   81.6), r31 Iran / rel54c kharej 1401 Mbit/s (crowd 84.0, echo 80.8).
-- Binary 584e2279, sha256 `19f63b6b…ad343`; `C:\h2w\bin54c\`.
+- Binary 584e2279, sha256 `19f63b6b…ad343`; `<work>\bin54c\`.
 
 ## share63 — `HS2_MCONN_STRIPE_SHARE_COPIES` ON by default on the Iran (edge) side (binary)
 

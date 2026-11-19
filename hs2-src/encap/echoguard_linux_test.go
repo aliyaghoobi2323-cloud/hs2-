@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -231,5 +232,30 @@ func TestSweepRestoresGlobalEchoIgnore(t *testing.T) {
 	SweepStaleEchoGuards(false)
 	if EchoIgnored() {
 		t.Fatal("a dead daemon's icmp_echo_ignore_all=1 was not undone")
+	}
+}
+
+// b376: the marker dir and a missing /run/hs2 parent are created 0700 (0755
+// with HS2_RUN_SHARED=1), never 0755 by default.
+func TestEchoMarkDirMode(t *testing.T) {
+	defer func(d string) { echoMarkDir = d }(echoMarkDir)
+	for _, tc := range []struct {
+		shared string
+		want   os.FileMode
+	}{{"", 0o700}, {"1", 0o755}} {
+		base := t.TempDir()
+		echoMarkDir = base + "/run/hs2/icmp-echo-ignore"
+		t.Setenv("HS2_RUN_SHARED", tc.shared)
+		old := syscall.Umask(0)
+		err := mkEchoMarkDir()
+		syscall.Umask(old)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{base + "/run/hs2", echoMarkDir} {
+			if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != tc.want {
+				t.Fatalf("shared=%q %s: %v %v, want %04o", tc.shared, p, fi.Mode().Perm(), err, tc.want)
+			}
+		}
 	}
 }

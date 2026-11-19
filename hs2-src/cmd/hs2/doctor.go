@@ -39,6 +39,8 @@ func doctorCmd(args []string) {
 	hours := fs.Float64("hours", 6, "--fix of a park: hours")
 	within := fs.Duration("confirm-within", 5*time.Minute, "--fix: trial time before the automatic rollback (safe-apply fixes)")
 	lang := fs.String("lang", "en", "language of the deep report: en | fa")
+	perms := fs.Bool("perms", false, "list hs2 files/dirs (/etc/hs2, /var/lib/hs2, /run/hs2) that other local users can read")
+	permsFix := fs.Bool("perms-fix", false, "make them owner-only (dirs 0700, files 0600)")
 	fs.Parse(args)
 	if *lang == "fa" {
 		deepLang = "fa"
@@ -55,6 +57,9 @@ func doctorCmd(args []string) {
 	}
 	if *supported {
 		return
+	}
+	if *perms || *permsFix {
+		os.Exit(doctorPerms(*permsFix, os.Stdout))
 	}
 	if *fixN > 0 {
 		fixWithin = *within

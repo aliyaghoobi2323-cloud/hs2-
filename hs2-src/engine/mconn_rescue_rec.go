@@ -146,6 +146,11 @@ type rrState struct {
 	rrLate    bool   // rs169: a replaced join's answer did the resend
 	rrSnapP   []byte // rs169: the replaced RREC's snapshot [rrSnapP0, its Bi), until the retry's RREC
 	rrSnapP0  uint64
+	rrExt0    uint64 // b375: the snapshot's start before the extension (^0: none)
+
+	// b375: retired subs' DATA chunks below b375HoldBi (referenced, no copy)
+	b375Hold   []*mchunk
+	b375HoldBi uint64
 }
 
 var rrConns sync.Map // *mConn → struct{}
@@ -155,7 +160,7 @@ func rescueRecLogLine() string {
 	return fmt.Sprintf("mconn rescue-rec: conns %d (%d KB, big %d KB of %d MB, call %d KB) · started %d acked %d nakd %d · served %d nak %d refused %d · nocover %d failed %d lostjoin %d endwait %d · resent %d KB · gap %d fin %d · bigno %d shrunk %d (%d KB)",
 		s.conns.Load(), s.mem.Load()>>10, s.big.Load()>>10, rrBigMax>>20, s.bigCall.Load()>>10, s.started.Load(), s.acked.Load(), s.nakd.Load(), s.served.Load(), s.nak.Load(), s.refused.Load(),
 		s.noCover.Load(), s.failed.Load(), s.lostJoin.Load(), s.endWait.Load(), s.resent.Load()>>10, s.gap.Load(), s.fin.Load(),
-		s.bigNo.Load(), s.shrunk.Load(), s.shrunkKB.Load())
+		s.bigNo.Load(), s.shrunk.Load(), s.shrunkKB.Load()) + b375LogPart()
 }
 
 // rrKeepLocked (under mu, Write, right after sendLocked queued n bytes of p
@@ -188,6 +193,7 @@ func (m *mConn) rrKeepLocked(p []byte) {
 		m.rrStopLocked() // a gap (a stripe or call path took bytes): no cover
 		return
 	}
+	m.b375InflLocked() // b375: the cap's in-flight floor
 	m.rk.add(p)
 	m.rkEnd += uint64(len(p))
 	if !m.rk.on {
@@ -232,6 +238,7 @@ func (m *mConn) rrEndLocked() {
 	}
 	m.rrWait.Store(false)
 	m.rrSnap, m.rrSnapP = nil, nil
+	m.b375ReleaseLocked()
 	m.rkMu.Lock()
 	m.rrReleaseLocked()
 	m.rk.on = false
@@ -375,6 +382,10 @@ func (m *mConn) rrStart() {
 	}
 	m.lightOpening = false
 	old := m.rrLiveSubsLocked()
+	bi := m.sendOff
+	tH := time.Now()
+	m.b375HoldLocked(old, bi) // b375: references, before the kept chunks are dropped (no copy)
+	dH, nH := time.Since(tH), len(m.b375Hold)
 	for _, s := range old {
 		s.retired = true
 		s.rrAband = true
@@ -386,7 +397,6 @@ func (m *mConn) rrStart() {
 	s2 := m.addSubLocked(sub, key, false)
 	m.prefPrimary = s2
 	m.setPrimaryLocked()
-	bi := m.sendOff
 	m.r.mu.Lock()
 	ri := m.r.next
 	m.r.mu.Unlock()
@@ -406,14 +416,16 @@ func (m *mConn) rrStart() {
 	}
 	m.rkMu.Unlock()
 	m.rrMergeSnapLocked(bi) // rs169
+	m.rrExt0 = ^uint64(0)
 	s2.push(rescueRec(mRecRRescue, bi, ri))
 	m.rrPhase, m.rrBi, m.rrSub, m.rrT0 = 1, bi, s2, time.Now()
 	m.rrWait.Store(true)
 	m.tr.ev("rescue-rec: RREC(%d,%d) on sub %d, %d old", bi, ri, s2.idx, len(old))
 	m.sendCond.Broadcast()
+	tg := m.rtTagLocked()
 	m.mu.Unlock()
 	rrStat.started.Add(1)
-	rtrace("%x iran RREC(%d,%d) old %d join %v", m.id, bi, ri, len(old), linkName(key))
+	rtrace("%x iran RREC(%d,%d) old %d join %v held %d in %v%s", m.id, bi, ri, len(old), linkName(key), nH, dH, tg)
 	m.startSub(s2)
 	m.kickMgr()
 }
@@ -512,6 +524,7 @@ func (m *mConn) onRRescueAns(s *msub, nak bool, bk, rk uint64) bool {
 	}
 	m.rrPhase = 2
 	m.rrWait.Store(false)
+	m.b375CoverLocked(rk) // b375: reads the held chunks only if the ring falls short
 	ok := rk >= m.rrBi
 	if !ok && rk >= m.rrSnap0 {
 		data := m.rrSnap[rk-m.rrSnap0:]
@@ -525,19 +538,26 @@ func (m *mConn) onRRescueAns(s *msub, nak bool, bk, rk uint64) bool {
 		s.push(c)
 		rrStat.fin.Add(1)
 	}
+	if ok && rk < m.rrBi && m.rrExt0 != ^uint64(0) && rk < m.rrExt0 {
+		b375Stat.full.Add(1) // covered only by the b375 extension
+	}
+	if !ok && b375RRCover.Load() {
+		b375Stat.short.Add(1)
+	}
 	m.rrSnap = nil
 	var old []*msub
 	if !nak {
 		old, m.rrOld = m.rrOld, nil
 	}
 	m.tr.ev("rescue-rec: answer nak=%v (%d,%d) covered=%v", nak, bk, rk, ok)
+	tg := m.rtTagLocked()
 	m.mu.Unlock()
 	if nak {
 		rrStat.nakd.Add(1)
 	} else {
 		rrStat.acked.Add(1)
 	}
-	rtrace("%x iran RREC answer nak=%v (%d,%d) after %v covered=%v", m.id, nak, bk, rk, time.Since(m.rrT0).Round(time.Millisecond), ok)
+	rtrace("%x iran RREC answer nak=%v (%d,%d) after %v covered=%v%s", m.id, nak, bk, rk, time.Since(m.rrT0).Round(time.Millisecond), ok, tg)
 	if !ok {
 		rrStat.noCover.Add(1)
 		m.end(errMConnLost, true)

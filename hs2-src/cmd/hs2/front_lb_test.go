@@ -268,3 +268,40 @@ func TestLBFrontTLSNameOverlap(t *testing.T) {
 		}
 	}
 }
+
+// b388: the reality pre-hello exemption's static peers are the other side's
+// lb IPs, set at start and replaced on reload (SIGHUP path).
+func TestPeerExemptFollowsReload(t *testing.T) {
+	priv, _, _ := tlscarrier.RealityKeygen()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.json")
+	raw := lbFrontConf(t, priv, "", "")
+	os.WriteFile(path, []byte(raw), 0o600)
+	fc := parseFC(t, raw)
+	fc.MaxLinks = 300
+	defer tlscarrier.DefaultPeers.SetStatic(nil)
+	m := newFrontMux(fc, &tagAcc{got: make(chan string, 1)}, &tlscarrier.Server{SharedKey: []byte("0123456789abcdef0123456789abcdef")}, quietLog)
+	defer curFrontMux.Store(nil)
+	_ = m
+	ip := func(s string) net.Addr { return &net.TCPAddr{IP: net.ParseIP(s)} }
+	syncPeerExempt(fc, nil)
+	if !tlscarrier.DefaultPeers.Exempt(ip("10.9.0.1")) || tlscarrier.DefaultPeers.Exempt(ip("10.0.0.1")) {
+		t.Fatal("start: the iran lb IP must be exempt, our own IPs not")
+	}
+	if b := tlscarrier.DefaultPeers.Snap().Bound; b != 2*300+8 {
+		t.Fatalf("bound %d", b)
+	}
+	oldPath := configPath
+	configPath = path
+	defer func() { configPath = oldPath }()
+	lbRunMu.Lock()
+	prev := lbRun
+	lbRun = &lbRuntime{fc: fc, logf: quietLog}
+	lbRunMu.Unlock()
+	defer func() { lbRunMu.Lock(); lbRun = prev; lbRunMu.Unlock() }()
+	os.WriteFile(path, []byte(strings.Replace(raw, `"ip":"10.9.0.1"`, `"ip":"10.9.0.5"`, 1)), 0o600)
+	reloadLB("test")
+	if tlscarrier.DefaultPeers.Exempt(ip("10.9.0.1")) || !tlscarrier.DefaultPeers.Exempt(ip("10.9.0.5")) {
+		t.Fatal("after reload: exemption did not follow the lb list")
+	}
+}

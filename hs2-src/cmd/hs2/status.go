@@ -685,8 +685,7 @@ func (w *warmWriter) note(target int) {
 	if target < 1 || time.Since(w.start) < w.after || (target == w.last && time.Since(w.at) < time.Minute) {
 		return
 	}
-	tmp := w.path + ".tmp"
-	if os.WriteFile(tmp, []byte(strconv.Itoa(target)+"\n"), 0o644) == nil && os.Rename(tmp, w.path) == nil {
+	if writeFileAtomicMode(w.path, []byte(strconv.Itoa(target)+"\n"), runFileMode()) == nil { // sec370: 0600
 		w.last, w.at = target, time.Now()
 	}
 }
@@ -695,9 +694,10 @@ func (w *warmWriter) note(target int) {
 // until ctx ends, then removes the file. stats returns the current snapshot.
 func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats engine.StatsFn) {
 	path := statusPath(cfgPath)
-	if err := os.MkdirAll(statusRunDir, 0o755); err != nil {
+	if err := os.MkdirAll(statusRunDir, runDirMode()); err != nil { // sec370: 0700
 		return // /run not writable (unusual); the manager falls back to `ss`
 	}
+	syncRunShared() // b376/b378: tell doctor/installer whether this box runs shared
 	// The cores this process can use (the cgroup quota, GOMAXPROCS): the same
 	// number the ceiling is computed from, so the status's "why" text and the
 	// CPU meter agree with it (runtime.NumCPU() is the host's under a quota).
@@ -888,11 +888,7 @@ func writeStatusFile(path string, ls liveStatus) {
 	if err != nil {
 		return
 	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o644) != nil {
-		return
-	}
-	os.Rename(tmp, path)
+	writeFileAtomicMode(path, b, runFileMode()) // sec370: 0600 (HS2_RUN_SHARED=1: 0644)
 }
 
 // statusCmd implements `hs2 status -c config [--watch]`: it reads the live

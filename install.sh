@@ -5624,6 +5624,7 @@ tm_alerts(){
     say "  7) Send a test message"
     say "  8) Show last alerts"
     say "  9) Check now (shows what would be sent, changes nothing)"
+    say "  w) Watchdog checks — probe through the tunnel, other side, disk/RAM/CPU, auto-rollback"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in
@@ -5641,6 +5642,48 @@ tm_alerts(){
       7) "$BIN" alert -c "$cfg" -u "$u" -test || true; pause ;;
       8) if [ -f "$ALERT_LOG" ]; then grep -F "/$u]" "$ALERT_LOG" | tail -n 25 >&2 || say "  (no alerts for $u yet)"; else say "  (no alerts yet)"; fi; pause ;;
       9) "$BIN" alert -c "$cfg" -u "$u" -dry || true; pause ;;
+      w|W) tm_watch "$u" "$cfg" ;;
+      0|b|B|"") return 0 ;;
+      *) warn "Invalid choice." ;;
+    esac
+  done
+}
+
+# b352 watchdog keys of the same checker (hs2 alert = hs2 watch). Defaults are
+# on for the local checks (stale status, loss, disk/RAM, CPU idle, users drop,
+# journal bursts / new error kinds); the probes and auto-rollback are off until
+# set here. Every value is validated by `hs2 alert conf set`.
+tm_watch(){
+  local u="$1" cfg="$2" c v
+  while :; do
+    echo >&2; hr; say " ${C_B}Watchdog checks${C_0} — $u"; hr
+    v=$(alert_get probe_target); say "  probe through the tunnel: ${v:-off}"
+    v=$(alert_get peer_probe);   say "  other side's tunnel port: ${v:-off}"
+    v=$(alert_get disk_pct);     say "  disk alert above:  ${v:-90}%"
+    v=$(alert_get mem_pct);      say "  RAM alert above:   ${v:-92}%"
+    v=$(alert_get cpu_idle_pct); say "  CPU idle below:    ${v:-10}% for 10 min (upgrade hint)"
+    v=$(alert_get users_drop_skip); say "  users-drop skip:   ${v:-00-06} (UTC minutes; hourly xray restart)"
+    v=$(alert_get rollback);     say "  auto-rollback:     ${v:-off}  (drop-in: $(alert_get rollback_dropin))"
+    say ""
+    say "  1) Probe through the tunnel (host:port reached via the tunnel, e.g. the far side's xray port; off = none)"
+    say "  2) Other side's tunnel port (host:port; from Kharej this watches Iran; off = none)"
+    say "  3) Disk / RAM / CPU-idle thresholds"
+    say "  4) Auto-rollback (off / dry / on) and its ExecStart drop-in"
+    say "  5) Show active alerts now"
+    say "  0) Back"
+    read -rp "Choose: " c </dev/tty || return 0
+    case "$c" in
+      1) read -rp "host:port or off: " v </dev/tty || v=""; "$BIN" alert conf set "probe_target=${v:-off}" && ok "Saved." ;;
+      2) read -rp "host:port or off: " v </dev/tty || v=""; "$BIN" alert conf set "peer_probe=${v:-off}" && ok "Saved." ;;
+      3) read -rp "Disk % [90]: " v </dev/tty || v=""; [ -n "$v" ] && "$BIN" alert conf set "disk_pct=$v"
+         read -rp "RAM % [92]: " v </dev/tty || v=""; [ -n "$v" ] && "$BIN" alert conf set "mem_pct=$v"
+         read -rp "CPU idle % [10]: " v </dev/tty || v=""; [ -n "$v" ] && "$BIN" alert conf set "cpu_idle_pct=$v"; ok "Done." ;;
+      4) say "  off = never; dry = only say it would roll back; on = restore <drop-in>.prev and restart"
+         say "  (only a release installed less than rollback_hours ago, default 6, on panic / users with no link / probe p90 3x for 5 min)"
+         read -rp "Mode [off/dry/on]: " v </dev/tty || v=""
+         case "$v" in off|dry|on) "$BIN" alert conf set "rollback=$v" && ok "Saved." ;; *) warn "off, dry or on" ;; esac
+         read -rp "ExecStart drop-in path (empty = keep): " v </dev/tty || v=""; [ -n "$v" ] && "$BIN" alert conf set "rollback_dropin=$v" ;;
+      5) "$BIN" alert -c "$cfg" -u "$u" -dry || true; pause ;;
       0|b|B|"") return 0 ;;
       *) warn "Invalid choice." ;;
     esac
@@ -6058,6 +6101,37 @@ heal_alert_units(){
   return 0
 }
 
+# fix_perms (sec370): hs2's own files hold the tunnel keys (configs, cert keys,
+# alert.conf's token, the config history) or show the topology (/run/hs2):
+# dirs 0700, files owner-only. New releases write them so; this tightens files
+# left by older ones. Symlinks are not followed; the ACME webroot (public
+# challenge tokens) is left alone. HS2_KEEP_PERMS=1 skips it; HS2_RUN_SHARED=1
+# (or the marker /run/hs2/run-shared a shared daemon leaves) leaves /run/hs2
+# and the stats-*.json files as they are.
+# b376 limits: chmod(1) has no fd form, so between find's check and chmod a
+# user who can write in a still group/other-writable hs2 dir could swap an
+# entry (or a dir in its path) for a symlink and redirect one chmod. Only
+# hs2's own root-owned dirs are walked, they are tightened first, and
+# `hs2 doctor --perms-fix` (fd based, never follows) closes the rest.
+fix_perms(){
+  [ "${HS2_KEEP_PERMS:-}" = 1 ] && return 0
+  local d shared="${HS2_RUN_SHARED:-}" skip=()
+  # b376: a daemon run with HS2_RUN_SHARED=1 from its unit leaves this marker
+  [ -f "${RUN_SHARED_MARK:-/run/hs2/run-shared}" ] && [ ! -L "${RUN_SHARED_MARK:-/run/hs2/run-shared}" ] && shared=1
+  for d in ${PERM_DIRS:-/etc/hs2 /var/lib/hs2 /run/hs2}; do
+    [ "$d" = /run/hs2 ] && [ "$shared" = 1 ] && continue
+    # the shared 24 h stats stay 0644: only /var/lib/hs2/stats-*.json, the
+    # same as the Go side (b378; not in other dirs or subdirs)
+    skip=(-false); [ "$shared" = 1 ] && [ "$d" = "${VARLIB_DIR:-/var/lib/hs2}" ] && skip=(-path "$d/stats-*.json" ! -path "$d/*/*")
+    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+    # -P: find never follows a symlink, and -type d/f/s never matches one;
+    # dirs go first, so by the file pass no other user can swap entries in.
+    find -P "$d" -xdev -path "$ACME_WEBROOT" -prune -o -type d ! -type l -perm /077 -exec chmod 700 -- {} + 2>/dev/null || true
+    find -P "$d" -xdev -path "$ACME_WEBROOT" -prune -o \( "${skip[@]}" \) -prune -o \( -type f -o -type s \) ! -type l -perm /077 -exec chmod go-rwx -- {} + 2>/dev/null || true
+  done
+  return 0
+}
+
 upgrade(){ # [tunnel]
   local all units u role fails=0 a
   heal_alert_units
@@ -6096,6 +6170,7 @@ upgrade(){ # [tunnel]
   auto_backup
   install_prereqs
   install_binary force
+  fix_perms
   for u in $units; do
     use_unit "$u"
     echo >&2; info "Tunnel $u"
@@ -6241,6 +6316,20 @@ nm_tunnels_classic(){
   return 0
 }
 nm_tun(){ "$BIN" tunnel "$@" --lang "$NM_LANG" </dev/tty || true; }  # never trips set -e
+# nm_join CODE (sec370): the code holds the shared key, so it goes to hs2 on
+# fd 3 (--code-file /dev/fd/3), never in argv where ps and /proc show it. An
+# older binary without --code-file gets it in argv as before.
+# b376: the help text is captured first, then matched: `--help | grep -q`
+# under pipefail could flip to the argv path on a SIGPIPE.
+nm_join(){
+  local h
+  h=$("$BIN" tunnel join --help 2>&1) || true
+  if [[ "$h" == *-code-file* ]]; then
+    "$BIN" tunnel join --code-file /dev/fd/3 --lang "$NM_LANG" 3<<<"$1" </dev/tty || true
+  else
+    nm_tun join "$1"
+  fi
+}
 nm_tunnels(){
   local c u code
   if [ ! -x "$BIN" ]; then
@@ -6267,7 +6356,7 @@ nm_tunnels(){
       n|N) nm_lock && { nm_tun create; nm_unlock; nm_pause; } ;;
       a|A) nm_lock && { nm_tun create --advanced; nm_unlock; nm_pause; } ;;
       j|J) read -rp "$(nm_t "Paste the hs2:// code: " "کد hs2:// را بچسبانید: ")" code </dev/tty || code=""
-           if [ -n "$code" ]; then nm_lock && { nm_tun join "$code"; nm_unlock; nm_pause; }; fi ;;
+           if [ -n "$code" ]; then nm_lock && { nm_join "$code"; nm_unlock; nm_pause; }; fi ;;
       c|C) nm_tunnels_classic ;;
       *[!0-9]*) warn "$(nm_t "Unknown choice." "گزینهٔ نامعتبر.")" ;;
       *) u=$("$BIN" tunnel list --names 2>/dev/null | sed -n "${c}p")

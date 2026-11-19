@@ -180,6 +180,7 @@ func runDeep(env *deepEnv) []finding {
 	out = append(out, setCat(mtuProbingFindings(env.proc), "network")...)
 	out = append(out, setCat(monF, "tunnel")...)
 	out = append(out, setCat(checkCerts(env, time.Now()), "tunnel")...)
+	out = append(out, setCat(checkPerms(env), "tunnel")...) // sec370
 	out = append(out, setCat(pathF, "network")...)
 	out = append(out, setCat(frontF, "front")...)
 	out = append(out, setCat(realF, "reality")...)

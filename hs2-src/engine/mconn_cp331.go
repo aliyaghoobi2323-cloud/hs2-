@@ -28,8 +28,9 @@ type cp331State struct {
 }
 
 // cp331SetPort: the user connection's source port (serveUserMConn).
+// b375: also with HS2_MCONN_RESCUE_TRACE=1 (rtTagLocked's call marker).
 func (m *mConn) cp331SetPort(user any) {
-	if !cp331On.Load() {
+	if !cp331On.Load() && !rescueTrace {
 		return
 	}
 	if c, ok := user.(interface{ RemoteAddr() net.Addr }); ok {
@@ -86,4 +87,16 @@ func (m *mConn) cp331LogLocked(now time.Time) {
 		return
 	}
 	log.Printf("%x callpath port %d call %v subs %d:%s", m.id, m.cp331.port, m.callOn, n, sig)
+}
+
+// rtTagLocked (m.mu held; b375, lab only): the rescue trace's per-conn call
+// marker, so a call stall can be tied to the exact conn being rescued: the
+// user's source port (the lab call probes use 31001..), whether the conn is
+// a call (callOn / callUp / call-like) and heavy. "" with the trace off.
+func (m *mConn) rtTagLocked() string {
+	if !rescueTrace {
+		return ""
+	}
+	like := !m.callLikeAt.IsZero() && time.Since(m.callLikeAt) < callRescueTTL
+	return fmt.Sprintf(" [port=%d call=%v up=%v like=%v heavy=%v]", m.cp331.port, m.callOn, m.callUp, like, m.heavy)
 }

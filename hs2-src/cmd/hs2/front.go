@@ -237,6 +237,7 @@ func (m *frontMux) rebuild(fc fileConfig) {
 	}
 	m.built = true
 	m.fc = fc
+	syncPeerExempt(fc, nil) // b388: the peer IPs follow the reloaded lb list
 	m.byIP.Store(&next)
 	warnSNIResolve(fc, m.logf)
 }

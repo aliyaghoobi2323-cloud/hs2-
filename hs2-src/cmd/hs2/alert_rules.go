@@ -100,6 +100,7 @@ type alertSnap struct {
 	// TargetErr (menu M5): the listening side's reality / both targets ->
 	// "" reachable, else the dial error (nil = none configured / not checked).
 	TargetErr map[string]string
+	W         watchSnap // b352 watchdog inputs (alert_watch.go)
 }
 
 type panicLine struct {
@@ -128,6 +129,7 @@ type alertCfg struct {
 	Quiet        string          // quiet_hours HH:MM-HH:MM: only critical to Telegram
 	ConfErr      string          // the first bad line of alert.conf (skipped; reported once)
 	SummaryItems []string        // summary_items (nil = all)
+	watchCfg                     // b352 watchdog keys (alert_watch.go)
 }
 
 func defaultAlertCfg() alertCfg {
@@ -135,6 +137,7 @@ func defaultAlertCfg() alertCfg {
 		APIURL: "https://api.telegram.org", Lang: "fa", SummaryAt: "09:00",
 		ResendMin: 30, RTTFactor: 1.6, RTTMinAddMs: 30, PSIPct: 25, CertDays: 10,
 		FlapCuts: 4, Probe: "off", LogFile: "/var/log/hs2-alert.log",
+		watchCfg: defaultWatchCfg(),
 	}
 }
 
@@ -157,6 +160,7 @@ type alertState struct {
 	FrontFB   map[string]int64        `json:"front_fb,omitempty"` // "both" path -> fallbacks counter seen last
 	ConfErr   string                  `json:"conf_err,omitempty"` // alert.conf error already reported
 	Pending   []string                `json:"pending,omitempty"`  // lines Telegram has not taken yet (sent first at the next check)
+	Watch     watchState              `json:"watch"`              // b352 watchdog history (alert_watch.go)
 }
 
 type activeAlert struct {
@@ -446,6 +450,10 @@ func evalAlerts(cfg alertCfg, st *alertState, s alertSnap) []alertMsg {
 	} else {
 		keep("rtarget:")
 	}
+
+	// 7. b352 watchdog: stale status, loss, disk/RAM, CPU idle, users drop,
+	// journal bursts / new error kinds, light probe, the other side
+	out = append(out, evalWatch(cfg, st, s, active, settling, first, tx, cond, keep)...)
 
 	// Keys that are active but were not evaluated at all this round (a path
 	// that disappeared from the config, say) resolve.

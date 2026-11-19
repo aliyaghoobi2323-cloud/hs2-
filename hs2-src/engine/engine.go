@@ -135,6 +135,13 @@ func (e *Engine) installAndPump(ctx context.Context, car Carrier) {
 		car.Close()
 	}()
 
+	// sd381: a shutdown (ctx cancelled) closes the carrier, so a ReadFrame
+	// blocked on an idle carrier returns at once. Before, the dial side waited
+	// for the next frame (peer keepalive ~5 s) and the 3 s os.Exit guard in
+	// runCmd ended it: every udp/auto/noise dial-side stop took 3 s.
+	stopClose := context.AfterFunc(ctx, func() { car.Close() })
+	defer stopClose()
+
 	kctx, kcancel := context.WithCancel(ctx)
 	defer kcancel()
 	go e.keepalive(kctx, car)
