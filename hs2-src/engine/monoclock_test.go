@@ -36,7 +36,10 @@ func TestMonoNanoRoundTrip(t *testing.T) {
 // No hot-path atomic may hold the wall clock again (an NTP step would move
 // them all, see monoclock.go): engine code converts with monoNano/monoTime.
 func TestNoWallClockNanosInEngine(t *testing.T) {
-	allow := map[string]bool{"control.go": true, "monoclock.go": true} // control: an echoed ping stamp, rtt>0 guarded
+	// control: an echoed ping stamp, rtt>0 guarded; zdu: the process instance
+	// id is a one-off start stamp (not a hot-path clock), compared only
+	// between two processes of one server
+	allow := map[string]bool{"control.go": true, "monoclock.go": true, "zdu.go": true}
 	re := regexp.MustCompile(`\.UnixNano\(\)|time\.Unix\(0,`)
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {

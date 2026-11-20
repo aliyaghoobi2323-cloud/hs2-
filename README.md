@@ -814,9 +814,118 @@ rel53's `install.sh`, not rel52's.
 **Roll back** the binary and units to before the upgrade:
 `cd /root/hs2 && bash install.sh restore` (the newest backup; or name a file
 from `/root/hs2-backups/`). **Uninstall:** `bash install.sh uninstall`.
+Uninstall and tunnel delete also remove the peer-IP list hs2 saved next to the
+config (`<config>.peer-ips`, rel69r), so a new tunnel of the same name starts clean.
 
 Existing configs keep their mode. To switch, edit `"carrier"` in
 `/etc/hs2/config.json` on both servers and `systemctl restart hs2`.
+
+### Zero-downtime upgrade (ZDU, optional, rel69r)
+
+A normal upgrade restarts the tunnel, so every user reconnects once. With
+**zero-downtime upgrade** (ZDU) the running hs2 hands its listening ports and
+its tun device to the new binary instead: new users go to the new process at
+once, while the users already connected stay on the old process until they
+finish. Nobody is cut by the upgrade. ZDU is **off** until you turn it on per
+tunnel, and it is not needed for normal `bash install.sh upgrade` use.
+
+**What it needs**
+
+- Both servers run rel69r or newer (`hs2 version --features` says `zdu`). Turn
+  it on on the Kharej server first, then on Iran: a handover is refused until
+  every connected peer runs ZDU too.
+- Reverse mode (Iran listens, Kharej dials). Direct mode is refused; use a
+  normal restart there.
+- The four scripts from the release, `hs2-src/install/zdu/`
+  (`hs2-zdu-lib.sh`, `hs2-safe-deploy.sh`, `hs2-zdu-install.sh`,
+  `hs2-zdu-upgrade.sh`), copied together into one root-owned directory, for
+  example `/root/zdu/` (`chown -R root:root /root/zdu; chmod 700 /root/zdu;
+  chmod 755 /root/zdu/*.sh`).
+- A systemd drop-in that holds the tunnel's `ExecStart` line. The scripts
+  change only that line (the last `*.conf` in `/etc/systemd/system/UNIT.service.d/`
+  with `ExecStart=/…`). If the tunnel has none yet, copy the line from the unit:
+
+```bash
+U=hs2                                             # your tunnel's unit name
+grep '^ExecStart=' /etc/systemd/system/$U.service # e.g. ExecStart=/usr/local/bin/hs2 run -c /etc/hs2/config.json
+mkdir -p /etc/systemd/system/$U.service.d
+printf '[Service]\nExecStart=\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/config.json\n' \
+  > /etc/systemd/system/$U.service.d/40-bin.conf
+systemctl daemon-reload
+```
+
+- Every binary goes to its **own new path** (`/usr/local/bin/hs2-rel69r`,
+  `/usr/local/bin/hs2-rel69s`, …), root-owned, mode 755, never written in place.
+  The scripts check its sha256 (give at least the first 8 hex digits).
+
+**Turn it on (one normal restart per server).** Start the scripts with
+`systemd-run`, so a dropped ssh session cannot stop them half-way:
+
+```bash
+cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r && chmod 755 /usr/local/bin/hs2-rel69r
+systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r 58982b22
+cat /root/hs2-safe-deploy.$U.out                  # OK … or the reason it stopped
+```
+
+This writes two drop-ins (`30-zdu.conf`: the unit tells systemd when it is
+ready; `31-zdu-env.conf`: `HS2_ZDU=1`), switches the binary and restarts once
+(users reconnect this one time). If the tunnel does not stay up for 45 s, the
+old binary and the old drop-ins are put back by themselves.
+
+**Upgrade with no outage (every later release).** Put the new binary at a new
+path, then:
+
+```bash
+systemd-run --collect --unit=hs2zdu /root/zdu/hs2-zdu-upgrade.sh $U /usr/local/bin/hs2-NEW <sha256-prefix>
+cat /root/hs2-zdu-upgrade.$U.out                  # OK | REVERTED | REFUSED … | ABORT …
+```
+
+The new process takes over the ports, then runs a **45 s probation**. If it
+dies or stops answering in that time, the old process takes the ports back by
+itself (`REVERTED`): nothing changed and nobody was cut. After `OK` the drop-in
+points at the new binary (for future restarts) and the old process keeps
+serving its existing users until they leave or until the next HH:03 UTC,
+whichever comes first. Do Kharej first, then Iran, one server at a time; a
+second handover on the same server is refused while the old process is still
+draining (`REFUSED drain running`; wait for `DRAIN-END` in
+`/run/hs2/$U.handover`).
+
+**When it refuses (and changes nothing):**
+
+- **HH:00–HH:03 UTC** of every hour: the window of the hourly reconnect storm
+  (the Kharej side's scheduled restart). Start at HH:10–HH:35 to keep the
+  probation and the drain clear of it. A server whose storm comes at another
+  minute sets `HS2_ZDU_STORM_MIN` (default 1) in the unit's environment.
+- The unit's `HS2_*` environment (drop-ins, `EnvironmentFile`) differs from the
+  running process's: the new process inherits the running environment, so a
+  changed key needs a normal restart (`hs2-safe-deploy.sh`) instead.
+- Direct mode, a peer that does not run ZDU, a drain still running, a binary
+  with a wrong sha256, on a writable path or without the `zdu` feature.
+
+**Roll back.**
+
+- Within the probation: automatic (`REVERTED`).
+- After `OK`: hand over again with `hs2-zdu-upgrade.sh`, pointing it at the
+  previous binary (it is still on disk; `/etc/hs2/last-good.$U.conf` records the
+  last good one).
+- To a binary from before rel69r (no `zdu` feature):
+  `systemd-run --collect --unit=hs2deploy /root/zdu/hs2-safe-deploy.sh $U /usr/local/bin/hs2-OLD <sha256-prefix>`.
+  It is a normal restart, and it removes `30-zdu.conf` by itself.
+- Turn ZDU off: `/root/zdu/hs2-zdu-install.sh --remove $U` (both drop-ins go;
+  the next restart is a normal one). Do this **before** `bash install.sh restore`
+  to a pre-rel69r backup: an old binary never reports "ready", so with
+  `30-zdu.conf` still in place its start would wait 90 s and fail.
+
+`bash install.sh upgrade` keeps working on a ZDU tunnel: it is a normal upgrade
+(users reconnect once) and points the `ExecStart` drop-in at `/usr/local/bin/hs2`.
+
+**Duplicates during a handover (fixed in rel69r).** For a few seconds of a
+handover both the old and the new process of the other server send packets. On
+the full-tunnel (`l3mtcp`) path the receiving side used to see some of them
+twice (`ping` showed `DUP!`, UDP apps got repeated datagrams). rel69r removes
+duplicates per sending process, so a handover between rel69r servers shows none
+(lab: 0 duplicates, 0 lost). A server still on an older build may show a few
+`DUP!` replies while the other side hands over; they are harmless.
 
 ### Upgrading from r31 / r34 (rel40, rel52, rel53)
 
@@ -906,6 +1015,12 @@ Restore the old behaviour:
   since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
   are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
   512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69r** (new opens avoid a silent path, censorship detector, saved peer IPs, L3 duplicate filter per
+  process): `Environment=HS2_B399_STALLPICK=0` (both sides; new user connections are again placed on a path that has
+  gone silent until the LB cuts it), `Environment=HS2_CENSOR_DETECT=0` (Iran; the detector only logs, so this only
+  stops the `censor351:` lines and the `censor` status block). The saved peer IPs go with
+  `HS2_B388_PEEREXEMPT=0` (see **before rel69q**); ZDU is off unless you turned it on (see *Zero-downtime upgrade*);
+  the `auto6` default-route rule and the per-process duplicate filter have no key (see CHANGELOG rel69r);
 - **before rel69q** (reality peer exemption, security hardening): `Environment=HS2_B388_PEEREXEMPT=0` (both sides;
   peer IPs count against the 64-per-/24 pre-hello cap again), `Environment=HS2_RUN_SHARED=1` (world-readable `/run/hs2`
   status files again), `HS2_KEEP_PERMS=1` for `bash install.sh upgrade` (existing file modes left as they are),
@@ -1275,10 +1390,14 @@ older behaviour.
 | `HS2_B338_RC_GAP0_MS` (b338, rel69p-rc2) | 500 (`=0` off) | both | rescue-cut per-connection backoff: the first drop is taken, each further drop on the same conn within 30 s waits 0.5 s << n (max 16 s); counted as `held by the per-connection backoff N` on the `lb rescue cut` line (rb339: bounds a 148-subs-in-11-s loop) |
 | `HS2_B340_SKIPCUT` (b340, rel69p-rc2) | on (`=0` off) | both | light / call / rescue placement first skips links marked by rescue-cut, falling back to them only when no unmarked link exists (rb340: 0 copies placed on marked links, backoff idle) |
 | `HS2_B342_DCFAST` (b342, rel69p-rc3) | on (`=0` off) | both | darkcall switches a call's primary that has bytes in flight and no ack progress for max(3 x srtt, 300 ms) to another live copy on another path, not cut-marked, with recent ack progress of its own, without waiting for RTO backoff; never to a stalled or unheard copy; one action per 3 s darkcall gap (rb342: switch at ~0.4 s instead of 1.2-2 s, no flapping). Counters `b342 dcfast on sw N nocand N maxage ms` on the darkcall stat line; log `darkcall b342 fast` |
-| `HS2_B388_PEEREXEMPT` (b388, sec353 1a) | on (`=0` off) | both | the reality front's pre-hello cap (64 connections per client /24 before the ClientHello) exempts peer IPs: the other side's lb IPs (re-read on reload) and IPs that authenticated a link in the last 24 h; each peer IP has its own bound of 2*max_links+8 pre-hello connections. A same-/24 neighbour can no longer push our own link refill off reality. Probe answers are unchanged. Counters `reality.peer_exempt` in the status file, reject reason `prehello_cap_peer` |
+| `HS2_B388_PEEREXEMPT` (b388, sec353 1a) | on (`=0` off) | both | the reality front's pre-hello cap (64 connections per client /24 before the ClientHello) exempts peer IPs: the other side's lb IPs (re-read on reload) and IPs that authenticated a link in the last 24 h; each peer IP has its own bound of 2*max_links+8 pre-hello connections. A same-/24 neighbour can no longer push our own link refill off reality. Probe answers are unchanged. b411: an IPv6 peer is exempt by its /64 (an `auto6` address that moves inside it stays exempt; the bound is shared by the /64), and the IPs that authenticated a link are saved to `<config>.peer-ips` (0600, 7 days, at most 256) and loaded into the static part at the next start, because the listening side's config usually does not list the dialer's own source IPs (its primary is never listed there, `auto6` resolves only on the other side). Counters `reality.peer_exempt` (`static`, `saved`, `learned`, `bound`, `exempted`, `capped`) in the status file, reject reason `prehello_cap_peer` |
 | `HS2_B375_RRCOVER` (b375, rel69q-rc1; off since rel69q-rc2) | off (`=1` on) | both | rel69q-rc2: off by default (sk393: drop-storm opens p50/p99 +30-40 % with it on, never covered in any lab run). With `=1`, an er97 records rescue (`HS2_MCONN_RESCUE_REC`) covers the exit's missing range [Rk, Bi) from the retired subs' queued, in-write and kept (sent-list) chunks below the records ring, byte-exact (the exit drops offsets it has); only a range nothing holds still ends the conn (nocover). rb372 B2 k7: a 2 Mbit call ended nocover with 62.5 KB still on Iran. Counters `b375 on floor F ext N (KB) full N short N infl N` on the rescue-rec stat line |
 | `HS2_B375_RINGFLOOR` (b375) | off (`=1` calls + heavy queue, `=2` all) | both | a records ring's cap is at least the conn's in-flight bytes (largest sub queue + written-unacked from darkcall's tcp_info, at least one lite queue; never shrunk below it) and the young window's rate, up to `HS2_MCONN_RESCUE_REC_MAXKB`, growth from the big budget. `=1` only for calls and conns whose largest sub queue reached `HS2_B375_RINGFLOOR_QKB` (32 KB, sticky). Covers bytes written into a dark socket and kept nowhere. Dark: rb375 (on for every conn) +150-380 MB RSS and ring grow/shrink churn |
+| `HS2_B399_STALLPICK` (b399, rel69r-rc2; off in rel69r-rc4; on again since rel69r-rc5) | on (`=0` off) | both | rel69r-rc5: on again with the v3 marks (sk405: precision 74 %, reconnect-wave fails -97 %, storm call tails within A/A noise; a mark needs >= 2 pending links that read within 2 s of now, a cleared path re-marks only after 3 s; a marked path is no callmove target, b406). rc4 had it off (sk402: rc3 precision 34-47 %). New user opens rank the links of a silent path last (as a reported cut is) before the LB judge's cut verdict: no read on any link of the path for `HS2_B399_STALL_MS` and >= 2 links with writes unanswered as long, while another path is healthy (every path silent: no mark). A new mark needs the pool and the path up >= 10 s and a read on the path within 10 s (no start-up marks). Nothing is closed or moved; marked links are still used when nothing else is eligible. sk399b (lab3, 5 pairs): reconnect-wave open fails -98 %, storm-open fails and p99 better, tail cost = A/A noise. Log `b399 stallpick: path P stalled` / `clear after` |
+| `HS2_B399_STALL_MS` (b399, rel69r-rc2) | 300 | both | the silence (ms, 150-10000) that makes a path stalled for `HS2_B399_STALLPICK` |
+| `HS2_CENSOR_DETECT` (b382, step-3 F2 censor351 v1 level 1, rel69r-rc6; alias `HS2_CENSOR`) | Iran: on, Kharej: off (`=0` off, `=1` on; per host) | both | rel69r-rc6: on by default on the Iran side only (LOGONLY data collection); the Kharej side stays off until its version is proven (`=1` turns it on there).  censorship detector, **detect and log only**: read-only hooks (dial stage, listener handshake outcome, link death class with TCP_INFO RST timing, LB path loss/queue/silence, front, user opens) feed a bounded event ring; an evaluator every 5 s groups trouble into episodes per Iran IP and classifies them into 9 censorship and 7 ordinary classes with a confidence. Lines `censor351: v1 ep=… class=… conf=…` (max 30/min), status block `censor`, `hs2 status --censor`. Feeds no LB, dial, close or timing; off = no goroutine, no allocation. Level 2 (raw RST/SYN sampler) not built (owner decision D4) |
 | `HS2_B340_CUTCLEAR` (b340, rel69p-rc2) | on (`=0` off) | both | the report carries a per-path OK bit (3 clean raw readings in a row while cut); the steering side keeps such a path lowered but no longer cut-marked, so rescue-cut stops dropping copies on a recovered path |
+| `HS2_B405_CMSPREAD` (b405, lab) | off (`=1` on) | Iran (edge) | callmove target spread: a move picks among eligible paths within 0.05 % loss of the best (still `cmDelta` under the source and inside the b338 damper), fewest moves in the last 2 s first; a path that took 2 moves in 2 s is no target; none left: no move this tick (`spread-held` in the callmove log line). sk402: same-tick moves herded onto one path |
 | `HS2_B336_CALLMOVE` lab hook `HS2_B338_CM_HOLD_MS` (lab) | unset | Iran (edge) | a move is not released before it is this old (lab only; not in the table) |
 | `HS2_B331_SPAREPATH` (b331/b336, rel69p) | on (`=0` off) | both | the exit dials one spare (past its slot cap, never past max_links) for a recovered PATH that is >= 2 links under its share of the edge's serving links and whose Iran IP is also under the edge's target (1/path/30 s, 6/min, not for a path whose factor was < 0.95 in the last minute); the edge sends per-path serving counts and per-IP targets as an optional advert block (advert ver 3, block magic 0xB3 ver 2; old peers skip it, an old edge sends none and the exit keeps the old behaviour) and takes an arriving link as serving when its path is under its share. Logs `sparepath` |
 | `HS2_B336_CALLMOVE` (b336, rel69p-rc3) | on (`=0` off) | Iran (edge) | a call whose lossiest copy rides a path >= 0.15 % (smoothed) worse than the best eligible path no other copy rides, for 10 s, opens one fresh sub there and gives the old copy up through the close handshake once the fresh sub read data (1/call/30 s, 20/min; never with a rescue pending). Logs `lb callmove:` |
@@ -1293,6 +1412,19 @@ older behaviour.
 | `HS2_HEAPDUMP_DIR` (sec370) | `/var/lib/hs2/heap` | both | where `/debug/hs2heapdump` (with `HS2_MEM_OBJS`) writes `hs2heap-<pid>-<ns>.dump/.labels`: on disk, not the `/run` tmpfs (a big heap could fill it); dir created 0700 (the default dir is re-tightened to 0700), partial files removed on error, refused when the filesystem has less free space than the heap, files 0600 with O_EXCL (was a fixed world-readable `/tmp/hs2heap-<pid>` path). The dump holds key material: delete it after use. Not in the default table |
 | `HS2_RUN_SHARED` (sec370) | off (`=1` on) | both | keeps the old world-readable `/run/hs2` status files and 24 h stats file (0644 in a 0755 dir) for a local non-root reader; by default they are 0600 in a 0700 dir, like the configs. Set it for the tunnel units and the stats timer; a daemon or stats run with it leaves the marker `/run/hs2/run-shared`, and the installer / `hs2 doctor --perms` then leave `/run/hs2` and `/var/lib/hs2/stats-*.json` alone (so `--perms-fix` never fights the unit's setting). Not in the default table |
 | `HS2_KEEP_PERMS` (sec370, install.sh) | off (`=1` on) | both | `bash install.sh upgrade` no longer tightens existing files (`fix_perms`: `/etc/hs2`, `/var/lib/hs2`, `/run/hs2` → dirs 0700, files owner-only; symlinks and the ACME webroot untouched). `hs2 doctor --perms` lists loose files, `--perms-fix` fixes them; the deep doctor offers it as a numbered fix. Not in the default table |
+
+**New connections avoid a silent path (STALLPICK, rel69r, on).** When one
+path (an Iran IP and Kharej IP pair) suddenly stops answering, the load
+balancer needs a few seconds of evidence before it cuts it. Until rel69q, new
+user connections opened in those seconds could still be placed on that path
+and hang. Now, when no link of a path has read anything for 300 ms
+(`HS2_B399_STALL_MS`) while at least two of its links wait for answers, and
+another path is healthy, new connections use that path's links last. Nothing
+is closed or moved, existing users are not touched, and if every path is
+silent nothing changes. It only acts on a path that was up and reading in the
+last 10 s (no marks at start-up). Lab: failed opens during a reconnect wave
+fell by about 97 %, with call quality within the noise. `HS2_B399_STALLPICK=0`
+turns it off. Log lines `b399 stallpick: path P stalled` / `clear after`.
 
 **Rescue: what it covers and its limits.** `HS2_MCONN_RESCUE` saves a
 *light* connection (web, API, IM, calls) whose path goes silent for 1.5 s
@@ -1601,6 +1733,18 @@ journalctl -u hs2 -f
   makes them owner-only (dirs 0700, files 0600). `bash install.sh upgrade` does
   the same unless `HS2_KEEP_PERMS=1`; `/run/hs2` is left alone while a unit runs
   with `HS2_RUN_SHARED=1`.
+- **Censorship detector** (rel69r, **Iran side only, log only**). The Iran
+  server watches how its links fail (dial errors, handshake outcome, resets
+  and their timing, per-path loss and silence, user opens) and every 5 s
+  groups trouble per Iran IP into episodes, each labelled with a likely cause
+  (9 kinds of censorship, such as injected resets or a blocked handshake, and
+  7 ordinary ones, such as a provider outage) and a confidence. It **only
+  reports**: lines `censor351: v1 ep=… class=… conf=…` in the journal (at most
+  30 a minute), a `censor` block in the status file and
+  `hs2 status --censor`. It never moves traffic, cuts a path or changes a dial.
+  `HS2_CENSOR_DETECT=0` turns it off (no extra work at all). The Kharej side has
+  it off by default (it is not accurate enough there yet); `=1` turns it on
+  there for data collection only.
 - **`hs2 ports -c /etc/hs2/config.json`** — the user ports and where each one
   goes, as this server knows it (see *per-port targets* above); with `add`,
   `remove`, `default` or `udp` it changes this server's half (also in the
@@ -1865,6 +2009,13 @@ Common flags (before or after the positional value): `--confirm-within 5m`,
   what it resolves to. A literal source IP that is not on the server is
   cooled at its first failed dial (15 s doubling to 5 min, one log line a
   minute) instead of being redialed in a loop.
+  rel69r: auto6 takes only an address of the interface that holds the
+  **default IPv6 route** (or the one you name with `auto6:IFACE`). A VPN or
+  WARP interface (`wg…`, a /128 that changes at each reconnect) is never taken,
+  even when its address sorts first. If the default route disappears for a
+  while, the current address is kept (one log line) instead of moving the path
+  to another interface; with no default route and no current address there is
+  no v6 path.
 - **Add IP**: the IP must exist on an interface of this server; on the first
   add the primary joins the list explicitly (a wildcard listener: its first
   public IP) and the weights are split equally (or `--weight W`, the others
@@ -1902,6 +2053,20 @@ Common flags (before or after the positional value): `--confirm-within 5m`,
   `hs2 reality front … reality` refuses to make the last tls-capable IP pure
   reality until the dialer has shown it has the key (or `--dialer-has-key`);
   the doctor's `reality cold start` check covers both sides.
+- **The other server is never throttled by the front** (rel69q, fixed in
+  rel69r). Before a client sends its TLS hello, the reality front allows at
+  most 64 waiting connections per /24, to slow down scanners. The other hs2
+  server is exempt (it may open hundreds of links at once after a restart).
+  rel69q exempted the IPs listed in the config and the IPs that logged in during
+  the last 24 h, but after a restart the second list was empty, and the
+  listening side's config usually does not list the dialing server's own
+  source IPs; so right after a restart the other server could hit the cap
+  (`prehello_cap_peer` rejects). rel69r **saves** the IPs that logged in to
+  `<config>.peer-ips` (owner-only, kept 7 days, at most 256) and loads them at
+  the next start, and exempts an IPv6 peer by its /64, so an `auto6` address
+  that moves inside it stays exempt. Probe answers are unchanged; counters in
+  the status file under `reality.peer_exempt`. Deleting the tunnel or
+  uninstalling removes the file. `HS2_B388_PEEREXEMPT=0` turns the exemption off.
 - **`both` and resets** (rel50): only a refusal that the key or the
   listener explains (the certificate did not prove the key; our listener
   closed because its target is down) moves a path to tls for 10 minutes; a

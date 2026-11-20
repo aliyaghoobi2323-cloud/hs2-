@@ -95,6 +95,7 @@ func (e *mconnEdge) openNoLock(p mPlane, avoid []any, fresh, rstJ bool, t0 time.
 					rel()
 					return nil, nil, errMConnNoLink
 				}
+				e.zduPinTo(l)
 				return s, l, nil
 			}
 			st.Close()
@@ -138,6 +139,7 @@ func (e *mconnEdge) openStripeNoLock(avoid []any) (mSub, any, error) {
 		if _, err = st.Write(mconnHeader(e.port, e.id, mconnRoleJoin)); err == nil {
 			s := &mconnSub{stream: st, plane: planeStripe, release: rel, evacHS: peerCloseHS(l), edge: e}
 			if e.install(s) {
+				e.zduPinTo(l)
 				return s, l, nil
 			}
 		}

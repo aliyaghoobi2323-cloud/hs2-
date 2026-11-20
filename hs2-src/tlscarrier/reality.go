@@ -61,6 +61,8 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 )
 
 const (
@@ -494,6 +496,9 @@ func (RealityFront) DialFront(_ context.Context, p DialPath) (*Carrier, error) {
 	}
 	raw, err := dialRawTCP(p)
 	if err != nil {
+		if censor.Active() { // censor351 M1/M9: read-only copy of the outcome
+			censor.NoteDial(censor.ParseAddr(p.BindIP), censorHost(p.Addr), censor.FrontReality, censor.ConnectStage(err))
+		}
 		return nil, &ConnectError{err}
 	}
 	var authKey []byte
@@ -552,9 +557,11 @@ func (RealityFront) DialFront(_ context.Context, p DialPath) (*Carrier, error) {
 	copy(hello.Raw[39:], sid)
 	raw.SetDeadline(time.Now().Add(authTimeout))
 	if err := u.Handshake(); err != nil {
+		censorReality(raw, censor.HandshakeStage(err))
 		return fail(err)
 	}
 	if !verified {
+		censorReality(raw, censor.DialCert)
 		return fail(ErrRealityCert)
 	}
 	ekm, err := clientEKM(u, cfg)
@@ -566,10 +573,19 @@ func (RealityFront) DialFront(_ context.Context, p DialPath) (*Carrier, error) {
 		return fail(err)
 	}
 	if err := readPadsThenProof(u, p.Key, nonce, ekm); err != nil {
+		censorReality(raw, censor.DialAuth)
 		return fail(err)
 	}
 	raw.SetDeadline(time.Time{})
+	censorReality(raw, censor.DialOK)
 	return &Carrier{conn: u}, nil
+}
+
+// censorReality notes a reality dial's outcome for censor351 (read-only).
+func censorReality(raw net.Conn, st censor.DialStage) {
+	if censor.Active() {
+		censor.NoteDial(censor.AddrOf(raw.LocalAddr()), censor.AddrOf(raw.RemoteAddr()), censor.FrontReality, st)
+	}
 }
 
 // ---- listen side ----

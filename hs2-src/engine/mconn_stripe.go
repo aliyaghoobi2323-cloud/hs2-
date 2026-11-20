@@ -143,6 +143,7 @@ func infoExt() uint32 {
 	if halfCloseOn.Load() {
 		e |= capExtHalfClose // hc183 (halfclose.go)
 	}
+	e |= zduInfoExt() // zdu350 (zdu.go): HS2_ZDU=1 only
 	return e
 }
 
@@ -812,7 +813,7 @@ func stripeOn(ml *managedLink) bool {
 
 // stripeFree: a serving link that carries no download and no real traffic.
 func stripeFree(ml *managedLink) bool {
-	return ml.serving() && ml.heavy == 0 && ml.flowing == 0 && !ml.pressed && !stripeOn(ml)
+	return ml.up() && ml.heavy == 0 && ml.flowing == 0 && !ml.pressed && !stripeOn(ml) // up: the ZDU pin mark picks the generation
 }
 
 // pickStripe places a stripe sub (see the file comment). With stripeAlone
@@ -829,6 +830,19 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 // refused a cut path's link while the connection has a healthy sub (the
 // caller backs off instead of trying again at once: mconn_stripe_steer.go).
 func (m *LinkManager) pickStripeWhy(avoid []any) (Link, func(), bool, bool) {
+	l, rel, ok, held := m.pickStripeWhyCore(avoid)
+	if !ok {
+		zduNoLink(avoid)
+		return nil, nil, false, held
+	}
+	if !zduPickOK(l, rel, avoid) { // ZDU generation pin (zdu_pin.go)
+		return nil, nil, false, false
+	}
+	return l, rel, true, held
+}
+
+// pickStripeWhyCore is pickStripeWhy without the ZDU check.
+func (m *LinkManager) pickStripeWhyCore(avoid []any) (Link, func(), bool, bool) {
 	pool := m.exitInfo.Load()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -844,7 +858,7 @@ func (m *LinkManager) pickStripeWhy(avoid []any) (Link, func(), bool, bool) {
 		res := stripeAlone && !ml.stripeRes.IsZero()
 		if res {
 			// set aside: the stripe's own, unless a download or a user came
-			if !ml.serving() || ml.heavy > 0 || ml.flowing > 0 || ml.users.Load() > 0 {
+			if !ml.up() || ml.heavy > 0 || ml.flowing > 0 || ml.users.Load() > 0 {
 				continue
 			}
 		} else if !stripeFree(ml) {
@@ -1053,6 +1067,7 @@ func (m *LinkManager) pickStripeWhy(avoid []any) (Link, func(), bool, bool) {
 // openStripe is the edge's open for planeStripe: one try, no waiting (the
 // connection runs on what it has; the manager tries again later).
 func (e *mconnEdge) openStripe(avoid []any) (mSub, any, error) {
+	avoid = e.zduAvoid(avoid) // ZDU generation pin (zdu_pin.go)
 	e.mu.Lock()
 	if e.ended || !e.first {
 		e.mu.Unlock()
@@ -1082,6 +1097,7 @@ func (e *mconnEdge) openStripe(avoid []any) (mSub, any, error) {
 			mconnPlaneGauge(planeStripe).Add(1)
 			e.subs = append(e.subs, s)
 			e.opened++
+			e.zduPinTo(l)
 			return s, l, nil
 		}
 		st.Close()

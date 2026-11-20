@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
@@ -129,6 +130,11 @@ func (b *LB) startedLocked() bool {
 
 // LB places links on paths. It is safe for concurrent use.
 type LB struct {
+	// censorSamp (censor351, HS2_CENSOR_DETECT): path readings copied in
+	// measure under b.mu and sent after it is released; only the measure
+	// goroutine touches it, and only when the detector is on.
+	censorSamp []censor.PathSample
+
 	mu       sync.Mutex
 	paths    []LBPath
 	links    []int // live links + dials in flight

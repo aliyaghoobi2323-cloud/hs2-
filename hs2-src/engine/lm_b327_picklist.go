@@ -164,7 +164,7 @@ func (m *LinkManager) steerFactorOf(ml *managedLink, p string) float64 {
 // b327Key is ml's pick key as pickLockedFP computes it (limit 0, stripes
 // off), and its fpPicks as read. ok=false: not a tier-0 candidate now.
 func (m *LinkManager) b327Key(ml *managedLink, drawn string) (pickKey, int32, bool) {
-	if !ml.aliveCheap() || ml.retiring || ml.degraded || ml.draining || ml.suspect || !m.infoReadyLocked(ml) {
+	if !ml.aliveCheap() || ml.retiring || ml.degraded || ml.draining || ml.suspect || ml.zduOld || !m.infoReadyLocked(ml) {
 		return pickKey{}, 0, false
 	}
 	fp := ml.fpPicks.Load()

@@ -538,6 +538,19 @@ func (m *mConn) callAvoidLocked(avoid []any) []any {
 // same placement off every cut-marked link; only when that finds none does
 // the placement run with cut links allowed.
 func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) {
+	l, rel, ok := m.pickPlaneCallSkip(p, avoid)
+	if !ok {
+		zduNoLink(avoid)
+		return nil, nil, false
+	}
+	if !zduPickOK(l, rel, avoid) { // ZDU generation pin (zdu_pin.go)
+		return nil, nil, false
+	}
+	return l, rel, true
+}
+
+// pickPlaneCallSkip is pickPlaneCall without the ZDU check.
+func (m *LinkManager) pickPlaneCallSkip(p mPlane, avoid []any) (Link, func(), bool) {
 	if skipCutOn(p) && !hasSkipCutMark(avoid) {
 		if l, rel, ok := m.pickPlaneCallOne(p, withSkipCut(avoid)); ok {
 			b340Note(p, l, true)

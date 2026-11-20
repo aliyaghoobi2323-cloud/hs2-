@@ -161,7 +161,7 @@ func (m *LinkManager) pickStripeSharedWhyLocked(avoid []any, pool *peerInfo) (*m
 		}
 	}
 	for _, ml := range m.links {
-		if !ml.serving() {
+		if !ml.up() {
 			continue
 		}
 		w.serving++

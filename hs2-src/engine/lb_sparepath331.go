@@ -604,6 +604,9 @@ func (b *LB) sparePathTick(now time.Time) bool {
 // cap (fillLimit), for a path the balancer pinned. Never past max_links or
 // 2·target+8 slots, never with 2 spares already pending or in an outage.
 func (p *exitPool) addSparePast() int {
+	if zduDraining.Load() { // ZDU B6: no spares while draining (zdu_drainmode.go)
+		return 0
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	pending := 0
@@ -612,7 +615,8 @@ func (p *exitPool) addSparePast() int {
 			pending++
 		}
 	}
-	if p.outage || p.want <= 0 || pending >= 2 || len(p.slots) >= p.max || len(p.slots) >= 2*p.want+8 {
+	cur := p.curSlotsLocked() // HS2_ZDU legacy slots do not count
+	if p.outage || p.want <= 0 || pending >= 2 || cur >= p.max || cur >= 2*p.want+8 {
 		return 0
 	}
 	p.startSlotLocked()

@@ -44,7 +44,7 @@ func TestListenersArePlainTCP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := sockProto(t, ln.(*net.TCPListener))
+		p := sockProto(t, tcpListenerOf(ln)) // a zduLn with HS2_ZDU=1
 		ln.Close()
 		if p != unix.IPPROTO_TCP {
 			t.Fatalf("listener (rcvbuf %d) is protocol %d, want plain TCP (%d)", rcvbuf, p, unix.IPPROTO_TCP)

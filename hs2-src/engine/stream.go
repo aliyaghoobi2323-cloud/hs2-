@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
 	"github.com/xtaci/smux"
 )
@@ -144,12 +145,19 @@ type watchConn struct {
 	// that smux's reader has stopped asking for data (its bucket is empty).
 	rdCalls atomic.Uint64
 	inRead  atomic.Bool
+	// censor351 (HS2_CENSOR_DETECT): the link's own conn and birth, set only
+	// when the detector is on; read by censorDeath before our close.
+	raw  net.Conn
+	born time.Time
 }
 
 func (w *watchConn) fail(op string, err error) {
 	w.once.Do(func() {
 		s := op + ": " + describeNetErr(err)
 		w.why.Store(&s)
+		if censor.Active() {
+			censorDeath(w, err) // read-only copy, before onErr closes the socket
+		}
 		go w.onErr()
 	})
 }
@@ -245,6 +253,9 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 		c = &meteredConn{Conn: c, m: meter}
 	}
 	w := &watchConn{Conn: c}
+	if censor.Active() {
+		w.raw, w.born = conn, time.Now()
+	}
 	w.onErr = func() {
 		conn.Close()
 		if s := sp.Load(); s != nil {

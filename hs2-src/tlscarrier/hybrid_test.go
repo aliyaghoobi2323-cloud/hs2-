@@ -237,7 +237,20 @@ func TestHybridLazyTargetAndCap(t *testing.T) {
 		return d.DialContext(ctx, "tcp", addr)
 	}
 	l.srv.fbMaxNet = 2
+	// Gate fix (load flake): a "both" listener pre-dials the target when no
+	// complete hello came within lazyPreDial (10 ms, timing parity for a
+	// silent prober, TestHybridCoverTimingParity). Under -race on a loaded host
+	// our own client's hello can come later than that, so the pre-dial (by
+	// design) contacted the target. This test checks the lazy decision, not
+	// the pre-dial timer: switch the timer off here.
+	oldPre := lazyPreDial
+	lazyPreDial = time.Hour
 	l.setup.Unlock()
+	t.Cleanup(func() {
+		l.setup.Lock()
+		lazyPreDial = oldPre
+		l.setup.Unlock()
+	})
 	for i := 0; i < 3; i++ {
 		tc, err := DialPathFront(context.Background(), DialPath{Addr: l.addr, SNI: "tun.ours.test", Key: l.key, Connect: 2 * time.Second})
 		if err != nil {

@@ -25,9 +25,14 @@ import (
 //
 //   - candidates: IPv6 global unicast, not link-local, not ULA (fc00::/7),
 //     not deprecated, temporary (privacy), tentative or DAD-failed;
-//   - the address on the default-route interface first, then by interface
-//     name and address bytes (deterministic); the current choice is kept while
-//     it stays a candidate of the best tier (no flapping between two globals);
+//   - "auto6" takes an address ONLY on the interface of the kernel's IPv6
+//     route to the internet (`ip -6 route get 2001:4860::`, else the main
+//     table's default route), never one on a wg/tun/tap/ppp/docker/veth/warp
+//     or other virtual or point-to-point interface (rel69r fix: xray's
+//     Cloudflare WARP wg10 /128 was picked in production); the current
+//     choice is kept while it is still there (no flapping), else a prefix
+//     shorter than /128, a permanent one, the lowest address; no default
+//     route: the current choice is kept while it exists (pickAuto6);
 //   - re-resolved at once when the kernel adds or removes an IPv6 address
 //     (rtnetlink, lbauto6_linux.go) or a dial fails with "cannot assign
 //     requested address" (engine.LocalAddrErr), and every auto6Every anyway. On a change the
@@ -82,10 +87,15 @@ func lbEntryKey(s string) string {
 }
 
 // if6Addr is one IPv6 address of the host as /proc/net/if_inet6 shows it.
+// Plen is the prefix length (0 = unknown); Virt marks an interface that is
+// point-to-point or not an Ethernet-like link (wireguard/tun/ppp/sit/..., from
+// /sys, auto6IfaceVirt).
 type if6Addr struct {
 	Iface string
 	IP    net.IP
 	Flags uint32
+	Plen  int
+	Virt  bool
 }
 
 // IFA_F_* (linux/if_addr.h).
@@ -94,6 +104,7 @@ const (
 	ifaFDadFailed  = 0x08
 	ifaFDeprecated = 0x20
 	ifaFTentative  = 0x40
+	ifaFPermanent  = 0x80
 )
 
 // parseIfInet6 parses /proc/net/if_inet6:
@@ -113,14 +124,19 @@ func parseIfInet6(text string) []if6Addr {
 		if err != nil {
 			continue
 		}
-		out = append(out, if6Addr{Iface: f[5], IP: net.IP(b), Flags: uint32(fl)})
+		pl, err := strconv.ParseUint(f[2], 16, 8)
+		if err != nil {
+			continue
+		}
+		out = append(out, if6Addr{Iface: f[5], IP: net.IP(b), Flags: uint32(fl), Plen: int(pl)})
 	}
 	return out
 }
 
 // parseDefault6Iface parses /proc/net/ipv6_route and returns the interface of
-// the IPv6 default route with the lowest metric ("" = none). Reject routes
-// and lo are skipped.
+// the IPv6 default route with the lowest metric ("" = none). Reject routes,
+// lo and virtual interface names (auto6VirtName) are skipped. It is the last
+// fallback of auto6DefaultIface (this file has no routing-table column).
 func parseDefault6Iface(text string) string {
 	best, bestM := "", uint64(1<<63)
 	for _, ln := range strings.Split(text, "\n") {
@@ -130,7 +146,7 @@ func parseDefault6Iface(text string) string {
 		}
 		m, err1 := strconv.ParseUint(f[5], 16, 64)
 		fl, err2 := strconv.ParseUint(f[8], 16, 32)
-		if err1 != nil || err2 != nil || fl&0x0200 != 0 || f[9] == "lo" { // RTF_REJECT
+		if err1 != nil || err2 != nil || fl&0x0200 != 0 || f[9] == "lo" || auto6VirtName(f[9]) { // RTF_REJECT
 			continue
 		}
 		if m < bestM {
@@ -138,6 +154,26 @@ func parseDefault6Iface(text string) string {
 		}
 	}
 	return best
+}
+
+// auto6VirtName: interface names that never carry this server's own uplink
+// address for auto6 — VPN, tunnel and container links. The 2026-11-19
+// production bug: xray's Cloudflare WARP interface wg10 has a global /128
+// (2001:db8:f:...) that rotates with every xray restart, and auto6 picked
+// it instead of eth0's address.
+func auto6VirtName(name string) bool {
+	n := strings.ToLower(name)
+	if n == "lo" || strings.Contains(n, "warp") {
+		return true
+	}
+	for _, p := range []string{"wg", "tun", "tap", "ppp", "docker", "veth", "br-", "virbr", "vxlan",
+		"gre", "ip6gre", "ip6tnl", "sit", "teredo", "tailscale", "zt", "nordlynx", "utun", "ipsec",
+		"vti", "xfrm", "he-ipv6", "6to4", "cni", "flannel", "cali", "kube", "lxc", "vmnet", "vboxnet"} {
+		if strings.HasPrefix(n, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // auto6Candidate: a usable global address for a tunnel source.
@@ -149,42 +185,72 @@ func auto6Candidate(a if6Addr) bool {
 	return a.Flags&(ifaFTemporary|ifaFDadFailed|ifaFDeprecated|ifaFTentative) == 0
 }
 
-// pickAuto6 chooses the address for one spec (see the file comment). prev is
-// the current choice ("" = none).
-func pickAuto6(addrs []if6Addr, defIface, wantIface, prev string) string {
+// auto6Uplinkish: an address that may be kept while no default route is
+// known: not on a virtual or point-to-point interface, not a /128.
+func auto6Uplinkish(a if6Addr) bool {
+	return !a.Virt && !auto6VirtName(a.Iface) && a.Plen < 128
+}
+
+// pickAuto6 chooses the address for one spec. prev is the current choice
+// ("" = none); defIface is the interface of the kernel's IPv6 route to the
+// internet (auto6DefaultIface, "" = none).
+//
+//   - "auto6:IFACE": a global on IFACE (the operator chose the interface);
+//   - "auto6": ONLY an address on the default-route interface — never one on
+//     a wg/tun/warp/... or point-to-point interface, whatever its scope;
+//   - the current choice is kept while it is still a candidate there (no
+//     flapping); else a prefix shorter than /128 first, then a permanent
+//     (static) one, then the lowest address;
+//   - no usable default route: the current choice is kept while it still
+//     exists on a non-virtual interface and is not a /128; else none.
+//
+// It returns the address ("" = none), its interface and words for the log.
+func pickAuto6(addrs []if6Addr, defIface, wantIface, prev string) (ip, iface, note string) {
+	if wantIface == "" && auto6VirtName(defIface) {
+		defIface = "" // defensive: auto6DefaultIface never returns one
+	}
+	if wantIface == "" && defIface == "" {
+		for _, a := range addrs {
+			if prev != "" && a.IP.String() == prev && auto6Candidate(a) && auto6Uplinkish(a) {
+				return prev, a.Iface, "no default IPv6 route on this server: kept " + prev + " on " + a.Iface
+			}
+		}
+		return "", "", "no default IPv6 route on this server (or only via a VPN/tunnel interface): no address picked (\"auto6:IFACE\" pins an interface)"
+	}
+	on, how := wantIface, "pinned interface "+wantIface
+	if on == "" {
+		on, how = defIface, "default IPv6 route dev "+defIface
+	}
 	var c []if6Addr
 	for _, a := range addrs {
-		if auto6Candidate(a) && (wantIface == "" || a.Iface == wantIface) {
-			c = append(c, a)
+		if a.Iface != on || !auto6Candidate(a) {
+			continue
 		}
+		if prev != "" && a.IP.String() == prev {
+			return prev, on, how // same words as a fresh pick: a note change means a real change
+		}
+		c = append(c, a)
 	}
 	if len(c) == 0 {
-		return ""
+		return "", "", how + ": no stable global IPv6 on " + on
 	}
-	tier := func(a if6Addr) int {
-		if a.Iface == defIface {
-			return 0
+	rank := func(a if6Addr) int {
+		r := 0
+		if a.Plen >= 128 {
+			r += 2
 		}
-		return 1
+		if a.Flags&ifaFPermanent == 0 {
+			r++
+		}
+		return r
 	}
 	sort.SliceStable(c, func(i, j int) bool {
-		if ti, tj := tier(c[i]), tier(c[j]); ti != tj {
-			return ti < tj
-		}
-		if c[i].Iface != c[j].Iface {
-			return c[i].Iface < c[j].Iface
+		if ri, rj := rank(c[i]), rank(c[j]); ri != rj {
+			return ri < rj
 		}
 		return bytes.Compare(c[i].IP, c[j].IP) < 0
 	})
-	for _, a := range c {
-		if tier(a) != tier(c[0]) {
-			break
-		}
-		if a.IP.String() == prev {
-			return prev
-		}
-	}
-	return c[0].IP.String()
+	return c[0].IP.String(), on, how
 }
 
 // auto6Source reads the host's IPv6 addresses and default-route interface
@@ -197,8 +263,51 @@ var auto6Source = func() ([]if6Addr, string, error) {
 		}
 		return nil, "", err
 	}
+	addrs := parseIfInet6(string(a))
+	for i := range addrs {
+		addrs[i].Virt = auto6IfaceVirt(addrs[i].Iface)
+	}
+	return addrs, auto6DefaultIface(), nil
+}
+
+// auto6IfaceVirt: /sys says the interface is point-to-point (IFF_POINTOPOINT)
+// or not an Ethernet/InfiniBand link (wireguard and tun are ARPHRD_NONE, ppp
+// is 512, sit/ip6tnl/gre are 768+). Unknown: false.
+func auto6IfaceVirt(name string) bool {
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+		return true
+	}
+	if b, err := os.ReadFile("/sys/class/net/" + name + "/flags"); err == nil {
+		if f, err := strconv.ParseUint(strings.TrimPrefix(strings.TrimSpace(string(b)), "0x"), 16, 32); err == nil && f&0x10 != 0 {
+			return true
+		}
+	}
+	if b, err := os.ReadFile("/sys/class/net/" + name + "/type"); err == nil {
+		if t, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && t != 1 && t != 32 {
+			return true
+		}
+	}
+	return false
+}
+
+// auto6DefaultIface is the interface of the kernel's IPv6 route to the
+// internet: `ip -6 route get 2001:4860::` (rtnetlink, lbauto6_linux.go), else
+// the lowest-metric default route of the main table (`ip -6 route show
+// default`), else /proc/net/ipv6_route. A route via a virtual or
+// point-to-point interface does not count. "" = none.
+func auto6DefaultIface() string {
+	ok := func(n string) bool { return n != "" && !auto6VirtName(n) && !auto6IfaceVirt(n) }
+	if n := auto6RouteGetIface(); ok(n) {
+		return n
+	}
+	if n := auto6MainDefaultIface(); ok(n) {
+		return n
+	}
 	r, _ := os.ReadFile("/proc/net/ipv6_route")
-	return parseIfInet6(string(a)), parseDefault6Iface(string(r)), nil
+	if n := parseDefault6Iface(string(r)); ok(n) {
+		return n
+	}
+	return ""
 }
 
 // lbLocalAutos lists the auto specs in this side's own list.
@@ -219,18 +328,27 @@ func lbLocalAutos(fc fileConfig) []string {
 // resolveAutos resolves every spec of raw's own list; prev holds the current
 // choices. A spec with no address maps to "".
 func resolveAutos(raw fileConfig, prev map[string]string) (map[string]string, error) {
+	res, _, err := resolveAutosNote(raw, prev)
+	return res, err
+}
+
+// resolveAutosNote is resolveAutos plus, for the log, which interface each
+// spec used and why ("auto6: default IPv6 route dev eth0, kept 2a01:...").
+func resolveAutosNote(raw fileConfig, prev map[string]string) (map[string]string, string, error) {
 	specs := lbLocalAutos(raw)
 	if len(specs) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
 	addrs, def, err := auto6Source()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	out := map[string]string{}
+	var notes []string
 	for _, s := range specs {
 		ifc, _ := lbAutoSpec(s)
-		ip := pickAuto6(addrs, def, ifc, prev[s])
+		ip, _, note := pickAuto6(addrs, def, ifc, prev[s])
+		notes = append(notes, s+": "+note)
 		// a literal entry of the list already names it: keep the spec empty
 		// (the address keeps its literal path; a duplicate would be refused)
 		local, _, _, _ := lbLists(raw)
@@ -246,7 +364,7 @@ func resolveAutos(raw fileConfig, prev map[string]string) (map[string]string, er
 		}
 		out[s] = ip
 	}
-	return out, nil
+	return out, strings.Join(notes, "; "), nil
 }
 
 // applyAutos returns raw with its own list's specs replaced by their
@@ -295,9 +413,10 @@ func fmtAutos(res map[string]string) string {
 // lbAutoStart is the raw (unresolved) lb section of this run and its first
 // resolution, handed from lbResolveStart to setupLB.
 var (
-	lbAutoMu       sync.Mutex
-	lbAutoStartRaw *lbConfig
-	lbAutoStartRes map[string]string
+	lbAutoMu        sync.Mutex
+	lbAutoStartRaw  *lbConfig
+	lbAutoStartRes  map[string]string
+	lbAutoStartNote string
 )
 
 // lbResolveStart resolves the auto specs once at start (before the paths and
@@ -306,14 +425,14 @@ func lbResolveStart(fc fileConfig, logf func(string, ...any)) fileConfig {
 	if len(lbLocalAutos(fc)) == 0 {
 		return fc
 	}
-	res, err := resolveAutos(fc, nil)
+	res, note, err := resolveAutosNote(fc, nil)
 	if err != nil {
 		logf("lb: auto6: cannot read this server's IPv6 addresses: %v — the auto6 path is off until they can be read", err)
 	} else {
-		logf("lb: auto6: %s", auto6Words(res))
+		logf("lb: auto6: %s (%s)", auto6Words(res), note)
 	}
 	lbAutoMu.Lock()
-	lbAutoStartRaw, lbAutoStartRes = fc.LB, res
+	lbAutoStartRaw, lbAutoStartRes, lbAutoStartNote = fc.LB, res, note
 	lbAutoMu.Unlock()
 	return applyAutos(fc, res)
 }
@@ -386,7 +505,7 @@ func (rt *lbRuntime) auto6Check(now time.Time) bool {
 	}
 	raw := rt.fc
 	raw.LB = rt.raw
-	res, err := resolveAutos(raw, rt.auto)
+	res, note, err := resolveAutosNote(raw, rt.auto)
 	if err != nil {
 		if now.Sub(rt.autoLogAt) >= auto6LogEvery {
 			rt.logf("lb: auto6: cannot read this server's IPv6 addresses: %v", err)
@@ -395,20 +514,26 @@ func (rt *lbRuntime) auto6Check(now time.Time) bool {
 		return false
 	}
 	if mapsEqualStr(res, rt.auto) {
-		if allEmpty(res) && now.Sub(rt.autoLogAt) >= auto6LogEvery {
-			rt.logf("lb: auto6: still no global IPv6 on this server — the v6 path stays off")
-			rt.autoLogAt = now
+		switch {
+		case allEmpty(res) && now.Sub(rt.autoLogAt) >= auto6LogEvery:
+			rt.logf("lb: auto6: still no global IPv6 on this server — the v6 path stays off (%s)", note)
+			rt.autoLogAt, rt.autoNote, rt.autoNoteAt = now, note, now
+		case note != rt.autoNote && now.Sub(rt.autoNoteAt) >= time.Minute:
+			// same address, other reason (e.g. the default route went away
+			// and the address is kept): once per change, at most 1/min
+			rt.logf("lb: auto6: %s (address unchanged)", note)
+			rt.autoNote, rt.autoNoteAt = note, now
 		}
 		return false
 	}
 	old := rt.auto
 	rt.auto = res
-	rt.autoLogAt = now
+	rt.autoLogAt, rt.autoNote, rt.autoNoteAt = now, note, now
 	next := applyAutos(raw, res)
 	if allEmpty(res) {
-		rt.logf("lb: auto6: this server's IPv6 is gone: %s -> %s — the v6 path is off until one appears (checked every %s, no restart)", fmtAutos(old), fmtAutos(res), fmtDurShort(auto6Every))
+		rt.logf("lb: auto6: this server's IPv6 is gone: %s -> %s — the v6 path is off until one appears (checked every %s, no restart; %s)", fmtAutos(old), fmtAutos(res), fmtDurShort(auto6Every), note)
 	} else {
-		rt.logf("lb: auto6: this server's IPv6 changed: %s -> %s — moving the path, no restart", fmtAutos(old), fmtAutos(res))
+		rt.logf("lb: auto6: this server's IPv6 changed: %s -> %s — moving the path, no restart (%s)", fmtAutos(old), fmtAutos(res), note)
 	}
 	rt.fc = next
 	rt.rebuildLocked("auto6 address change")
@@ -461,15 +586,15 @@ func checkAuto6Line(spec string) string {
 	if err != nil {
 		return fmt.Sprintf("%s: cannot read this server's IPv6 addresses (%v)", spec, err)
 	}
-	ip := pickAuto6(addrs, def, ifc, "")
+	ip, on, note := pickAuto6(addrs, def, ifc, "")
 	if ip == "" {
 		where := "this server"
 		if ifc != "" {
 			where = "interface " + ifc
 		}
-		return fmt.Sprintf("%s: no global IPv6 on %s now — the v6 path stays off until one appears (re-checked every %s while running)", spec, where, fmtDurShort(auto6Every))
+		return fmt.Sprintf("%s: no global IPv6 on %s now (%s) — the v6 path stays off until one appears (re-checked every %s while running)", spec, where, note, fmtDurShort(auto6Every))
 	}
-	return fmt.Sprintf("%s: resolves to %s now (re-resolved every %s while running; a new address moves the path without a restart)", spec, ip, fmtDurShort(auto6Every))
+	return fmt.Sprintf("%s: resolves to %s on %s now (%s; re-resolved every %s while running; a new address moves the path without a restart)", spec, ip, on, note, fmtDurShort(auto6Every))
 }
 
 // lbCheckResolved is fc with its auto specs resolved now (hs2 check's path

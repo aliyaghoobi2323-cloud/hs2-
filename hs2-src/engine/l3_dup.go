@@ -93,16 +93,38 @@ func dupSecond(links []*l3Link, h uint32, first *l3Link) *l3Link {
 func dupSecondWhere(links []*l3Link, h uint32, first *l3Link, ok func(*l3Link) bool) *l3Link {
 	var best, bestLight *l3Link
 	var bestW, bestLightW uint32
-	for _, l := range links {
-		if l == first || !l.Alive() || !l.canDup() || ok != nil && !ok(l) {
-			continue
+	// d421: the second copy goes to first's peer process. Unknown (an old
+	// peer, HS2_ZDU off): the loop as before.
+	if fi := first.peerInst(); fi.known() {
+		for _, l := range links {
+			if l == first || !l.Alive() || !l.canDup() || ok != nil && !ok(l) {
+				continue
+			}
+			w := mix32(h ^ l.id)
+			top := best == nil || w > bestW
+			topLight := !l.isHeavy() && (bestLight == nil || w > bestLightW)
+			if !top && !topLight || l.peerInst() != fi { // checked only for a would-be winner
+				continue
+			}
+			if top {
+				best, bestW = l, w
+			}
+			if topLight {
+				bestLight, bestLightW = l, w
+			}
 		}
-		w := mix32(h ^ l.id)
-		if best == nil || w > bestW {
-			best, bestW = l, w
-		}
-		if !l.isHeavy() && (bestLight == nil || w > bestLightW) {
-			bestLight, bestLightW = l, w
+	} else {
+		for _, l := range links {
+			if l == first || !l.Alive() || !l.canDup() || ok != nil && !ok(l) {
+				continue
+			}
+			w := mix32(h ^ l.id)
+			if best == nil || w > bestW {
+				best, bestW = l, w
+			}
+			if !l.isHeavy() && (bestLight == nil || w > bestLightW) {
+				bestLight, bestLightW = l, w
+			}
 		}
 	}
 	if bestLight != nil {
@@ -157,14 +179,12 @@ func appendDupFrame(dst []byte, id uint32, pkt []byte) []byte {
 	return append(dst, pkt...)
 }
 
-// l3Dedup remembers the last l3DupWin ids (31-bit, wrapping) one sender used.
-// The zero value is ready. Every link's reader calls accept, hence the lock;
-// only TypeDataDup frames take it.
+// l3Dedup remembers the last l3DupWin ids (31-bit, wrapping) of up to two id
+// streams (l3Wins). The zero value is ready. The l3Set reads through l3Rx,
+// which keeps one l3Wins per sending process.
 type l3Dedup struct {
-	mu   sync.Mutex
-	init bool
-	top  uint32 // the highest id seen
-	bits [l3DupWin / 64]uint64
+	mu sync.Mutex
+	w  l3Wins
 }
 
 // seqDiff is a-b in the 31-bit id space (wrapping).
@@ -191,30 +211,171 @@ func (d *l3Dedup) accept(payload []byte) []byte {
 func (d *l3Dedup) first(id uint32) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	diff := seqDiff(id, d.top)
-	switch {
-	case !d.init || diff <= -l3DupWin:
-		// first id, or one far behind the window: the other server restarted
-		// (its counter starts at random) — start over at this id.
-		d.init, d.top = true, id
-		clear(d.bits[:])
-	case diff > 0:
-		if diff >= l3DupWin {
-			clear(d.bits[:])
-		} else {
-			for k := uint32(1); k <= uint32(diff); k++ {
-				i := (d.top + k) & (l3DupWin - 1)
-				d.bits[i/64] &^= 1 << (i % 64)
-			}
-		}
-		d.top = id & l3DupIDMask
-	default:
-		i := id & (l3DupWin - 1)
-		if d.bits[i/64]&(1<<(i%64)) != 0 {
-			return false
-		}
+	return d.w.first(id)
+}
+
+// d421: two senders' id streams at once. During a ZDU handover both processes
+// of one side read the shared TUN for ~45 s and each numbers its dups from
+// its own random start, so one window that restarted on every far id let
+// second copies through (s417: 123 ICMP DUP replies). The receiver now keeps
+//   - one l3Wins per sending process (l3Rx, keyed by the link's peer ZDU
+//     instance from kindInfo; zero = a peer without one), and
+//   - two windows inside each l3Wins: an id far from the current window
+//     (another stream: a peer without instance ids running two processes, or
+//     a restart) opens the other window instead of clearing the only one, so
+//     two interleaved streams both dedupe.
+// The sender keeps both copies on links of one peer process (dupSecondWhere,
+// pickAll). No wire change.
+
+// l3Win is one id stream's sliding bitmap.
+type l3Win struct {
+	init bool
+	top  uint32 // the highest id seen
+	bits [l3DupWin / 64]uint64
+}
+
+// near: id falls inside this window (either side of top).
+func (w *l3Win) near(id uint32) bool {
+	if !w.init {
+		return false
 	}
+	d := seqDiff(id, w.top)
+	return d > -l3DupWin && d < l3DupWin
+}
+
+// reset starts the window over at id.
+func (w *l3Win) reset(id uint32) {
+	w.init, w.top = true, id&l3DupIDMask
+	clear(w.bits[:])
+}
+
+// mark records id (near, or just reset) and reports whether it was new.
+func (w *l3Win) mark(id uint32) bool {
 	i := id & (l3DupWin - 1)
-	d.bits[i/64] |= 1 << (i % 64)
+	if diff := seqDiff(id, w.top); diff > 0 {
+		for k := uint32(1); k <= uint32(diff); k++ {
+			j := (w.top + k) & (l3DupWin - 1)
+			w.bits[j/64] &^= 1 << (j % 64)
+		}
+		w.top = id & l3DupIDMask
+	} else if w.bits[i/64]&(1<<(i%64)) != 0 {
+		return false
+	}
+	w.bits[i/64] |= 1 << (i % 64)
 	return true
 }
+
+// l3Wins is two l3Win; c is the one the last id fell in.
+type l3Wins struct {
+	c uint8
+	w [2]l3Win
+}
+
+// first reports whether id is new, and records it: in the current window if
+// id is near it, else in the other one if near, else the other window starts
+// over at id (the current one stays as the previous stream's).
+func (ws *l3Wins) first(id uint32) bool {
+	w := &ws.w[ws.c]
+	if !w.near(id) {
+		ws.c ^= 1
+		w = &ws.w[ws.c]
+		if !w.near(id) {
+			w.reset(id)
+		}
+	}
+	return w.mark(id)
+}
+
+// l3RxSlots: sending processes remembered per l3Set (two during a handover,
+// one spare for links whose peer instance is not known yet).
+const l3RxSlots = 3
+
+// l3Rx is an l3Set's receive dedup: one l3Wins per sending process instance,
+// the least recently used evicted. The zero value is ready. Every link's
+// reader calls accept, hence the lock; only TypeDataDup frames take it.
+type l3Rx struct {
+	mu   sync.Mutex
+	tick uint64
+	s    [l3RxSlots]l3RxSlot
+}
+
+type l3RxSlot struct {
+	inst zduInst
+	used uint64 // 0: free
+	w    l3Wins
+}
+
+// accept is l3Dedup.accept for a frame from a link whose other server is
+// process inst (zero: unknown).
+func (r *l3Rx) accept(inst zduInst, payload []byte) []byte {
+	if len(payload) < l3DupHdr {
+		return nil
+	}
+	raw := binary.BigEndian.Uint32(payload)
+	r.mu.Lock()
+	ok := r.slot(inst).first(raw & l3DupIDMask)
+	r.mu.Unlock()
+	if !ok {
+		obs.l3DupDropped.Add(1)
+		return nil
+	}
+	if raw&l3DupSecondBit != 0 {
+		obs.l3DupSaved.Add(1)
+	}
+	return payload[l3DupHdr:]
+}
+
+// first is l3Dedup.first in the windows of the sender seen last (HS2_L3_FEC
+// repairs: the parity packet's sender was just accepted). An empty l3Rx
+// starts a zero-instance slot.
+func (r *l3Rx) first(id uint32) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v := 0
+	for i := range r.s {
+		if r.s[i].used > r.s[v].used {
+			v = i
+		}
+	}
+	if r.s[v].used == 0 {
+		return r.slot(zduInst{}).first(id)
+	}
+	return r.s[v].w.first(id)
+}
+
+// slot is inst's windows; a new inst takes the least recently used slot.
+// Caller holds r.mu.
+func (r *l3Rx) slot(inst zduInst) *l3Wins {
+	r.tick++
+	v := 0
+	for i := range r.s {
+		e := &r.s[i]
+		if e.used != 0 && e.inst == inst {
+			e.used = r.tick
+			return &e.w
+		}
+		if e.used < r.s[v].used {
+			v = i
+		}
+	}
+	e := &r.s[v]
+	e.inst, e.used = inst, r.tick
+	e.w = l3Wins{}
+	return &e.w
+}
+
+// peerInst is the process instance of the link's other server (its ZDU
+// instance id from kindInfo); zero when it announced none or is not known yet.
+func (l *l3Link) peerInst() zduInst {
+	if l.peer == nil {
+		return zduInst{}
+	}
+	if pi := l.peer.Load(); pi.zdu() {
+		return pi.Inst
+	}
+	return zduInst{}
+}
+
+// sameInst: a dup's second copy over l reaches the process its first copy
+// (whose link's peer is fi) reaches; true when fi is unknown (d421).
+func sameInst(fi zduInst, l *l3Link) bool { return !fi.known() || l.peerInst() == fi }

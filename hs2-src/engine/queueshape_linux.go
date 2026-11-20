@@ -1125,6 +1125,34 @@ func (s *qShaper) removeLocked() {
 	s.slot, s.installed, s.peers, s.rate, s.drop, s.parked, s.steer = nil, false, nil, 0, 0, false, false
 }
 
+// zduRelease (ZDU B6) gives this process's class slot up for the drain: its
+// filters, its class and the slot's flock go, under the tree lock, but never
+// the shared root (or the ifb / mq child tree): the new process shapes on
+// it, and a root swap under its links is a graft. A root left with no hs2
+// class is reused by the new process's install, or taken off by its remove.
+// The shaper then refuses: this process never installs again.
+func (s *qShaper) zduRelease() {
+	s.refused = true
+	if !s.installed && s.slot == nil {
+		return
+	}
+	if unlock, ok := qTreeLock(); ok {
+		defer unlock()
+	} else {
+		s.logf("queue: ZDU drain: the tc tree lock not had in %v, class released without it", qLockWait)
+	}
+	if s.installed {
+		if s.steers() {
+			qDropFilters(s.dev, true, s.minor)
+		}
+		qDropClass(s.qdev, s.minor)
+	}
+	if s.slot != nil {
+		s.slot.Close()
+	}
+	s.slot, s.installed, s.peers, s.rate, s.drop, s.parked, s.steer = nil, false, nil, 0, 0, false, false
+}
+
 // dropRootIfLast takes the shared root off when no hs2 class is left on it.
 func (s *qShaper) dropRootIfLast() {
 	for _, m := range qClasses(s.qdev) {

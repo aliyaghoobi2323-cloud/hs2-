@@ -98,7 +98,7 @@ func (m *LinkManager) pickStripeDlShareLocked(avoid []any, pool *peerInfo) *mana
 			full++
 			continue
 		}
-		if !ml.stripeRes.IsZero() || !ml.serving() || ml.pressed || avoided(ml.link, avoid) || stripeEvacSkip(ml.link) {
+		if !ml.stripeRes.IsZero() || !ml.up() || ml.pressed || avoided(ml.link, avoid) || stripeEvacSkip(ml.link) {
 			other++
 			continue
 		}

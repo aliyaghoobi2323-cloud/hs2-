@@ -15,6 +15,7 @@ func newQShaperOn(_ string, logf func(string, ...any)) *qShaper { return &qShape
 
 func (s *qShaper) apply(float64, []qKey) bool { return false }
 func (s *qShaper) remove()                    {}
+func (s *qShaper) zduRelease()                {}
 func (s *qShaper) park([]qKey) bool           { return false }
 func (s *qShaper) placed() bool               { return false }
 func (s *qShaper) drops() uint64              { return 0 }

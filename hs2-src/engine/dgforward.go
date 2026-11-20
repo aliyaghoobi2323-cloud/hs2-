@@ -118,7 +118,7 @@ func runForwarder(ctx context.Context, listenAddr, dialAddr string, udp bool, tu
 		}
 	}()
 	if udp {
-		pc, err := net.ListenPacket("udp", listenAddr)
+		pc, err := listenPacketUDP(listenAddr)
 		if err != nil {
 			ln.Close()
 			return err

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 )
 
 // Multipath LB, stage 2 (mode "auto") and the slow rebalance (both modes).
@@ -139,7 +141,11 @@ func (b *LB) Run(ctx context.Context) {
 		case <-q.C:
 			b.fillMin() // HS2_LB_AUTO2: every live path two links (lb_spare.go)
 			if b.isAuto() {
-				if rs := b.measure(qe); b.isAuto2() {
+				rs := b.measure(qe)
+				if censor.Active() {
+					censorLBFlush(b.censorSamp) // after b.mu is released; read-only copies
+				}
+				if b.isAuto2() {
 					b.pmtuHint(rs) // HS2_LB_PMTU_HINT (lb_pmtu135.go); nothing when off
 					b.adapt2(rs)
 				} else {
@@ -179,11 +185,12 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 		key  any
 		path int
 		f    func() (tcpStat, bool)
+		mtr  *linkMeter // censor351 PeerLoss (read only when the detector is on)
 	}
 	var ls []link
 	for k, h := range b.hooks {
 		if h.stats != nil {
-			ls = append(ls, link{k, b.held[k], h.stats})
+			ls = append(ls, link{k, b.held[k], h.stats, h.mtr})
 		}
 	}
 	b.mu.Unlock()
@@ -211,11 +218,18 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 		dbgBo, dbgNew = make([]uint8, n), make([]int, n)
 	}
 	fl337 := flOn() && flStallOn && b.auto2On()
+	var cs *censorAcc
+	if censor.Active() {
+		cs = newCensorAcc(n) // censor351 M7/O7; nil (no allocation) when off
+	}
 	for _, r := range rs {
 		if _, ok := b.held[r.key]; !ok {
 			continue // ended meanwhile
 		}
 		cur := qPrev{acked: r.st.bytesAcked, segsOut: uint64(r.st.segsOut), retrans: r.st.retrans}
+		if cs != nil {
+			censorPrevFill(&cur, r.st, r.mtr)
+		}
 		prev, seen := b.qprev[r.key]
 		b.qprev[r.key] = cur
 		if dbgBo != nil && r.st.backoff > dbgBo[r.path] {
@@ -233,6 +247,9 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 			b.flRTO = append(b.flRTO, flStallEv{link: r.key, path: b.paths[r.path].Name()})
 		}
 		acked[r.path] += cur.acked - prev.acked
+		if cs != nil {
+			cs.add(r.path, &cur, &prev, dt)
+		}
 		sil[r.path].add(cur.acked-prev.acked, cur.retrans-prev.retrans, r.st.backoff)
 		if cur.acked-prev.acked >= qBusyBytes && r.st.minRttUs > 0 && r.st.rttUs >= r.st.minRttUs {
 			delays[r.path] = append(delays[r.path], float64(r.st.rttUs-r.st.minRttUs)/1000)
@@ -297,6 +314,14 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 			b.qual[j] = lbUpdateQual(b.qual[j], segs[j], retr[j], delays[j], b.dials[j], b.dfails[j])
 		}
 		b.dials[j], b.dfails[j], b.cfails[j] = 0, 0, 0
+	}
+	if censor.Active() {
+		b.censorSamp = b.censorSamp[:0]
+		for j, r := range raw {
+			if j < len(b.paths) && j < len(sil) {
+				b.censorSamp = censorLBSample(b.censorSamp, b.paths[j].Local, b.paths[j].Remote, r, float64(sil[j].acked)/dt.Seconds(), cs, j)
+			}
+		}
 	}
 	return raw
 }

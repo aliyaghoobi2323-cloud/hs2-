@@ -76,6 +76,8 @@ func TestSides(t *testing.T) {
 		{"HS2_B388_PEEREXEMPT", "1", "1"},
 		{"HS2_B375_RRCOVER", "0", "0"},
 		{"HS2_B375_RINGFLOOR", "0", "0"},
+		{"HS2_B399_STALLPICK", "1", "1"},
+		{"HS2_B399_STALL_MS", "300", "300"},
 		{"HS2_RETIRE_KEEP_IDLE", "1", ""},
 		{"HS2_MCONN_STRIPE_DL_FAIR", "1", ""},
 		{"HS2_MCONN_RESCUE", "1", "1"},
@@ -168,8 +170,8 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 135 { // b375: + HS2_B375_RRCOVER, HS2_B375_RINGFLOOR; b388: + HS2_B388_PEEREXEMPT; rc3: + HS2_B342_DCFAST; b337: + HS2_B337_PATHSTALL; b331: + HS2_B331_SPAREPATH, HS2_CALLPATH_LOG, HS2_B336_CALLMOVE; b339: + HS2_B339_PATHHYST; rc2: + HS2_B339_CUTGRACE, HS2_B338_RC_GAP0_MS, HS2_B340_SKIPCUT, HS2_B340_CUTCLEAR
-		t.Fatalf("table has %d keys, want 135", len(Table))
+	if len(Table) != 138 { // b382: + HS2_CENSOR_DETECT; b399: + HS2_B399_STALLPICK, HS2_B399_STALL_MS; b375: + HS2_B375_RRCOVER, HS2_B375_RINGFLOOR; b388: + HS2_B388_PEEREXEMPT; rc3: + HS2_B342_DCFAST; b337: + HS2_B337_PATHSTALL; b331: + HS2_B331_SPAREPATH, HS2_CALLPATH_LOG, HS2_B336_CALLMOVE; b339: + HS2_B339_PATHHYST; rc2: + HS2_B339_CUTGRACE, HS2_B338_RC_GAP0_MS, HS2_B340_SKIPCUT, HS2_B340_CUTCLEAR
+		t.Fatalf("table has %d keys, want 138", len(Table))
 	}
 }
 
@@ -241,6 +243,9 @@ func TestB338Defaults(t *testing.T) {
 		"HS2_B388_PEEREXEMPT": {"1", Both},
 		"HS2_B375_RRCOVER":    {"0", Both},
 		"HS2_B375_RINGFLOOR":  {"0", Both},
+		"HS2_B399_STALLPICK":  {"1", Both},
+		"HS2_B399_STALL_MS":   {"300", Both},
+		"HS2_CENSOR_DETECT":   {"1", Edge},
 	}
 	seen := map[string]int{}
 	for _, k := range Table {

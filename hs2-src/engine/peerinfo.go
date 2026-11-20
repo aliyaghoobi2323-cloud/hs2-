@@ -65,6 +65,13 @@ import (
 //	        key as bit11, mconn_rescue_rst.go)
 //	        ext bit13: TCP half-close — it relays a FIN one way while the other
 //	        way keeps flowing (HS2_HALF_CLOSE, halfclose.go, hc183)
+//	        ext bit14: xs261; bit15: ZDU (zdu.go); bit16: b367. Every owner:
+//	        caps_ext.go.
+//	  trailer (optional, after the whole ext; zdu.go): [tag u8][len u8][len
+//	        bytes] repeated. tag 1 = the process instance (Start u64, Rand
+//	        u32), sent only with HS2_ZDU=1. A message with a trailer always
+//	        has the ext block (its length byte may be 0). Older readers skip
+//	        it with the rest of the payload.
 //
 // A reader takes the fields it knows from the first n bytes and skips the rest,
 // so the payload can grow compatibly (a v1 reader sees only maxLinks).
@@ -110,6 +117,9 @@ type peerInfo struct {
 	Ports    []int
 	V2       bool   // the message carried the v2 fields (a newer hs2)
 	Ext      uint32 // the extended caps (the optional ext after the ports; 0: none)
+	// Inst: the sender's process instance (zdu.go), a trailing field after
+	// the ext; zero when not sent (pre-ZDU peer or HS2_ZDU off).
+	Inst zduInst
 }
 
 func (pi *peerInfo) tags() bool { return pi != nil && pi.V2 && pi.Caps&capPortTags != 0 }
@@ -268,16 +278,21 @@ func encodeInfo(pi peerInfo) []byte {
 	for v := pi.Ext; v != 0; v >>= 8 {
 		ext = append(ext, byte(v))
 	}
+	// zdu.go: the trailing fields (instance id) follow the ext, so a message
+	// with a trailer always carries the ext block (its length byte may be 0)
+	// and an older reader skips the trailer with the rest of the payload.
+	trailer := appendInfoTrailer(nil, pi)
+	withExt := len(ext) > 0 || len(trailer) > 0
 	maxPorts := infoMaxPorts
-	if len(ext) > 0 {
-		maxPorts = (255 - infoFixedLen - 1 - infoExtMax) / 2
+	if withExt {
+		maxPorts = (255 - infoFixedLen - 1 - infoExtMax - len(trailer)) / 2
 	}
 	if len(ports) > maxPorts {
 		ports, flags = ports[:maxPorts], flags|flagCut
 	}
 	n := infoFixedLen + 2*len(ports)
-	if len(ext) > 0 {
-		n += 1 + len(ext)
+	if withExt {
+		n += 1 + len(ext) + len(trailer)
 	}
 	b := make([]byte, 2+n)
 	b[0], b[1] = infoVer, byte(n)
@@ -286,10 +301,11 @@ func encodeInfo(pi peerInfo) []byte {
 	for i, p := range ports {
 		binary.BigEndian.PutUint16(b[7+2*i:], clamp(p))
 	}
-	if len(ext) > 0 {
+	if withExt {
 		o := 7 + 2*len(ports)
 		b[o] = byte(len(ext))
 		copy(b[o+1:], ext)
+		copy(b[o+1+len(ext):], trailer)
 	}
 	return b
 }
@@ -332,6 +348,10 @@ func readInfo(r io.Reader) (peerInfo, error) {
 			m := min(int(p[o]), len(p)-o-1)
 			for i := 0; i < m && i < infoExtMax; i++ {
 				pi.Ext |= uint32(p[o+1+i]) << (8 * i)
+			}
+			// the trailing fields (zdu.go) after the whole ext
+			if t := o + 1 + int(p[o]); t < len(p) {
+				readInfoTrailer(p[t:], &pi)
 			}
 		}
 	}

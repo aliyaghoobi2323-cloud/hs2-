@@ -204,7 +204,7 @@ func listenUDPProxy(ctx context.Context, addr, target string, logf func(string, 
 	if _, err := net.ResolveUDPAddr("udp", target); err != nil {
 		return err
 	}
-	pc, err := net.ListenPacket("udp", addr)
+	pc, err := listenPacketUDP(addr)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func (x *dgExit) listenTagged(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	pc, err := net.ListenPacket("udp", addr) // always offered (see startDgExit)
+	pc, err := listenPacketUDP(addr) // always offered (see startDgExit)
 	if err != nil {
 		x.cfg.Log("dg: UDP on tun port %s is not available (%v) — UDP of ports with their own target cannot be forwarded", DgTagPort, err)
 		pc = nil
@@ -654,7 +654,7 @@ func (e *dgEdge) listen(ctx context.Context, p string, port int) error {
 	}
 	var pc net.PacketConn
 	if e.cfg.UDP {
-		if pc, err = net.ListenPacket("udp", addr); err != nil {
+		if pc, err = listenPacketUDP(addr); err != nil {
 			ln.Close()
 			return err
 		}

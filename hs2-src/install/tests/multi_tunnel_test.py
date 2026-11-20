@@ -574,10 +574,11 @@ def scenarios(w):
         ifs = [c["iface"] for c in cfgs if c and c.get("carrier") != "mtcp"]
         guards = sh("ip netns exec %s nft list tables 2>/dev/null | grep hs2_icmp" % NS[s]).stdout.strip()
         res("10 uninstall (%s): no icmp reply rule left in the kernel" % s, guards == "", guards)
+        etc_left = sorted(os.listdir(os.path.join(w.root(s), "etc/hs2")))
         res("10 uninstall (%s): every tunnel removed, no process, no tun interface" % s,
             rc == 0 and w.units(s) == [] and not left and not any(w.iface_up(s, i) for i in ifs)
-            and not os.listdir(os.path.join(w.root(s), "etc/hs2")),
-            "rc=%s left=%s\n%s" % (rc, left, out[-300:]))
+            and not etc_left,
+            "rc=%s left=%s units=%s etc/hs2=%s\n%s" % (rc, left, w.units(s), etc_left, out[-300:]))
         if drop:
             res("10 uninstall (%s): answered y → hs2 program and hs2-menu removed" % s,
                 not os.path.exists(binp) and not os.path.exists(menup) and "Removed " in out, out[-200:])

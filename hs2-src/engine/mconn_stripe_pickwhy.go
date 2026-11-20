@@ -82,7 +82,7 @@ func (m *LinkManager) stripePickWhyLocked(avoid []any, pool *peerInfo) string {
 	tn := time.Now()
 	hist := map[int]int{}
 	for _, ml := range m.links {
-		if !ml.serving() {
+		if !ml.up() {
 			continue
 		}
 		mask := 0

@@ -64,28 +64,38 @@ type l3DupKeep struct {
 // whose first copy goes over first. Called with s.mu read-locked from
 // pumpTun.
 func (s *l3Set) dupSecondFor(e *l3Flow, h uint32, first *l3Link, now int64) *l3Link {
+	return s.dupSecondFrom(s.links, e, h, first, now)
+}
+
+// dupSecondFrom is dupSecondFor choosing among links. pickAll passes its
+// zduLinks set (zdu389): with HS2_ZDU a draining older generation's links
+// are left out of the second copy too, so dup copies no longer keep the old
+// process's L3 busy (S9c: the old Iran's drain end waited on TypeDataDup
+// frames until its deadline), and a kept link that became older is
+// re-picked. HS2_ZDU off: links is s.links and isZDUOld is false.
+func (s *l3Set) dupSecondFrom(links []*l3Link, e *l3Flow, h uint32, first *l3Link, now int64) *l3Link {
 	if !b303On.Load() || !b278On.Load() {
-		second := dupSecond(s.links, h, first)
-		return b278Second(s.links, h, first, second, now)
+		second := dupSecond(links, h, first)
+		return b278Second(links, h, first, second, now)
 	}
 	k := &e.dup2
 	avoid := k.b308Avoid(first, now)
 	if l := k.link; l != nil && k.first == first && (avoid == "" || l.path != avoid) && k.gen == s.gen.Load() && now-k.at < b303Refresh &&
-		l.Alive() && l.canDup() && (k.heavy || !l.isHeavy()) && (k.cut || !l3OnCut(l)) &&
+		l.Alive() && !l.isZDUOld() && l.canDup() && (k.heavy || !l.isHeavy()) && (k.cut || !l3OnCut(l)) &&
 		(first.path == "" || l.path != first.path) && !l.txStuck(now) {
 		b303Hit.Add(1)
 		return l
 	}
 	b303Pick.Add(1)
 	avoid2 := k.b309Avoid(first, now)
-	second, moved := b278SecondMoved(s.links, h, first, dupSecond(s.links, h, first), now)
+	second, moved := b278SecondMoved(links, h, first, dupSecond(links, h, first), now)
 	if moved && second != k.link {
 		b278OtherPath.Add(1)
 	}
 	if avoid != "" {
-		second = b308Repick(s.links, h, first, second, avoid, now)
+		second = b308Repick(links, h, first, second, avoid, now)
 	}
-	second = b309Fix(s.links, h, first, second, avoid, avoid2, now)
+	second = b309Fix(links, h, first, second, avoid, avoid2, now)
 	// nothing kept when there is no second, or it shares the first's path
 	// (b278 found no free other-path link: the fallback re-picks per packet,
 	// as before, so a freed other-path link is taken at once)

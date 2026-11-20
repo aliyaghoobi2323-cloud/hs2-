@@ -26,6 +26,10 @@ type KharejConfig struct {
 	// not in it goes to Panel, and with no Panel it is refused (routes.go).
 	Routes map[int]string
 	Log    func(string, ...any)
+	// Ready, if set, runs once when the local side is up: the TUN pump is
+	// started and (direct) the link listener is bound, (reverse) the dial pool
+	// is about to start. It does not wait for a link (zdu350 S2). nil = no-op.
+	Ready func()
 
 	// Reverse exit: dial the iran edge instead of listening. RevDial returns a
 	// fresh authenticated TLS carrier to the edge. The link count is dynamic: the
@@ -81,7 +85,7 @@ func (cfg KharejConfig) routeTable() RouteTable {
 // the ports with their own target.
 func (cfg KharejConfig) info(myMax int) peerInfo {
 	t := cfg.routeTable()
-	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ext: infoExt(), Ports: t.MappedPorts()}
+	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ext: infoExt(), Inst: zduInfoInst(), Ports: t.MappedPorts()}
 	if cfg.LB {
 		pi.Caps |= capLB
 	}
@@ -111,6 +115,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	if cfg.peers == nil {
 		cfg.peers = &linkPeers{}
 	}
+	zduExitPeers.Store(cfg.peers) // ZDU exit generation gauges (zdu_counts.go)
 	if cfg.noRoute == nil {
 		cfg.noRoute = &noRouteLog{}
 	}
@@ -123,6 +128,11 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	}
 	if linkCCRefresh.Load() {
 		go ccExit.run(ctx) // cc203: HS2_LINK_CC_REFRESH on the exit's links (link_ccrefresh.go)
+	}
+	if cfg.Ready != nil {
+		// direct: cfg.Listener is bound already (the caller made it); the accept
+		// loop below starts at once. reverse: the pool starts dialing at once.
+		cfg.Ready()
 	}
 	if cfg.RevDial != nil || cfg.RevLB != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
@@ -178,6 +188,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			cfg.peers.add(mtr)
 			defer exitQueue.track(car, true)()   // accepted from our listener (m4f251)
 			defer ccExit.track(tcpConnOf(car))() // cc203 (link_ccrefresh.go)
+			defer cfg.peers.zduExitMark()        // HS2_ZDU (zdu_exitl3.go); runs after remove
 			defer cfg.peers.remove(mtr)
 			defer stripeTrack(mtr)() // HS2_MCONN_STRIPE's gate (mconn_stripe_scav.go)
 			logf("link up from %s (now %d)", conn.RemoteAddr(), links.Add(1))
@@ -227,7 +238,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	case kindCtrl:
 		serveControl(ctx, st, car, mtr)
 	case kindPool:
-		servePoolCtl(ctx, st, pool)
+		servePoolCtlFrom(ctx, st, pool, mtr) // HS2_ZDU: not from an older Iran instance
 	case kindStats:
 		serveStats(ctx, st, car, mtr)
 	case kindInfo:
@@ -239,6 +250,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			if mtr != nil { // per link: read back only while this link is up
 				mtr.peerMax.Store(uint32(pi.MaxLinks))
 				mtr.peerInfo.Store(&pi)
+				cfg.peers.zduExitMark() // HS2_ZDU: older-Iran links off the L3 picker (zdu_exitl3.go)
 			}
 		})
 	case kindLBAdvert:
@@ -248,6 +260,10 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		}
 		cfg.Advert.serve(st)
 	case kindTCP, kindTCPPort, kindUDP, kindUDPPort:
+		if !zduWaitGO(ctx) { // HS2_ZDU: a new exit serves no user before GO (zdu_gate.go)
+			st.Close()
+			return
+		}
 		udp := kind[0] == kindUDP || kind[0] == kindUDPPort
 		port := 0
 		if kind[0] == kindTCPPort || kind[0] == kindUDPPort {
@@ -296,6 +312,10 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			streamLocalRst.Add(1) // fx170: the upload was cut; the target got an RST
 		}
 	case kindMConn:
+		if !zduWaitGO(ctx) { // HS2_ZDU: a new exit serves no user before GO (zdu_gate.go)
+			st.Close()
+			return
+		}
 		serveMConnSub(ctx, st, cfg, mtr)
 	case kindL3:
 		if l3 == nil {
@@ -312,8 +332,12 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		pl.heavy = heavyOf(mtr)
 		pl.stripe = stripeNOf(mtr) // HS2_MCONN_STRIPE (l3_lane.go)
 		pl.dupOK = peerL3Dup(mtr)
+		if mtr != nil && zduOn.Load() {
+			pl.zduOld = &mtr.zduOld // HS2_ZDU: older-Iran mark (zdu_exitl3.go)
+		}
 		if mtr != nil {
 			pl.path = mtr.path
+			pl.peer = &mtr.peerInfo // d421: dup dedup and second link per peer process
 			if tc := mtr.tcp; tc != nil {
 				pl.txStat = func() (tcpStat, bool) { return tcpStats(tc) } // HS2_B278_L3STALL
 			}

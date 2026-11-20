@@ -165,7 +165,8 @@ func (s *qCtlStat) note(was, now float64, dt time.Duration) {
 type qPrev struct {
 	acked, rcvd      uint64
 	segsOut, retrans uint64
-	dev              string // byDev: the interface the link leaves by ("": not known)
+	cen              censorPrev // censor351 M7/O7 counters (zero when the detector is off)
+	dev              string     // byDev: the interface the link leaves by ("": not known)
 	devSet           bool
 	accepted         bool   // m4f251: this side accepted the link (listener): filtered by our listen port
 	sport            uint16 // m4f251, accepted: the source port its packets carry (qLinkSport; 0: not read yet)
@@ -361,6 +362,18 @@ func (r *qRunner) run(ctx context.Context, logf func(string, ...any)) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
+			if zduDraining.Load() {
+				// ZDU B6: the draining old process gives its class slot up
+				// (filters, class, flock) and stops shaping; the shared root
+				// stays for the new process (no dropRootIfLast), so the two
+				// never fight over the tc root (zdu_drainmode.go)
+				for _, l := range lanes {
+					l.setCap(0, now)
+					l.sh.zduRelease()
+				}
+				logf("queue: ZDU drain: shaper class slot released, root left to the new process")
+				return
+			}
 			groups := r.measure(now.Sub(last))
 			last = now
 			for dev := range groups {

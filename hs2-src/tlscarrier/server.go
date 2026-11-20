@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 )
 
 // Server terminates real TLS (standard crypto/tls, real cert), then decides per
@@ -143,6 +145,9 @@ func (s *Server) handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	tconn := tls.Server(wrapBatch(raw), tcfg)
 	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := tconn.Handshake(); err != nil {
+		if censor.Active() { // censor351 M2: read-only copy of the outcome
+			censor.NoteAccept(censor.AddrOf(raw.LocalAddr()), censor.AddrOf(raw.RemoteAddr()), censor.AcceptStage(err))
+		}
 		// Probe handling is Go's OWN, not an imitation of it: TLS reads the
 		// socket itself (so how much of a probe is consumed — and therefore
 		// whether the close is a FIN or an RST — is exactly crypto/tls's), and a
@@ -178,6 +183,13 @@ func (s *Server) handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		return
 	}
 	nonce, more, ok := parseClientAuth(s.SharedKey, ekm, first)
+	if censor.Active() {
+		out := censor.AcceptOK
+		if !ok {
+			out = censor.AcceptAuthFail
+		}
+		censor.NoteAccept(censor.AddrOf(raw.LocalAddr()), censor.AddrOf(raw.RemoteAddr()), out)
+	}
 	if !ok {
 		if isLegacyAuth(s.SharedKey, first) {
 			s.logRare("tls: refused a pre-v2 client (no channel binding) from %s: upgrade the Iran server", raw.RemoteAddr())

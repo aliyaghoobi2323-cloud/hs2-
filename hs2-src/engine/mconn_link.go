@@ -173,6 +173,9 @@ func avoided(l Link, avoid []any) bool {
 			return true
 		}
 	}
+	if zduOn.Load() {
+		return zduPinAvoids(l, avoid) // ZDU generation pin (zdu_pin.go)
+	}
 	return false
 }
 
@@ -345,7 +348,7 @@ func (m *LinkManager) pickPlaneTiersFP(p mPlane, avoid []any, pool *peerInfo, ok
 		ok = func(ml *managedLink) bool { return !rescueCutKey(ml.link) && (ok0 == nil || ok0(ml)) }
 	}
 	drawn := m.steerDrawLocked(p == planeLight, func(ml *managedLink) bool {
-		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && linkMConn(ml, pool) &&
+		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.up() && linkMConn(ml, pool) &&
 			!avoided(ml.link, avoid) && (ok == nil || ok(ml)) && !stripeOn(ml)
 	})
 	for tier := 0; tier < 3; tier++ {
@@ -463,7 +466,8 @@ type mconnEdge struct {
 	subs   []*mconnSub // the open subs (a closed one forgets itself)
 	opened int         // subs ever opened (end's result)
 	ended  bool
-	endedA atomic.Bool // b312: ended, readable without mu (set under mu by end)
+	endedA atomic.Bool             // b312: ended, readable without mu (set under mu by end)
+	zduPin atomic.Pointer[zduInst] // ZDU: the peer instance its subs stay on (zdu_pin.go)
 
 	// diagnostics (HS2_MCONN_STRIPE_LOG): the first sub's placement
 	pickDur  time.Duration
@@ -477,6 +481,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 	}
 	avoid, fresh := takeRescueFreshMark(avoid) // er94 (mconn_rescue.go)
 	avoid, rstJ := takeRstJoinMark(avoid)      // rr156 (mconn_rescue_rst.go)
+	avoid = e.zduAvoid(avoid)                  // ZDU generation pin (zdu_pin.go)
 	// mem70: the wait counts from the call, not from getting e.mu: an open
 	// queued behind another one's wait is bounded by its own wait too.
 	t0 := time.Now()
@@ -502,7 +507,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 			// lite: the first sub sits exactly where the one stream of the
 			// old path would (pickWait), so the connection's placement is
 			// unchanged; only a link whose exit reads kindMConn will do.
-			l, rel, raw, ok = e.pickFirstLite()
+			l, rel, raw, ok = e.pickFirstLite(p, avoid)
 		} else {
 			l, rel, ok = e.lm.pickPlaneCall(p, avoid) // HS2_MCONN_CALL_AVOID (mconn_call.go)
 		}
@@ -540,6 +545,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 					}
 				}
 				e.first = true
+				e.zduPinTo(l)
 				s := &mconnSub{stream: st, plane: p, release: rel, raw: role == mconnRoleFirstRaw || role == mconnRoleFirstRawRescue, rescue: role == mconnRoleFirstRawRescue, rescRec: role == mconnRoleFirstRawRescue && rescueRecOn.Load() && rescueRecPeerOK(l), closeHS: peerCloseHS(l), edge: e}
 				mconnPlaneGauge(p).Add(1)
 				e.subs = append(e.subs, s)
@@ -556,11 +562,22 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 // pickFirstLite places a lite connection's first sub with the old path's own
 // choice (pickWait); false when that link's exit does not read kindMConn
 // (the caller then falls back to the one stream, as with the key off).
-func (e *mconnEdge) pickFirstLite() (Link, func(), bool, bool) {
+func (e *mconnEdge) pickFirstLite(p mPlane, avoid []any) (Link, func(), bool, bool) {
 	tp := time.Now()
 	l, rel, ok := pickWait(e.ctx, e.lm, true)
 	if !ok {
 		return nil, nil, false, false
+	}
+	if zduOn.Load() {
+		// ZDU (zdu_pin.go): pickWait knows no pin; a link of another
+		// instance gives way to the pinned placement
+		if in, pinned := zduPinOf(avoid); pinned && linkZDUInst(l) != in {
+			rel()
+			zduStat.liteMoved.Add(1)
+			if l, rel, ok = e.lm.pickPlaneCall(p, avoid); !ok {
+				return nil, nil, false, false
+			}
+		}
 	}
 	if stripeLog {
 		e.pickDur, e.pickLink = time.Since(tp), e.lm.stripeDescribe(l)

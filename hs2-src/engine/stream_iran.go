@@ -27,6 +27,11 @@ type IranConfig struct {
 	// ACME, if set, answers HTTP-01 challenge requests on its ports (acme.go);
 	// nil = every user connection is forwarded exactly as before.
 	ACME *ACMEResponder
+	// Ready, if set, runs once when the local side is up: the TUN pump, the
+	// link manager and (reverse) the link accept loop are started and every
+	// user port is bound. It does not wait for a link: a peer that is down
+	// must not hold a Type=notify unit in "activating" (zdu350 S2). nil = no-op.
+	Ready func()
 
 	// Reverse edge: accept links from the kharej instead of dialing. When set,
 	// Dialer/Min/Max are ignored and the pool grows/shrinks with what the peer
@@ -97,7 +102,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// A link carries user connections only once its kindInfo exchange is over,
 	// so each one knows whether the exit routes port tags (routes.go).
 	lm.gateInfo = true
-	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ext: infoExt()}
+	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ext: infoExt(), Inst: zduInfoInst()}
 	if cfg.LB {
 		mine.Caps |= capLB
 	}
@@ -185,6 +190,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 				}
 				if v := mtr.peerInfo.Load(); v != nil {
 					lm.exitInfo.Store(v) // what links whose own answer is late go by
+					lm.zduNoteInfo(v)    // ZDU: a new peer instance may be current (zdu_pin.go)
 					if cfg.Advert != nil && v.V2 && v.Caps&capLBAdvert != 0 {
 						cfg.Advert.addLink(l)
 					}
@@ -306,7 +312,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		}()
 		msg := "tcp"
 		if cfg.UDP {
-			pc, err := net.ListenPacket("udp", bind)
+			pc, err := listenPacketUDP(bind)
 			if err != nil {
 				return err
 			}
@@ -315,6 +321,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 			msg = "tcp+udp"
 		}
 		logf("user port %s open (%s), carried over the link pool", p, msg)
+	}
+	if cfg.Ready != nil {
+		cfg.Ready()
 	}
 	<-ctx.Done()
 	return nil
@@ -382,26 +391,33 @@ func userStreamHeader(l Link, udp bool, port int, pool *peerInfo) []byte {
 // openStream opens a user stream for a connection that came in on the user
 // port `port` (0: unknown — never tagged).
 func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), bool) {
+	st, release, _, ok := openStreamOn(ctx, lm, udp, port)
+	return st, release, ok
+}
+
+// openStreamOn is openStream, also returning the link the stream is on (UDP
+// flows keep it for the ZDU move, zdu_udpmove.go).
+func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), Link, bool) {
 	// A link can die between Pick and OpenStream; try another one.
 	t0 := time.Now()
 	for try := 0; try < 3; try++ {
 		link, release, ok := pickWait(ctx, lm, !udp)
 		if !ok {
 			obs.openErr.Add(1)
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		st, err := link.OpenStream()
 		if err == nil {
 			if _, err = st.Write(userStreamHeader(link, udp, port, lm.exitInfo.Load())); err == nil {
 				obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
-				return st, release, true
+				return st, release, link, true
 			}
 			st.Close()
 		}
 		release()
 	}
 	obs.openErr.Add(1)
-	return nil, nil, false
+	return nil, nil, nil, false
 }
 
 func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {
@@ -433,6 +449,7 @@ type udpFlow struct {
 	qb    atomic.Int64 // bytes waiting in q
 	last  time.Time    // under the port's mu
 	st    stream       // nil until the flow's stream is open (under mu)
+	mtr   *linkMeter   // the meter of st's link (under mu; nil: none): the ZDU move (zdu_udpmove.go)
 	stop  chan struct{}
 	ended bool // stop is closed (under mu)
 }
@@ -459,7 +476,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 	var mu sync.Mutex
 	flows := map[string]*udpFlow{}
 	go func() {
-		t := time.NewTicker(30 * time.Second)
+		t := time.NewTicker(udpSweepEvery())
 		defer t.Stop()
 		for {
 			select {
@@ -468,12 +485,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			case <-t.C:
 			}
 			mu.Lock()
-			for k, f := range flows {
-				if time.Since(f.last) > udpIdle {
-					f.end()
-					delete(flows, k)
-				}
-			}
+			sweepUDPFlows(flows, time.Now())
 			mu.Unlock()
 		}
 	}()
@@ -489,7 +501,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			}
 			mu.Unlock()
 		}
-		st, release, ok := openStream(ctx, lm, true, port)
+		st, release, link, ok := openStreamOn(ctx, lm, true, port)
 		if !ok {
 			gone()
 			return
@@ -501,7 +513,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			st.Close()
 			return
 		}
-		f.st = st
+		f.st, f.mtr = st, linkMeterOf(link)
 		mu.Unlock()
 		done := make(chan struct{})
 		go func() {
@@ -592,6 +604,9 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 	pl.dupOK = peerL3Dup(linkMeterOf(l))
 	if mtr := linkMeterOf(l); mtr != nil {
 		pl.path = mtr.path
+		pl.zduOld = &mtr.zduOld // ZDU peerOld mark (zdu_l3.go)
+		pl.peer = &mtr.peerInfo // d421: dup dedup and second link per peer process
+		pl.zduL3 = &mtr.zduL3At // ZDU review M3 (zdu_gate.go)
 	}
 	if _, ok := l.(metered); ok {
 		pl.txStat = func() (tcpStat, bool) { return linkTCPStatsOf(l) } // HS2_B278_L3STALL

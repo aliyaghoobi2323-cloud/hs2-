@@ -25,8 +25,9 @@ import (
 //
 //   - the copy on the lossiest path, when that path's smoothed loss is at
 //     least cmDelta (0.15 % absolute) above the best ELIGIBLE path none of
-//     the call's other copies rides (a reading, not cut, not lowered, a usable
-//     link), without a break for cmSustain (10 s), is moved:
+//     the call's other copies rides (a reading, not cut, not lowered, not
+//     STALLPICK-marked (b406), a usable link), without a break for
+//     cmSustain (10 s), is moved:
 //   - one fresh sub is opened with the call placement on that best path
 //     (callMoveMark: only links of that path; none there: no sub, the move
 //     ends); the old copy gets no call pair copy once two others are live
@@ -84,6 +85,9 @@ var cmMoves, cmDone, cmGaveUp, cmRefused, cmNoLink atomic.Int64
 // the relative damper (cmRatio, cmBestMax).
 var cmAbandoned, cmDamped atomic.Int64
 
+// b406: snapshot entries made ineligible as a target by a STALLPICK mark.
+var cmStallSkip atomic.Int64
+
 // cmPath is one path's quality in the snapshot.
 type cmPath struct {
 	loss float64 // smoothed loss fraction
@@ -128,13 +132,22 @@ func (m *LinkManager) cmSnapLocked(byPath map[string][]*managedLink, now time.Ti
 		if q == nil || !q.have {
 			continue
 		}
-		usable := 0
+		usable, stalled := 0, false
 		for _, ml := range ls {
 			if ml.link.Alive() && !ml.draining && !ml.retiring && !ml.suspect && !ml.degraded {
 				usable++
 			}
+			if b399Stalled(ml) { // b406: STALLPICK marks the path (lm_b399_stallpick.go)
+				stalled = true
+			}
 		}
 		ok := usable > 0 && !q.cut && !q.remCut && !st.repCut[p]
+		if ok && stalled {
+			// b406 (sk405): the judge's loss lags a fresh cut by seconds;
+			// a callmove onto a path STALLPICK has marked gave up 5 s later.
+			ok = false
+			cmStallSkip.Add(1)
+		}
 		if f, in := st.repFactor[p]; in && f < 0.95 {
 			ok = false
 		}
@@ -148,8 +161,8 @@ func (m *LinkManager) cmSnapLocked(byPath map[string][]*managedLink, now time.Ti
 
 // cmLogPart is the steering log's line (lb_rescue.go).
 func cmLogLine() string {
-	return fmt.Sprintf("lb callmove: moves %d, done %d, given up %d, rate-refused %d, no link on target %d, abandoned %d, damped %d",
-		cmMoves.Load(), cmDone.Load(), cmGaveUp.Load(), cmRefused.Load(), cmNoLink.Load(), cmAbandoned.Load(), cmDamped.Load())
+	return fmt.Sprintf("lb callmove: moves %d, done %d, given up %d, rate-refused %d, no link on target %d, abandoned %d, damped %d, spread-held %d, stall-skip %d",
+		cmMoves.Load(), cmDone.Load(), cmGaveUp.Load(), cmRefused.Load(), cmNoLink.Load(), cmAbandoned.Load(), cmDamped.Load(), cmSpreadHeld.Load(), cmStallSkip.Load())
 }
 
 // callMoveMark in an avoid list asks the opener for the call placement on a
@@ -257,7 +270,17 @@ func (m *mConn) callMoveLocked(live []*msub, now time.Time) (gave bool, poll tim
 	if !cmCanClose(worst) {
 		return false, cmPoll
 	}
+	spread := b405CMSpread.Load() // HS2_B405_CMSPREAD (mconn_cm405.go)
+	if spread {
+		var ok bool
+		if to, toL, ok = cmSpreadTake(snap, used, worstL, toL, now); !ok {
+			return false, cmPoll
+		}
+	}
 	if !cmAllow(now) {
+		if spread {
+			cmSpreadUndo(to, now)
+		}
 		return false, cmPoll
 	}
 	m.cmAt = now.Add(m.cmGapLocked(now))

@@ -69,7 +69,7 @@ func (m *LinkManager) pickStripeXDirLocked(avoid []any, pool *peerInfo, up bool)
 	bestCut := false                    // HS2_LB_STRIPE_STEER
 	var nOn, nUser, nSame, nPressed int // diagnostics (HS2_MCONN_STRIPE_LOG)
 	for _, ml := range m.links {
-		if !ml.serving() || stripeEvacSkip(ml.link) { // HS2_MCONN_STRIPE_EVAC
+		if !ml.up() || stripeEvacSkip(ml.link) { // HS2_MCONN_STRIPE_EVAC
 			continue
 		}
 		if m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() || !linkMConn(ml, pool) {

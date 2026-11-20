@@ -304,7 +304,7 @@ func TestL3FecReceiverRepair(t *testing.T) {
 	}
 	deliver := func(id uint32, p []byte) {
 		f := binary.BigEndian.AppendUint32(nil, id)
-		if q := s.rx.accept(append(f, p...)); q != nil {
+		if q := s.rx.accept(zduInst{}, append(f, p...)); q != nil {
 			s.fecRecv(id, q, tun)
 		}
 	}
@@ -372,7 +372,7 @@ func TestL3FecAdaptK(t *testing.T) {
 	cp = append(cp, pk...)
 	deliver := func(id uint32, p []byte) {
 		f := binary.BigEndian.AppendUint32(nil, id)
-		if q := rx.rx.accept(append(f, p...)); q != nil {
+		if q := rx.rx.accept(zduInst{}, append(f, p...)); q != nil {
 			rx.fecRecv(id, q, tun)
 		}
 	}

@@ -13,6 +13,17 @@ func ListenReuse(addr string) (net.Listener, error) {
 	return listenReuseRcvBuf(addr, 0)
 }
 
+// ListenLink is ListenReuse for a LINK listener (the reverse edge's, the
+// direct exit's). HS2_ZDU off: exactly ListenReuse. Key on: a new process
+// accepts links on it before GO while its user listeners wait, and the old
+// process stops accepting on it at handover start (zdu_gate.go).
+func ListenLink(addr string) (net.Listener, error) {
+	if zduOn.Load() {
+		return zduListenKind(addr, 0, true)
+	}
+	return listenReuseRcvBufCold(addr, 0)
+}
+
 // listenReuseRcvBuf is ListenReuse that also sets (locks) the receive buffer to
 // rcvbuf bytes on the listening socket when rcvbuf > 0. Set before listen, the
 // buffer is inherited by every accepted connection and is in place when the
@@ -26,6 +37,13 @@ func ListenReuse(addr string) (net.Listener, error) {
 // load test that was echo p99 8 s for everyone else on those links; plain TCP
 // 0.5 s. (go.mod sets the same default for every other listener.)
 func listenReuseRcvBuf(addr string, rcvbuf int) (net.Listener, error) {
+	if zduOn.Load() {
+		return zduListen(addr, rcvbuf) // ZDU S6: adopt/pausable (zdu_takeover.go)
+	}
+	return listenReuseRcvBufCold(addr, rcvbuf)
+}
+
+func listenReuseRcvBufCold(addr string, rcvbuf int) (net.Listener, error) {
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			var serr error

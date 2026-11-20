@@ -190,15 +190,16 @@ func TestStripeUpCap(t *testing.T) {
 	// upov57: ext bit4 (capExtMConnOverlap) goes with the stripe on
 	// hs133: ext bit10 (capExtMConnKeepStall) follows its own key
 	// xs261: ext bit14 (capExtMConnXS) follows HS2_XS261
-	if infoExt()&^(capExtMConnKeepStall|capExtHalfClose|capExtMConnXS) != capExtMConnStripe|capExtMConnOverlap {
+	// zdu350: ext bit15 (capExtZDU) follows HS2_ZDU
+	if infoExt()&^(capExtMConnKeepStall|capExtHalfClose|capExtMConnXS|capExtZDU) != capExtMConnStripe|capExtMConnOverlap {
 		t.Fatalf("ext %#x with the key off, want only the stripe bit", infoExt())
 	}
 	setStripeUp(t, true)
-	if infoExt()&^(capExtMConnKeepStall|capExtHalfClose|capExtMConnXS) != capExtMConnStripe|capExtMConnStripeUp|capExtMConnOverlap {
+	if infoExt()&^(capExtMConnKeepStall|capExtHalfClose|capExtMConnXS|capExtZDU) != capExtMConnStripe|capExtMConnStripeUp|capExtMConnOverlap {
 		t.Fatalf("ext %#x with the key on", infoExt())
 	}
 	stripeK.Store(0)
-	if infoExt()&^(capExtHalfClose|capExtMConnXS) != 0 { // hc183, xs261: their own bits
+	if infoExt()&^(capExtHalfClose|capExtMConnXS|capExtZDU) != 0 { // hc183, xs261, zdu350: their own bits
 		t.Fatalf("ext %#x without HS2_MCONN_STRIPE", infoExt())
 	}
 	if mconnCap() != capMConn|capMConnRaw {

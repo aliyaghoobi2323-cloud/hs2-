@@ -100,7 +100,11 @@ func (m *LinkManager) pickStormFP(limit int) (*managedLink, int32) {
 	drawn := m.steerDrawLocked(false, func(ml *managedLink) bool {
 		return ml.aliveCheap() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit) && !stripeOn(ml)
 	})
-	for tier := 0; tier < 3; tier++ {
+	// zdu review 5 (L): the same tier split as pickLockedFP (g400): tier 1
+	// takes the current generation's healthy retiring links only, an older
+	// generation's (peerOld) comes after them in tier 2. Key off: zduOld is
+	// never set, tiers 1 and 2 hold the same links, the choice is as before.
+	for tier := 0; tier < 4; tier++ {
 		var a, b *managedLink
 		var afp, bfp int32
 		var ka, kb pickKey
@@ -114,10 +118,14 @@ func (m *LinkManager) pickStormFP(limit int) (*managedLink, int32) {
 			}
 			switch tier {
 			case 0:
-				if ml.retiring || ml.degraded || ml.draining || ml.suspect {
+				if ml.retiring || ml.degraded || ml.draining || ml.suspect || ml.zduOld { // zduOld: as pickLockedFP
 					continue
 				}
 			case 1:
+				if ml.degraded || ml.draining || ml.suspect || ml.zduOld {
+					continue
+				}
+			case 2:
 				if ml.degraded || ml.draining || ml.suspect {
 					continue
 				}

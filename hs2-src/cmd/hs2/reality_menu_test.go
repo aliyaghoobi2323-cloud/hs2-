@@ -379,6 +379,8 @@ func TestDeleteRemovesDropinDir(t *testing.T) {
 	os.WriteFile(filepath.Join(systemdDir, "hs2-alert-hs2-x.timer"), []byte("[Timer]\n"), 0o644)
 	os.WriteFile(filepath.Join(systemdDir, "hs2-alert-hs2-x.service"), []byte("[Service]\n"), 0o644)
 	os.WriteFile(filepath.Join(systemdDir, "hs2-alert-hs2-y.timer"), []byte("[Timer]\n"), 0o644)
+	// rel69r-rc6: the b411 saved peer IPs next to the config outlived the tunnel
+	os.WriteFile(peerIPsPath(cfg), []byte("203.0.113.7 1\n"), 0o600)
 	removeUnitFiles("hs2-x", cfg)
 	if _, err := os.Stat(filepath.Join(systemdDir, "hs2-x.service.d")); !os.IsNotExist(err) {
 		t.Fatalf("drop-in dir left behind: %v", err)
@@ -387,6 +389,9 @@ func TestDeleteRemovesDropinDir(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(systemdDir, f)); !os.IsNotExist(err) {
 			t.Fatalf("%s left behind: %v", f, err)
 		}
+	}
+	if _, err := os.Stat(peerIPsPath(cfg)); !os.IsNotExist(err) {
+		t.Fatalf("saved peer IPs left behind: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(systemdDir, "hs2-alert-hs2-y.timer")); err != nil {
 		t.Fatalf("another tunnel's alert timer was removed: %v", err)

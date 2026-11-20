@@ -132,6 +132,9 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 		dial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, false) }
 	}
 	pool := newExitPool(ctx, min, max, dial, logf)
+	if zduOn.Load() {
+		zduExitPoolRef.Store(pool) // ZDU warm need (zdu_gate.go)
+	}
 	if lb != nil {
 		lb.setSpare(pool.addSpares)   // HS2_LB_AUTO2 spare dials (lb_spare.go); returns the dials started
 		lb.setSpareWant(pool.target)  // HS2_LB_SPARE_EDGE (lb_spare176.go)
@@ -194,7 +197,8 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 	if err != nil {
 		return "session setup failed: " + describeNetErr(err)
 	}
-	cfg.peers.add(mtr) // the edge's ceiling this link reports counts only while it is up
+	cfg.peers.add(mtr)    // the edge's ceiling this link reports counts only while it is up
+	zduExitBind(ctx, mtr) // HS2_ZDU: the slot learns its link's Iran instance (zdu_exit.go)
 	var lbRetired atomic.Bool
 	if cfg.RevLB != nil {
 		cfg.RevLB.attach(car, lbHooks{
@@ -212,6 +216,7 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 	}
 	defer exitQueue.track(car, false)()  // reverse: the exit dialed it (m4f251)
 	defer ccExit.track(tcpConnOf(car))() // cc203 (link_ccrefresh.go)
+	defer cfg.peers.zduExitMark()        // HS2_ZDU: re-mark older-Iran links (zdu_exitl3.go); runs after remove
 	defer cfg.peers.remove(mtr)
 	defer stripeTrack(mtr)() // HS2_MCONN_STRIPE's gate (mconn_stripe_scav.go)
 	// Close the session when ctx ends, so AcceptStream unblocks and this returns

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -411,6 +412,9 @@ type liveStatus struct {
 	// pool's streams: with mconn each connection rides 2+ subs; mconn_open
 	// has the connections). Absent in an older file.
 	UsersKind string `json:"users_kind,omitempty"`
+	// Censor is censor351's read-only block (HS2_CENSOR_DETECT; absent when
+	// off). Rendered by `hs2 status --censor`; nothing else reads it.
+	Censor json.RawMessage `json:"censor,omitempty"`
 }
 
 // fillAutoWin copies the smux autowin budget counters.
@@ -694,6 +698,14 @@ func (w *warmWriter) note(target int) {
 // until ctx ends, then removes the file. stats returns the current snapshot.
 func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats engine.StatsFn) {
 	path := statusPath(cfgPath)
+	// censor351 (step-3 F2, rel69r-rc6): detect and log only; no reaction.
+	// Default on the Iran side, off on the Kharej side; HS2_CENSOR_DETECT=0/1
+	// on a host overrides its side's default.
+	if fc.Mode == "dial" {
+		censor.Init(censor.SideIran, log.Printf)
+	} else {
+		censor.Init(censor.SideKharej, log.Printf)
+	}
 	if err := os.MkdirAll(statusRunDir, runDirMode()); err != nil { // sec370: 0700
 		return // /run not writable (unusual); the manager falls back to `ss`
 	}
@@ -724,6 +736,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 	tcpMem := &tcpMemWatch{proc: "/proc", logf: log.Printf}
 	ow := &obsWindow{}
 	write := func() {
+		if engine.ZDUDraining() { // ZDU B6: the new process owns the status and the *.warm file
+			return
+		}
 		tcpMem.check()
 		s := stats()
 		ls := base
@@ -806,6 +821,14 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		fillSmuxWin(&ls)
 		fillStripe(&ls, engine.StripeObserved())
 		fillDiag73(&ls)
+		if censor.Active() {
+			var opens uint64
+			for _, v := range engine.Observed().OpenLat {
+				opens += v
+			}
+			censor.NoteUsers(opens) // M6 domestic witness (read-only copy)
+		}
+		ls.Censor = censor.StatusJSON()
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
@@ -817,7 +840,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		for {
 			select {
 			case <-ctx.Done():
-				os.Remove(path)
+				if !engine.ZDUDraining() { // a draining old process leaves the new one's file
+					os.Remove(path)
+				}
 				return
 			case <-t.C:
 				write()
@@ -897,12 +922,17 @@ func statusCmd(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	watch := fs.Bool("watch", false, "refresh continuously")
+	cens := fs.Bool("censor", false, "show the censor351 detector block (detect and log only)")
 	fs.Parse(args)
 	if *cfgPath == "" {
-		fmt.Println("usage: hs2 status -c config.json [--watch]")
+		fmt.Println("usage: hs2 status -c config.json [--watch] [--censor]")
 		os.Exit(2)
 	}
 	path := statusPath(*cfgPath)
+	if *cens {
+		printCensor(path)
+		return
+	}
 	if !*watch {
 		printStatus(path)
 		return
@@ -1409,4 +1439,19 @@ func offloadLine(ls liveStatus) string {
 		s += fmt.Sprintf(" · %d merged packets refused by the kernel (sent one by one)", ls.TunRefused)
 	}
 	return s
+}
+
+// printCensor renders the status file's censor351 block (`hs2 status --censor`).
+func printCensor(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Println("no live status yet (is the tunnel running?)")
+		return
+	}
+	var ls liveStatus
+	if json.Unmarshal(b, &ls) != nil {
+		fmt.Println("status file is unreadable")
+		return
+	}
+	fmt.Print(censor.Render(ls.Censor))
 }

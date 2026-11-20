@@ -9,7 +9,7 @@ package engine
 func (p *exitPool) overWant() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.want > 0 && len(p.slots) > p.want
+	return p.want > 0 && p.curSlotsLocked() > p.want
 }
 
 // setPoolOver installs the pool's over-target check (nil: unknown).

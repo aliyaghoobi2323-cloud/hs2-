@@ -232,5 +232,5 @@ func (j *q2Judge) flapRelease(now time.Time) {
 // links compare equal here (the usual order). Caller holds m.mu.
 func (m *LinkManager) steerCutNewLocked(ml *managedLink) bool {
 	st := m.steer
-	return lbCutNoNew && st != nil && st.active && st.repCut[mlPath(ml)]
+	return lbCutNoNew && st != nil && st.active && st.repCut[mlPath(ml)] || b399Stalled(ml) // HS2_B399_STALLPICK: a stalled path, too
 }

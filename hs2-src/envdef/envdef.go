@@ -479,6 +479,24 @@ var Table = []Key{
 	// (HS2_B375_RINGFLOOR_QKB, 32), 2 = every records conn. Dark: rb375 saw
 	// +150-380 MB RSS and ring grow/shrink churn with it on everywhere.
 	{"HS2_B375_RINGFLOOR", "0", Both},
+	// HS2_B399_STALLPICK (b399, on in rel69r-rc2, off in rel69r-rc4, on again
+	// since rel69r-rc5 with the v3 marks (sk405 precision 74 %); rc4 off was
+	// sk402 precision 34-47 %, storm-window call tail cost): new user opens rank a
+	// path's links last while the path is silent (no read on any link for
+	// HS2_B399_STALL_MS and >= 2 links with unanswered writes as long) and
+	// another path is healthy, before the LB judge's cut verdict. Marks need
+	// the pool and the path up >= 10 s and a read within 10 s. sk399b (lab3,
+	// 5 pairs): reconnect-wave fails -98 %, storm opens better, tail = noise.
+	{"HS2_B399_STALLPICK", "1", Both},
+	{"HS2_B399_STALL_MS", "300", Both},
+	// HS2_CENSOR_DETECT (b382, step-3 F2 censor351 v1 level 1, rel69r-rc6):
+	// the censorship detector, detect and LOG only (lines "censor351: v1 ...",
+	// status block, `hs2 status --censor`). It feeds nothing: no LB, dial,
+	// close or timing change. 0 off (no goroutine, no allocation); 1 on. Alias
+	// HS2_CENSOR. On by default on the edge (Iran) only; the exit (Kharej)
+	// side stays off (not accurate enough yet). The code default is the same
+	// (censor.LevelFor), so other layouts match.
+	{"HS2_CENSOR_DETECT", "1", Edge},
 	// rel69h (st244/st245/st246): the edge paces lite raw->dual upgrades
 	// through one token bucket, "auto" = max(500, 100 x GOMAXPROCS) a second
 	// (burst rate/10); call upgrades and interactive flows

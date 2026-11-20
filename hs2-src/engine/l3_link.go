@@ -123,9 +123,17 @@ type l3Link struct {
 	// its ack-progress view (HS2_B278_L3STALL, l3_b278.go).
 	txStat func() (tcpStat, bool)
 	stall  l3Stall
-	dead   atomic.Bool
-	once   sync.Once
-	done   chan struct{}
+	// zduOld (nil: never) is the link meter's ZDU peerOld mark (zdu_l3.go).
+	zduOld *atomic.Bool
+	// peer (nil: unknown) is the link meter's kindInfo of the other server:
+	// its ZDU instance keys the receive dedup and keeps both dup copies on one
+	// process (d421, l3_dup.go peerInst).
+	peer *atomic.Pointer[peerInfo]
+	// zduL3 (nil: none) is the link meter's ZDU L3 activity stamp (zdu_gate.go).
+	zduL3 *atomic.Int64
+	dead  atomic.Bool
+	once  sync.Once
+	done  chan struct{}
 }
 
 // qpkt is a queued packet and when it was queued.
@@ -296,6 +304,7 @@ func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 				continue // everything was stale
 			}
 			l.qs.markL3()
+			zduMarkL3(l.zduL3)
 		case <-idle.C:
 			batch = tlscarrier.AppendFrame(batch, core.TypePing, make([]byte, core.KeepalivePad()))
 		}
@@ -320,7 +329,7 @@ type l3Set struct {
 	// copy of what the other server sends twice.
 	dup    bool
 	dupSeq uint32
-	rx     l3Dedup
+	rx     l3Rx // d421: one dedup per sending process
 	// HS2_L3_FEC (l3_fec.go): fec is the sending side (nil: off), fecRx the
 	// receiving side (nil until the other server sent a parity packet).
 	fec   *l3Fec
@@ -333,6 +342,9 @@ type l3Set struct {
 	// gen counts changes to links (add/remove; b303 keeps a flow's second
 	// link only while it is unchanged).
 	gen atomic.Uint64
+	// zc: the current-instance links while a ZDU handover drains old ones
+	// (zdu_l3.go; nil: never built).
+	zc atomic.Pointer[l3ZDUCur]
 }
 
 func (s *l3Set) add(l *l3Link) {
@@ -419,11 +431,20 @@ func (s *l3Set) pickAll(pkt []byte) (first, second *l3Link, fp fecPlan, fec bool
 	h := flowHash(pkt)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	links, zduCut := s.zduLinks() // HS2_ZDU: s.links unless peerOld links drain (zdu_l3.go)
 	if s.lane != nil {
-		if l, ok := s.lane.pick(s.links, pkt, h); ok {
+		if zduCut {
+			s.zduUnstick(h)
+		}
+		if l, ok := s.lane.pick(links, pkt, h); ok {
 			if s.dup && l != nil && l.canDup() {
 				// HS2_B278_L3STALL + HS2_B303_DUPSTICK (l3_b278.go, l3_b303.go)
-				second = s.dupSecondFor(&s.lane.flows[h&(l3LaneSlots-1)], h, l, s.lane.now())
+				second = s.dupSecondFrom(links, &s.lane.flows[h&(l3LaneSlots-1)], h, l, s.lane.now())
+				if second != nil && !sameInst(l.peerInst(), second) {
+					// d421: both copies to one process of the other side (a kept
+					// or b308/b309 pick may predate the instance id)
+					second = dupSecondWhere(links, h, l, nil)
+				}
 				if dupPathsOn && second != nil && l.path != "" {
 					countDupPath(second.path != l.path, true)
 				}
@@ -435,12 +456,12 @@ func (s *l3Set) pickAll(pkt []byte) (first, second *l3Link, fp fecPlan, fec bool
 		}
 		if s.fec != nil {
 			e := &s.lane.flows[h&(l3LaneSlots-1)]
-			if fp, ok := s.fecPlan(e, s.links, pkt, h, s.lane.now()); ok {
+			if fp, ok := s.fecPlan(e, links, pkt, h, s.lane.now()); ok {
 				return nil, nil, fp, true
 			}
 		}
 	}
-	return rendezvous(s.links, h, false), nil, fp, false
+	return rendezvous(links, h, false), nil, fp, false
 }
 
 // rendezvous is the live link (lightOnly: and carrying no download) with the
@@ -515,10 +536,14 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 		switch ft {
 		case core.TypeData:
 			l.qs.markL3()
+			zduMarkL3(l.zduL3)
+			zduNoteL3Rx() // HS2_ZDU drain end (zdu_drainmode.go): one atomic load unless draining
 			dev.Write(payload)
 		case core.TypeDataDup:
 			l.qs.markL3()
-			if p := s.rx.accept(payload); p != nil {
+			zduMarkL3(l.zduL3)
+			zduNoteL3Rx()
+			if p := s.rx.accept(l.peerInst(), payload); p != nil {
 				// a parity packet, or one the FEC may need (l3_fec.go)
 				s.fecRecv(binary.BigEndian.Uint32(payload)&l3DupIDMask, p, dev)
 			}

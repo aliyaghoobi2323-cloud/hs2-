@@ -365,6 +365,9 @@ func (a *LBAdvert) runEdge(ctx context.Context) {
 		case <-t.C:
 		case <-a.kick:
 		}
+		if zduDraining.Load() { // ZDU B6: a draining old edge does not advertise (zdu_drainmode.go)
+			continue
+		}
 		a.mu.Lock()
 		var ls []Link
 		for l := range a.links {

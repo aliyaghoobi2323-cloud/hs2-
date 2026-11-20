@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -299,6 +300,92 @@ func TestLBReloadListenSide(t *testing.T) {
 		}
 		if m := adv.Mine(); fmt.Sprint(m) != "[{127.0.0.1 100}]" {
 			t.Fatalf("%s: announced %v", fc.Mode, m)
+		}
+		ln.Close()
+	}
+}
+
+// zdu391 (lab1 task 4): an address another process still holds (the ZDU old
+// process until its commit) fails to bind on the reload; key on, it is
+// retried in the background and by the next (unchanged) reload, so the
+// address is listened on once it is free. Key off: unchanged behaviour.
+func TestLBReloadRetriesFailedListen(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Skip("no 127.0.0.2")
+	}
+	probe.Close()
+	oldOn, oldEvery, oldN := lbListenRetryOn, lbListenRetryEvery, lbListenRetryN
+	t.Cleanup(func() { lbListenRetryOn, lbListenRetryEvery, lbListenRetryN = oldOn, oldEvery, oldN })
+	for _, bg := range []bool{true, false} {
+		lbListenRetryOn = func() bool { return true }
+		lbListenRetryEvery, lbListenRetryN = 50*time.Millisecond, 40
+		if !bg {
+			lbListenRetryN = 0 // only the next reload retries
+		}
+		pl, _ := net.Listen("tcp", "127.0.0.1:0")
+		_, port, _ := net.SplitHostPort(pl.Addr().String())
+		pl.Close()
+		one := strings.NewReplacer("10.1.0.1:443", "127.0.0.1:"+port,
+			`[{"ip":"10.1.0.1","weight":70},{"ip":"10.1.0.2","weight":30}]`, `[{"ip":"127.0.0.1","weight":100}]`).Replace(lbIranRevListen)
+		two := strings.Replace(one, `[{"ip":"127.0.0.1","weight":100}]`, `[{"ip":"127.0.0.1","weight":40},{"ip":"127.0.0.2","weight":60}]`, 1)
+		cfg := filepath.Join(t.TempDir(), "c.json")
+		writeCfg(t, cfg, one)
+		resetLBRun(t, cfg)
+		fc := lbFC(t, one)
+		ln, err := listenLB(fc, t.Logf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err == net.ErrClosed {
+					return
+				}
+				if err == nil {
+					c.Close()
+				}
+			}
+		}()
+		setupLB(fc, nil, ln, t.Logf)
+		hold, err := net.Listen("tcp", "127.0.0.2:"+port) // the old process's copy
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeCfg(t, cfg, two)
+		reloadLB("test") // bind: address already in use
+		hold.Close()
+		if !bg {
+			reloadLB("test") // unchanged section: retries the missing listen
+		}
+		ok := false
+		for i := 0; i < 60 && !ok; i++ {
+			if c, err := net.Dial("tcp", "127.0.0.2:"+port); err == nil {
+				c.Close()
+				ok = true
+			} else {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if !ok {
+			t.Fatalf("bg=%v: freed address never listened on", bg)
+		}
+		// gate fix: the retry goroutine ends before this case's globals change
+		lbRunMu.Lock()
+		rt := lbRun
+		lbRunMu.Unlock()
+		for i := 0; rt != nil; i++ {
+			rt.mu.Lock()
+			r := rt.retrying
+			rt.mu.Unlock()
+			if !r {
+				break
+			}
+			if i > 200 {
+				t.Fatalf("bg=%v: retry goroutine still running", bg)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
 		ln.Close()
 	}

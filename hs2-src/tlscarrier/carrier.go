@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 )
 
 // Carrier is a live TLS session carrying hs2 frames directly inside TLS records
@@ -195,6 +198,9 @@ func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Dur
 	}
 	raw, err := d.Dial("tcp", addr)
 	if err != nil {
+		if censor.Active() { // censor351 M1: read-only copy of the outcome
+			censor.NoteDial(censorAddr(d.LocalAddr), censorHost(addr), censor.FrontTLS, censor.ConnectStage(err))
+		}
 		return nil, err
 	}
 	// Aggressive TCP keepalive so the kernel detects a black-holed link (packets
@@ -229,6 +235,13 @@ func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Dur
 	raw.SetDeadline(time.Now().Add(authTimeout))
 	if err := u.Handshake(); err != nil {
 		raw.Close()
+		if censor.Active() {
+			st := censor.HandshakeStage(err)
+			if errors.Is(err, ErrTargetAnswered) {
+				st = censor.DialCert
+			}
+			censor.NoteDial(censor.AddrOf(raw.LocalAddr()), censor.AddrOf(raw.RemoteAddr()), censor.FrontTLS, st)
+		}
 		return nil, err
 	}
 	// The certificate is not validated (the Iran side may lack CA roots, and a
@@ -252,9 +265,15 @@ func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Dur
 	}
 	if err != nil {
 		raw.Close()
+		if censor.Active() {
+			censor.NoteDial(censor.AddrOf(raw.LocalAddr()), censor.AddrOf(raw.RemoteAddr()), censor.FrontTLS, censor.DialAuth)
+		}
 		return nil, err
 	}
 	raw.SetDeadline(time.Time{})
+	if censor.Active() {
+		censor.NoteDial(censor.AddrOf(raw.LocalAddr()), censor.AddrOf(raw.RemoteAddr()), censor.FrontTLS, censor.DialOK)
+	}
 	return &Carrier{conn: u}, nil
 }
 
@@ -334,4 +353,16 @@ func targetCertCheck(sni string, targetNames []string) func([][]byte, [][]*x509.
 		}
 		return nil
 	}
+}
+
+// censorAddr / censorHost: the dial's own addresses for censor351 (only
+// called when the detector is on).
+func censorAddr(a net.Addr) netip.Addr { return censor.AddrOf(a) }
+
+func censorHost(hostport string) netip.Addr {
+	h, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return censor.ParseAddr(h)
 }

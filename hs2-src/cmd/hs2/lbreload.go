@@ -52,9 +52,12 @@ type lbRuntime struct {
 	targetNames atomic.Pointer[[]string]
 	// b333 (lbauto6.go): the lb section as written (with its auto6 specs;
 	// nil = none), the specs' current addresses and the last auto6 line.
-	raw       *lbConfig
-	auto      map[string]string
-	autoLogAt time.Time
+	raw        *lbConfig
+	auto       map[string]string
+	autoLogAt  time.Time
+	autoNote   string // which interface the specs use and why (logged when it changes)
+	autoNoteAt time.Time
+	retrying   bool // zdu391: a failed-listen retry runs (retryListenLocked)
 }
 
 var (
@@ -296,6 +299,7 @@ func setupLB(fc fileConfig, lb *engine.LB, ln net.Listener, logf func(string, ..
 	lbAutoMu.Lock()
 	if lbAutoStartRaw != nil {
 		rt.raw, rt.auto, rt.autoLogAt = lbAutoStartRaw, lbAutoStartRes, time.Now()
+		rt.autoNote, rt.autoNoteAt = lbAutoStartNote, time.Now()
 		if auto6Loop {
 			go rt.runAuto6(nil)
 		}
@@ -422,19 +426,22 @@ func reloadLB(why string) {
 	if reflect.DeepEqual(next.LB, cur) {
 		rt.logf("lb: reload (%s): lb section unchanged", why)
 		rt.loadedAt = time.Now()
+		if rt.ln != nil && lbListenRetryOn() {
+			rt.syncListenersLocked() // zdu391: retry a listen that failed before
+		}
 		return
 	}
 	// b333: resolve the auto6 specs of the new section (lbauto6.go)
 	rawLB := next.LB
 	if len(lbLocalAutos(next)) > 0 {
-		res, err := resolveAutos(next, rt.auto)
+		res, note, err := resolveAutosNote(next, rt.auto)
 		if err != nil {
 			rt.logf("lb: auto6: cannot read this server's IPv6 addresses: %v", err)
 		}
 		startRes := rt.raw == nil
-		rt.raw, rt.auto = rawLB, res
+		rt.raw, rt.auto, rt.autoNote, rt.autoNoteAt = rawLB, res, note, time.Now()
 		next = applyAutos(next, res)
-		rt.logf("lb: auto6 (reload): %s", auto6Words(res))
+		rt.logf("lb: auto6 (reload): %s (%s)", auto6Words(res), note)
 		if startRes && auto6Loop {
 			go rt.runAuto6(nil)
 		}
@@ -445,7 +452,9 @@ func reloadLB(why string) {
 	rt.loadedAt = time.Now()
 	rt.rebuildLocked("reload, " + why)
 	if rt.ln != nil {
-		rt.syncListenersLocked()
+		if rt.syncListenersLocked() > 0 && lbListenRetryOn() {
+			rt.retryListenLocked()
+		}
 	}
 	if m := curFrontMux.Load(); m != nil { // per-IP fronts: new links only
 		m.rebuild(next)
@@ -455,9 +464,49 @@ func reloadLB(why string) {
 	}
 }
 
+// zdu391 (lab1): a reload that reaches the new process during the ZDU
+// probation (MAINPID is the new process from GO on) cannot bind an address
+// the old process still holds (it drops its link listener copies only at the
+// commit): "bind: address already in use", and the next reload said "lb
+// section unchanged" and never retried, so the address stayed unlistened
+// until a restart. Key on only: a failed listen is retried every
+// lbListenRetryEvery (lbListenRetryN times, past the probation and the
+// commit), and an unchanged reload retries the missing ones too.
+var (
+	lbListenRetryOn    = engine.ZDUEnabled
+	lbListenRetryEvery = 10 * time.Second
+	lbListenRetryN     = 18
+)
+
+// retryListenLocked starts (once) the bounded retry of failed listens.
+func (rt *lbRuntime) retryListenLocked() {
+	if rt.retrying {
+		return
+	}
+	rt.retrying = true
+	// gate fix: the goroutine works on a copy (a reload's caller sets the
+	// knobs; the goroutine outlives it)
+	n, every := lbListenRetryN, lbListenRetryEvery
+	go func() {
+		for i := 0; i < n; i++ {
+			time.Sleep(every)
+			rt.mu.Lock()
+			n := rt.syncListenersLocked()
+			rt.mu.Unlock()
+			if n == 0 {
+				break
+			}
+		}
+		rt.mu.Lock()
+		rt.retrying = false
+		rt.mu.Unlock()
+	}()
+}
+
 // syncListenersLocked opens a listener for every address added to this
 // side's list and closes the one of every address removed (never addr's).
-func (rt *lbRuntime) syncListenersLocked() {
+// It returns how many listens failed.
+func (rt *lbRuntime) syncListenersLocked() (failed int) {
 	want := map[string]bool{}
 	for _, ip := range lbListenIPs(rt.fc) {
 		want[ip] = true
@@ -485,14 +534,16 @@ func (rt *lbRuntime) syncListenersLocked() {
 		if have[ip] {
 			continue
 		}
-		x, err := engine.ListenReuse(net.JoinHostPort(ip, port))
+		x, err := engine.ListenLink(net.JoinHostPort(ip, port))
 		if err != nil {
 			rt.logf("lb: listen on %s: %v", ip, err)
+			failed++
 			continue
 		}
 		rt.ln.AddListener(x)
 		rt.logf("lb: now also listening on %s (port %s)", ip, port)
 	}
+	return failed
 }
 
 // lbStatus is the lb part of the status file.

@@ -263,6 +263,9 @@ func main() {
 	switch os.Args[1] {
 	case "version", "-v", "--version":
 		fmt.Println(versionLine())
+		if len(os.Args) > 2 && os.Args[2] == "--features" {
+			fmt.Println(featuresLine()) // zdu350 S2: read by hs2-safe-deploy.sh
+		}
 	case "keygen":
 		k, err := core.GenerateStatic()
 		must(err)
@@ -469,12 +472,17 @@ func runCmd(args []string) {
 	// Hard guarantee of prompt shutdown: when a signal cancels ctx, exit within
 	// a short grace period no matter what a goroutine is doing. Without this a
 	// single stuck read makes systemctl stop wait for the kill timeout.
-	go func() {
-		<-ctx.Done()
-		time.Sleep(3 * time.Second)
+	go exitOnCancel(ctx, 3*time.Second, func() {
 		encap.ReleaseAllEchoGuards() // os.Exit skips defers
 		os.Exit(0)
-	}()
+	})
+	// ZDU S6 (key on only): SIGUSR2 takeover + the new-process fd adoption.
+	// Review H1: a direct (non-reverse) config refuses every handover.
+	zduDirect = !fc.Reverse
+	zduStart(ctx, func(f string, a ...any) { log.Printf(f, a...) }, func() {
+		encap.ReleaseAllEchoGuards()
+		os.Exit(0)
+	})
 
 	// SIGHUP hot-reloads the TLS certificate (the renewal deploy-hook sends it via
 	// `systemctl reload`), so a Let's Encrypt renewal swaps the cert without
@@ -488,6 +496,7 @@ func runCmd(args []string) {
 			case <-ctx.Done():
 				return
 			case <-hup:
+				zduHups.Add(1) // ZDU (review 4 low): forwarded if it came between spawn and GO
 				reloadAllCerts("SIGHUP")
 				reloadLB("SIGHUP")
 			}
@@ -534,6 +543,7 @@ func runReality(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 	key := unhex(fc.SharedKey)
 	if dialing(fc) {
 		d := engine.NewRealityDialer(fc.Addr, fc.SNI, key)
+		notifyReady("dialer started")
 		must(eng.RunDial(ctx, d))
 		return
 	}
@@ -541,6 +551,7 @@ func runReality(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 	must(err)
 	ln, err := engine.NewRealityListener(fc.Addr, fc.CoverAddr, key, cert)
 	must(err)
+	notifyReady("listener bound")
 	must(eng.RunListen(ctx, ln))
 }
 
@@ -563,6 +574,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		d, err := tun.Open(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu)
 		must(err)
 		defer d.Close()
+		zduNoteTun(d)
 		dev = d
 		logf("tun %s up: %s peer %s (side channel)", d.Name(), fc.LocalCIDR, fc.PeerIP)
 	}
@@ -614,6 +626,8 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 				cfg.Advert = setupLB(fc, lb, nil, logf)
 			}
 		}
+		zduSetDrainSink(engine.ZDUForeignDrainAll) // ZDU S6: DRAINSTAT -> the S4 foreign-drain term
+		cfg.Ready = func() { notifyReady("stream edge, user ports bound") }
 		must(engine.RunIran(ctx, cfg))
 		return
 	}
@@ -665,6 +679,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			}
 		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
+		cfg.Ready = func() { notifyReady("stream exit (reverse), link pool started") }
 		must(engine.RunKharej(ctx, cfg))
 		return
 	}
@@ -678,6 +693,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	srv := &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 	srv.BackendFor = coverBackends(fc, logf)
 	cfg.Server = realityAcceptor(fc, srv, logf) // the front's listen side (tlscarrier/front.go)
+	cfg.Ready = func() { notifyReady("stream exit, link listener bound") }
 	must(engine.RunKharej(ctx, cfg))
 }
 
@@ -940,6 +956,7 @@ func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
 		} else {
 			d = engine.NewUDPDialer(fc.Addr, fc.BindLocalIP, shared, mtu)
 		}
+		notifyReady("dialer started")
 		must(eng.RunDial(ctx, d))
 		return
 	}
@@ -951,6 +968,7 @@ func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
 		ln, err = engine.NewUDPListener(fc.Addr, shared, mtu)
 	}
 	must(err)
+	notifyReady("listener bound")
 	must(eng.RunListen(ctx, ln))
 }
 
@@ -974,6 +992,7 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 	wantOffload := os.Getenv("HS2_TUN_OFFLOAD") != "0"
 	dev, err := tun.OpenWith(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu, tun.Options{Offload: wantOffload})
 	must(err)
+	zduNoteTun(dev)
 	defer dev.Close()
 	off := "TCP offload on"
 	switch {
@@ -1031,8 +1050,10 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 	}
 
 	if edge {
+		notifyReady("dgtun edge started")
 		must(engine.RunDgEdge(ctx, cfg))
 	} else {
+		notifyReady("dgtun exit started")
 		must(engine.RunDgExit(ctx, cfg))
 	}
 }
@@ -1061,11 +1082,13 @@ func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 	local := core.StaticKey{Public: unhex(fc.LocalPub), Private: unhex(fc.LocalPriv)}
 	if dialing(fc) {
 		d := engine.NewNoiseDialer(fc.Addr, fc.BindLocalIP, local, unhex(fc.RemoteStatic), unhex(fc.PSK))
+		notifyReady("dialer started")
 		must(eng.RunDial(ctx, d))
 		return
 	}
 	ln, err := engine.NewNoiseListener(fc.Addr, local, unhex(fc.PSK))
 	must(err)
+	notifyReady("listener bound")
 	must(eng.RunListen(ctx, ln))
 }
 
@@ -1183,7 +1206,7 @@ func newLB(fc fileConfig, logf func(string, ...any)) *engine.LB {
 // listenLB listens on addr and, with lb on, on every extra IP of this side's
 // list (same port), as one listener.
 func listenLB(fc fileConfig, logf func(string, ...any)) (net.Listener, error) {
-	ln, err := engine.ListenReuse(fc.Addr)
+	ln, err := engine.ListenLink(fc.Addr)
 	if err != nil {
 		return nil, err
 	}
@@ -1194,7 +1217,7 @@ func listenLB(fc fileConfig, logf func(string, ...any)) (net.Listener, error) {
 	_, port, _ := net.SplitHostPort(fc.Addr)
 	lns := []net.Listener{ln}
 	for _, ip := range extra {
-		x, err := engine.ListenReuse(net.JoinHostPort(ip, port))
+		x, err := engine.ListenLink(net.JoinHostPort(ip, port))
 		if err != nil {
 			for _, l := range lns {
 				l.Close()

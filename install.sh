@@ -2584,6 +2584,8 @@ remove_tunnel(){ # unit
   fi
   # the live status file, and the warm-start record next to it (same name, .warm)
   rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$sp" "${sp%.status.json}.warm"
+  # the authenticated peer IPs the daemon saved next to the config (b411)
+  [ -n "$cfg" ] && rm -f "${cfg%.json}.peer-ips"
   # Its systemd drop-ins (systemctl edit / set-property make them): useless
   # without the unit, and they would silently apply to a new tunnel of the
   # same name.

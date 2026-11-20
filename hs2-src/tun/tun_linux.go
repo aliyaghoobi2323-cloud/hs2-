@@ -37,8 +37,18 @@ type Device struct {
 	segs    []byte // segments of the last read, back to back
 	ends    []int  // each segment's end in segs
 	segi    int    // next segment to hand out
-	single  []byte // the last read when it was one packet (in rbuf)
-	dropped atomic.Uint64
+	// gate (ZDU S6, handed-off devices only): Read waits until the new
+	// process got GO (OpenReadGate), so it never takes a packet from the
+	// shared queue before its links can carry it. nil = no wait.
+	gate chan struct{}
+	// readsOff (ZDU S7, the old process after its handover committed): Read
+	// hands out what it already holds, then takes no more packets from the
+	// kernel queue the new process shares (StopReads / ResumeReads).
+	readsOff atomic.Bool
+	offMu    sync.Mutex
+	offCh    chan struct{}
+	single   []byte // the last read when it was one packet (in rbuf)
+	dropped  atomic.Uint64
 
 	// what the offloads saved, for the status line: kernel packets read and
 	// the segments they gave; writes made and the packets they carried;
@@ -97,16 +107,22 @@ func openFD(name string, vnet bool) (int, string, error) {
 
 // OpenWith is Open with options (offloads).
 func OpenWith(name, localCIDR, peerIP string, mtu int, o Options) (*Device, error) {
+	// ZDU hand-off (handoff.go): the old process gave us its fd for this
+	// name. Use it: no `ip link del` (at either site below), no re-create:
+	// the device, its address and routes are live and carry traffic.
+	if d, ok, err := takeHanded(name, mtu); ok {
+		return d, err
+	}
 	// Remove a stale interface of the same name left by a crashed/killed prior
 	// instance, so restart never fails with "device or resource busy".
-	exec.Command("ip", "link", "del", name).Run()
+	linkDel(name)
 	fd, actual, err := -1, "", error(nil)
 	offload := false
 	if o.Offload {
 		if fd, actual, err = openFD(name, true); err == nil {
 			offload = true
 		} else {
-			exec.Command("ip", "link", "del", name).Run()
+			linkDel(name)
 		}
 	}
 	if !offload {
@@ -153,7 +169,11 @@ func (d *Device) OffloadStats() OffloadCounts {
 // (a TCP packet of up to 64 KB is cut into MTU-sized segments): they are
 // handed out in turn, with no syscall until they are gone.
 func (d *Device) Read(p []byte) (int, error) {
+	if d.gate != nil {
+		<-d.gate // ZDU S6: a handed-off device reads only after GO
+	}
 	if !d.offload {
+		d.waitReadsOn()
 		return d.f.Read(p)
 	}
 	d.rmu.Lock()
@@ -181,6 +201,7 @@ func (d *Device) Read(p []byte) (int, error) {
 			}
 			return copy(p, s), nil
 		}
+		d.waitReadsOn() // ZDU S7: buffered segments above are handed out first
 		n, err := d.f.Read(d.rbuf)
 		if err != nil {
 			return 0, err

@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
+
 	"github.com/xtaci/smux"
 )
 
@@ -110,7 +112,8 @@ const (
 )
 
 type LinkManager struct {
-	b327 b327State // HS2_B327_PICKLIST candidate list (lm_b327_picklist.go)
+	cen  *censorEdge // censor351: the reverse edge's read-only path view (nil unless the detector is on)
+	b327 b327State   // HS2_B327_PICKLIST candidate list (lm_b327_picklist.go)
 	// rjEp: b313's rescue-join memo epoch (under mu's write lock).
 	rjEp uint64
 
@@ -157,6 +160,8 @@ type LinkManager struct {
 	// exitInfo is the exit's latest kindInfo answer on any link; a link whose
 	// own answer is late goes by it (userStreamHeader).
 	exitInfo atomic.Pointer[peerInfo]
+	// zdu: the peer instances seen on the links (ZDU generation pin, zdu_pin.go)
+	zdu zduLM
 
 	// The sizing brain and what feeds it. ap, sample, dec, lastSampleAt,
 	// targetDropAt and the log-throttle times are touched only by the pool's
@@ -303,6 +308,9 @@ type managedLink struct {
 	link Link
 	id   int
 
+	// b399Stall: its path is stalled (HS2_B399_STALLPICK, lm_b399_stallpick.go)
+	b399Stall atomic.Bool
+
 	// rjEp/rjBits: b313's per-pick memo of the rescue-join filters
 	// (HS2_B313_RJMEMO, mconn_b313_rjmemo.go); written and read only under
 	// m.mu's write lock, valid while rjEp == LinkManager.rjEp.
@@ -409,10 +417,21 @@ type managedLink struct {
 	cutKey       string    // ... the cut report key of its path (HS2_B339_CUTGRACE, b339.go)
 	cutLate      bool      // ... re-marked: it was already retiring when its path was cut, its slot is not replaced (b339.go)
 	steer        steerLink // HS2_LB_STEER (lb_auto2.go), under LinkManager.mu
+	zduOld       bool      // ZDU peerOld (zdu_counts.go): a link of an older peer instance, under LinkManager.mu
+	zduMixOld    bool      // ZDU: an older generation's link while both serve (mix phase); outside reconcile only (zdu_recon.go)
 }
 
 // serving reports whether the link takes new users. Caller holds m.mu.
 func (ml *managedLink) serving() bool {
+	return !ml.retiring && !ml.degraded && !ml.draining && ml.link.Alive() && !ml.suspect && !ml.zduOld
+}
+
+// up is serving() without the ZDU generation test: the mconn pickers that
+// carry the generation pin in their avoid list (zdu_pin.go) use it, so an
+// old-generation connection keeps placing its subs on its own (peerOld)
+// links while new connections, pinned to the current instance, never see
+// them. Caller holds m.mu.
+func (ml *managedLink) up() bool {
 	return !ml.retiring && !ml.degraded && !ml.draining && ml.link.Alive() && !ml.suspect
 }
 
@@ -465,6 +484,7 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 	m.closeLog = newBurstLog("mtcp: ", "retired links closed", logp)
 	m.replLog = newBurstLog("mtcp: ", "replacement links", logp)
 	m.retireLog = newRetireSum(logp)
+	zduRegisterLM(m)
 	return m
 }
 
@@ -611,6 +631,7 @@ func (m *LinkManager) DropLink(l Link, from string) {
 	}
 	m.links = kept
 	m.b327Bump() // HS2_B327_PICKLIST: the pool changed (lm_b327_picklist.go)
+	m.zduRefreshLocked()
 	n := m.aliveLocked()
 	if n == 0 {
 		m.exitInfo.Store(nil) // no link left: the next exit may be another process
@@ -640,7 +661,7 @@ func (m *LinkManager) markPoolRefused(l Link) {
 func (m *LinkManager) aliveLocked() int {
 	n := 0
 	for _, ml := range m.links {
-		if ml.link.Alive() {
+		if ml.link.Alive() && !ml.zduOld { // ZDU: an old generation's links are not capacity (zdu_counts.go)
 			n++
 		}
 	}
@@ -651,7 +672,7 @@ func (m *LinkManager) aliveLocked() int {
 func (m *LinkManager) countsLocked() (serving, retiring int) {
 	for _, ml := range m.links {
 		switch {
-		case !ml.link.Alive() || ml.degraded || ml.draining || ml.suspect:
+		case !ml.link.Alive() || ml.degraded || ml.draining || ml.suspect || ml.zduOld:
 		case ml.retiring:
 			retiring++
 		default:
@@ -673,6 +694,8 @@ func linkDownReason(l Link) string {
 // soft-bad ones and sizes the pool, until ctx ends. In accept mode (reverse
 // edge) it never dials: it sizes the pool through the exit (runAccept).
 func (m *LinkManager) Run(ctx context.Context) {
+	// ZDU B3: this pool's share leaves the zdu_peerold gauges (zdu_counts.go)
+	defer m.zduForget()
 	m.mu.Lock() // AddLink (reverse) reads it under the lock: links may arrive at once
 	m.scaleCtx = ctx
 	m.mu.Unlock()
@@ -696,6 +719,9 @@ func (m *LinkManager) Run(ctx context.Context) {
 	for i := min(m.warmCount(), (m.warmCount()+3)/4+gateInflight); i > 0; i-- {
 		m.queueDial(ctx, false)
 	}
+	if b399On.Load() {
+		go m.b399Loop(ctx) // HS2_B399_STALLPICK
+	}
 	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
 	for {
@@ -706,9 +732,12 @@ func (m *LinkManager) Run(ctx context.Context) {
 		case <-tick.C:
 			m.reap()
 			m.sampleHealth() // per-link throughput, pressure, loss, active flows
-			m.heal(ctx)      // replace soft-bad links make-before-break
-			m.autoscale(ctx) // decide the serving count and move the pool to it
-			m.drainTick()    // close retiring links once their connections end
+			// ZDU B6: a draining old process dials nothing (zdu_drainmode.go)
+			if !zduDraining.Load() {
+				m.heal(ctx)      // replace soft-bad links make-before-break
+				m.autoscale(ctx) // decide the serving count and move the pool to it
+			}
+			m.drainTick() // close retiring links once their connections end
 			m.publishStats()
 		}
 	}
@@ -917,6 +946,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 	for _, ml := range m.links {
 		switch {
 		case !ml.link.Alive() || ml.degraded || ml.draining || ml.suspect:
+		case zduReconOut(ml) && zduReconFix: // g401: an old generation's links are not capacity (zdu_recon.go)
 		case ml.retiring:
 			retiring = append(retiring, ml)
 		default:
@@ -1000,6 +1030,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 		serving = kept
 	}
 	S, R, up := len(serving), len(retiring), m.aliveLocked()
+	zduReconTraceLocked(m, T, serving, retiring, back, gone)
 	m.mu.Unlock()
 	if len(cutOut) > 0 {
 		m.log("%s", cutDrainNote(cutOut))
@@ -1385,6 +1416,9 @@ func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Dura
 // exactly like the direct pool, and routes users away from soft-bad links and
 // drops them — the exit then redials a fresh one to keep its count.
 func (m *LinkManager) runAccept(ctx context.Context) {
+	if b399On.Load() {
+		go m.b399Loop(ctx) // HS2_B399_STALLPICK
+	}
 	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
 	for n := 1; ; n++ {
@@ -1394,7 +1428,9 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			return
 		case <-tick.C:
 			m.sampleHealth()
-			m.reconcile(ctx, m.decideTarget())
+			if !zduDraining.Load() { // ZDU B6: no autopilot / poolctl target from a draining old edge (zdu_drainmode.go)
+				m.reconcile(ctx, m.decideTarget())
+			}
 			m.drainTick()
 			m.sweepReverse()
 			m.publishStats()
@@ -1595,7 +1631,7 @@ func (m *LinkManager) exitCeilingLocked() int {
 func (m *LinkManager) replacingLocked() int {
 	n := 0
 	for _, ml := range m.links {
-		if ml.draining && ml.drainReplace && ml.link.Alive() {
+		if ml.draining && ml.drainReplace && ml.link.Alive() && !ml.zduOld {
 			n++
 		}
 	}
@@ -1615,7 +1651,7 @@ func (m *LinkManager) ctlTarget() int {
 	m.mu.RLock()
 	d := m.ctlDrain
 	m.mu.RUnlock()
-	return t + d
+	return t + d + m.zduForeignTerm(time.Now) + m.zduBoostTerm() // HS2_ZDU foreign-drain term (zdu_exit.go), handover boot (zdu_gate.go)
 }
 
 // reclaimStalled closes, with FIN, the connections on the given draining links
@@ -1919,7 +1955,13 @@ func (m *LinkManager) pickLockedFP(limit int) (*managedLink, int32) {
 	drawn := m.steerDrawLocked(false, func(ml *managedLink) bool {
 		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit) && !stripeOn(ml)
 	})
-	for tier := 0; tier < 3; tier++ {
+	// g400 (ZDU): tier 1 (a healthy retiring link) takes the current
+	// generation's links only; an older generation's healthy link (peerOld)
+	// comes after them, in tier 2: a flow placed there keeps the old exit
+	// draining (zdu392: UDP flows opened at a storm second, when no new link
+	// was in tier 0, held the old Kharej to its next storm). Key off: zduOld
+	// is never set, tiers 1 and 2 hold the same links, the choice is as before.
+	for tier := 0; tier < 4; tier++ {
 		var chosen *managedLink
 		var chosenFP int32
 		var best pickKey
@@ -1933,10 +1975,14 @@ func (m *LinkManager) pickLockedFP(limit int) (*managedLink, int32) {
 			}
 			switch tier {
 			case 0:
-				if ml.retiring || ml.degraded || ml.draining || ml.suspect {
+				if ml.retiring || ml.degraded || ml.draining || ml.suspect || ml.zduOld {
 					continue
 				}
 			case 1:
+				if ml.degraded || ml.draining || ml.suspect || ml.zduOld {
+					continue
+				}
+			case 2:
 				if ml.degraded || ml.draining || ml.suspect {
 					continue
 				}
@@ -2056,6 +2102,18 @@ func (m *LinkManager) sampleHealth() {
 		}
 	}
 
+	if censor.Active() { // censor351 (censor351_edge.go): read-only copies; nothing when off
+		if m.accept { // the reverse edge only: the dialing side has LB.measure
+			co := make([]censorEdgeObs, 0, len(snap))
+			for _, ml := range snap {
+				if o := obs[ml]; o != nil && o.alive && o.tsOK {
+					co = append(co, censorEdgeObs{ml, o.ts})
+				}
+			}
+			m.censorEdgeTick(now, co)
+		}
+	}
+
 	// The other server's kernel TCP memory, from its links' latest records
 	// (mempressure.go): the guard reads it too.
 	peerPress := false
@@ -2097,6 +2155,7 @@ func (m *LinkManager) sampleHealth() {
 	stuckNow := 0                   // links found stuck before, still up (draining)
 
 	m.mu.Lock()
+	m.zduRefreshLocked() // ZDU peerOld marks (zdu_counts.go): nothing when off
 	// The path was slow for most links lately, or they are still getting
 	// over it (stuck.go): neither a stuck wait nor a burst of retransmits
 	// says anything about one link then — TCP resends what the slow spell
@@ -2107,7 +2166,9 @@ func (m *LinkManager) sampleHealth() {
 		o := obs[ml]
 		if o == nil { // arrived after the snapshot: counted, measured next tick
 			if ml.link.Alive() {
-				s.links = append(s.links, apLink{id: ml.id, serving: ml.serving(), retiring: ml.retiring, servingSince: ml.servingSince})
+				if !ml.zduOld { // ZDU: not in the autopilot's link counts (zdu_counts.go)
+					s.links = append(s.links, apLink{id: ml.id, serving: ml.serving(), retiring: ml.retiring, servingSince: ml.servingSince})
+				}
 			}
 			continue
 		}
@@ -2167,7 +2228,9 @@ func (m *LinkManager) sampleHealth() {
 				}
 			}
 			ml.pressed = false
-			s.links = append(s.links, ml.apLink())
+			if !ml.zduOld {
+				s.links = append(s.links, ml.apLink())
+			}
 			s.flowing += ml.flowing
 			continue
 		}
@@ -2360,7 +2423,9 @@ func (m *LinkManager) sampleHealth() {
 		}
 		s.G += ml.rate
 		s.flowing += ml.flowing
-		s.links = append(s.links, ml.apLink())
+		if !ml.zduOld {
+			s.links = append(s.links, ml.apLink())
+		}
 	}
 	logs = m.pathSilentMark(now, logs) // HS2_LB_PATH_SILENT (lb_pathsilent84.go); nothing when off
 	// The path is slow when two or more links wait (stuckWait+, moving
@@ -2676,14 +2741,18 @@ func (m *LinkManager) dialRoom() int {
 
 // dialRoomLocked is dialRoom for a caller holding m.mu.
 func (m *LinkManager) dialRoomLocked() int {
-	slotted := 0
+	slotted, n := 0, 0
 	for _, ml := range m.links {
+		if ml.zduOld { // ZDU: an old generation's links hold no slot (zdu_counts.go)
+			continue
+		}
+		n++
 		if !ml.draining {
 			slotted++
 		}
 	}
 	c := m.ceilLocked() // HS2_MCONN_STRIPE_HEADROOM (mconn_stripe_headroom.go)
-	return min(c-slotted, c+drainHeadroom(m.max)-len(m.links))
+	return min(c-slotted, c+drainHeadroom(m.max)-n)
 }
 
 // Target is the number of serving links the autopilot currently wants; the

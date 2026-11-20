@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -188,19 +189,56 @@ func realityCmd(args []string) {
 // run time (tlscarrier.PeerAllow, 24 h).
 func syncPeerExempt(fc fileConfig, logf func(string, ...any)) {
 	var ips []string
+	unres := 0
 	if lbOn(fc) {
 		_, remote, _, _ := lbLists(fc)
 		for _, e := range remote {
+			if net.ParseIP(e.IP) == nil {
+				unres++ // b411: "auto6" (resolved on the other side only)
+				continue
+			}
 			ips = append(ips, e.IP)
 		}
 	}
 	_, max, _ := linkEnvelope(fc)
 	tlscarrier.DefaultPeers.SetStatic(ips)
 	tlscarrier.DefaultPeers.SetBound(max)
+	// b411 (prod t1: static 0): the listening side's config usually does not
+	// hold the dialer's own source IPs (its primary is never listed there, and
+	// an "auto6" entry only resolves on the other side), so the IPs that
+	// authenticated a link are also saved next to the config and loaded into
+	// the static part at the next start.
+	loaded := -1
+	if peerStoreOnce.CompareAndSwap(false, true) && tlscarrier.PeerExemptOn.Load() {
+		n, err := tlscarrier.DefaultPeers.SetStore(peerIPsPath(configPath))
+		loaded = n
+		if err != nil && logf != nil {
+			logf("front: reality pre-hello cap: cannot read the saved peer IPs: %v", err)
+		}
+	}
 	if logf != nil && tlscarrier.PeerExemptOn.Load() && tunnelOrIPReality(fc) {
 		s := tlscarrier.DefaultPeers.Snap()
-		logf("front: reality pre-hello cap: %d configured peer IPs exempt (+ IPs that authenticated a link in 24 h), %d pre-hello conns per peer IP", s.Static, s.Bound)
+		logf("front: reality pre-hello cap: %d peer IPs exempt (%d configured, %d unresolved auto6 skipped, %d saved from earlier links; + IPs that authenticated a link in 24 h, IPv6 by /64), %d pre-hello conns per peer IP", s.Static, len(ips), unres, max0(loaded), s.Bound)
 	}
+}
+
+// peerStoreOnce: the save file is opened once per process (reloads only
+// replace the configured part).
+var peerStoreOnce atomic.Bool
+
+func max0(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// peerIPsPath (b411): <config>.peer-ips next to the config ("" = no saving).
+func peerIPsPath(cfgPath string) string {
+	if cfgPath == "" {
+		return ""
+	}
+	return strings.TrimSuffix(cfgPath, ".json") + ".peer-ips"
 }
 
 // tunnelOrIPReality: some listening IP of fc serves a reality or "both" front.

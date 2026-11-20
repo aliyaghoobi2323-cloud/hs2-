@@ -195,6 +195,12 @@ type linkMeter struct {
 	peerInfo    atomic.Pointer[peerInfo]
 	infoDone    atomic.Bool
 	infoRefused atomic.Bool
+	// zduOld: the link is peerOld in its LinkManager (zdu_counts.go, set
+	// only with HS2_ZDU on); the L3 picker keeps new packets off it (zdu_l3.go).
+	zduOld atomic.Bool
+	// zduL3At: ctrlNow of the last TUN packet over the link either way (HS2_ZDU
+	// on only; review M3: zduBootClose never closes a link carrying TUN flows).
+	zduL3At atomic.Int64
 
 	// guard watches the link's smux session for a reader stuck on a full
 	// receive buffer (wedge.go); set once by newSession, before any stream.

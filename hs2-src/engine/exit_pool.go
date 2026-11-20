@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -84,6 +85,7 @@ type exitPool struct {
 	want    int // last target requested by the edge (clamped)
 	initial int // the count held until the edge speaks (first setTarget)
 	live    int // slots whose link is currently up (for the log)
+	zduBoot int // HS2_ZDU: boot spares started in this boost episode (zdu_gate.go)
 	parent  context.Context
 
 	// pk236: "exit pool target" lines at most once per exitTargetLogGap; the
@@ -129,6 +131,10 @@ type exitSlot struct {
 	// spare: started beyond the target for the balancer (addSpares) and not
 	// dialed yet: it does not retire for being over the target. Under p.mu.
 	spare bool
+	// zmtr: the meter of the slot's live link, bound with HS2_ZDU=1 so the
+	// pool can tell a legacy slot (its edge an older Iran instance,
+	// zdu_exit.go). Nil with the key off and between links.
+	zmtr atomic.Pointer[linkMeter]
 }
 
 // newExitPool builds a pool but starts no slots; the caller sets p.serve and
@@ -181,12 +187,16 @@ func (p *exitPool) bounds() (lo, hi int) {
 // the slot whose link that was retires instead of redialing (see runSlot). A
 // link with users on it is therefore never cut to shrink the pool.
 func (p *exitPool) setTarget(n int) {
+	asked := n // HS2_ZDU handover boot: above the ceiling (zdu_gate.go)
 	lo, hi := p.bounds()
 	if n < lo {
 		n = lo
 	}
 	if n > hi {
 		n = hi
+	}
+	if zduDraining.Load() { // ZDU B6: no poolctl target while draining (zdu_drainmode.go)
+		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -195,14 +205,18 @@ func (p *exitPool) setTarget(n int) {
 	if p.initial == 0 {
 		p.initial = n
 	}
-	for len(p.slots) < n { // grow
+	for c := p.curSlotsLocked(); c < n; c++ { // grow (legacy ZDU slots do not count)
 		p.startSlotLocked()
 	}
+	p.zduBootLocked(asked, hi)
 	switch {
 	case prev == 0:
 		p.log("mtcp: exit pool starting %d links (the edge sets the count once it is connected)", n)
 	case n != prev:
 		p.logTargetLocked(n, prev, time.Now())
+	}
+	if zduReconTrace && n != prev && zduOn.Load() { // HS2_ZDU_TRACE (lab only, zdu_recon.go)
+		p.log("zdu-trace: exit target %s want=%d (was %d) slots=%d cur=%d live=%d", time.Now().UTC().Format("15:04:05.000"), n, prev, len(p.slots), p.curSlotsLocked(), p.live)
 	}
 }
 
@@ -241,7 +255,9 @@ func (p *exitPool) logTargetLocked(n, prev int, now time.Time) {
 func (p *exitPool) retireIfOver(s *exitSlot) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.slots) <= p.want || s.spare {
+	// ZDU B6: a draining old exit holds no slot target: every slot whose
+	// link ended, or that would dial, leaves (zdu_drainmode.go).
+	if !zduDraining.Load() && (s.spare || p.curSlotsLocked() <= p.want) {
 		return false
 	}
 	for i, x := range p.slots {
@@ -378,6 +394,7 @@ func (p *exitPool) dialed() int {
 // runSlot keeps one link dialed until its slot is cancelled.
 func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 	backoff := slotBackoffMin
+	sctx := zduSlotCtx(ctx, s) // HS2_ZDU: the serve path binds its link to s
 	for ctx.Err() == nil {
 		// A slot without a link above the target retires instead of dialing
 		// (the target fell while it waited for its turn or backed off).
@@ -425,10 +442,16 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		n := p.dialed()
 		up := time.Now()
 		p.upLog.log("mtcp: exit link up to edge (slot %d; now %d)", s.id, n)
-		why := p.serve(ctx, car) // returns when the link dies or ctx ends
+		why := p.serve(sctx, car) // returns when the link dies or ctx ends
 		car.Close()
 		n = p.incLive(-1)
 		if ctx.Err() != nil {
+			return
+		}
+		// HS2_ZDU: a link of an older Iran instance (the old process drains)
+		// is not redialed; the new process has its own slots (zdu_exit.go).
+		if p.zduRetireLegacy(s) {
+			p.downLog.log("mtcp: exit slot %d retired — its link served an older Iran process (handover drain), not redialed (now %d)", s.id, n)
 			return
 		}
 		// Above the edge's target, a slot whose link ended retires instead of
@@ -621,19 +644,10 @@ func jitterAround(d time.Duration) time.Duration {
 
 // servePoolCtl runs the EXIT side: it reads desired counts from the edge and
 // applies them to the pool until the stream ends.
+// The link's own stream goes through servePoolCtlFrom (zdu_exit.go), which
+// adds the HS2_ZDU instance filter; this is it without a link.
 func servePoolCtl(ctx context.Context, st io.ReadWriteCloser, pool *exitPool) {
-	defer st.Close()
-	if pool == nil {
-		io.Copy(io.Discard, st) // no pool here (direct exit): just drain
-		return
-	}
-	buf := make([]byte, poolCtlLen)
-	for ctx.Err() == nil {
-		if _, err := io.ReadFull(st, buf); err != nil {
-			return
-		}
-		pool.setTarget(int(binary.BigEndian.Uint16(buf)))
-	}
+	servePoolCtlFrom(ctx, st, pool, nil)
 }
 
 // addSpares makes sure n spare slots are pending: started beyond the edge's
@@ -641,6 +655,9 @@ func servePoolCtl(ctx context.Context, st io.ReadWriteCloser, pool *exitPool) {
 // balancer places it on. At most lb2SpareMax slots over the target, none
 // during an outage. It returns how many it started.
 func (p *exitPool) addSpares(n int) int {
+	if zduDraining.Load() { // ZDU B6: a draining old exit dials no spares (zdu_drainmode.go)
+		return 0
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	pending := 0
@@ -655,7 +672,8 @@ func (p *exitPool) addSpares(n int) int {
 		limit = fillLimit(p.want)
 		n = min(n, max(lb2SpareMax, lbSparePerRound)) // at most lb2SpareMax (or HS2_LB_SPARE_PER_ROUND) pending at once
 	}
-	for pending < n && len(p.slots) < limit && !p.outage && p.want > 0 {
+	leg := p.zduLegacyLocked() // HS2_ZDU legacy slots do not count
+	for pending < n && len(p.slots)-leg < limit && !p.outage && p.want > 0 {
 		p.startSlotLocked()
 		p.slots[len(p.slots)-1].spare = true
 		pending++

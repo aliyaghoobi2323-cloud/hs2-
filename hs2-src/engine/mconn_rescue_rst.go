@@ -667,7 +667,7 @@ func (e *mconnEdge) sendEndNotice() {
 		return
 	}
 	defer func() { <-rstEndFlight }()
-	var avoid []any
+	avoid := e.zduAvoid(nil) // ZDU: the end notice goes to the conn's own instance (zdu_pin.go)
 	for tries := 0; tries < 3; tries++ {
 		l, rel, ok := e.lm.pickPlaneCall(planeLight, avoid)
 		if !ok {

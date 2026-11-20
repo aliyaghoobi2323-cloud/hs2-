@@ -1163,13 +1163,14 @@ func (realCreator) remove(unit, cfgPath string) {
 
 // removeUnitFiles removes the tunnel's unit file, its drop-in directory
 // (presets, toggles, CPUAffinity: backed up by backupTunnel), config and
-// self-signed certificate.
+// self-signed certificate, and the saved peer IPs (CONFIG.peer-ips).
 func removeUnitFiles(unit, cfgPath string) {
 	os.Remove(filepath.Join(systemdDir, unit+".service"))
 	os.RemoveAll(filepath.Join(systemdDir, unit+".service.d"))
 	os.Remove(filepath.Join(systemdDir, "hs2-alert-"+unit+".timer"))
 	os.Remove(filepath.Join(systemdDir, "hs2-alert-"+unit+".service"))
 	os.Remove(cfgPath)
+	os.Remove(peerIPsPath(cfgPath)) // b411 save file of authenticated peer IPs (rel69r-rc6)
 	os.Remove(filepath.Join(certDir, unit+".crt"))
 	os.Remove(filepath.Join(certDir, unit+".key"))
 }
