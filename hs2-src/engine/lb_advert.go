@@ -191,7 +191,8 @@ type LBAdvert struct {
 	// exit's listener.
 	serving   func() []edgePathCount
 	onServing func([]edgePathCount)
-	lastAt    time.Time // the last exchange (either side)
+	lastAt    time.Time      // the last exchange (either side)
+	zduCur    func() zduInst // b436 edge: the pool's current peer instance (zdu_report436.go), nil: none
 	log       func(string, ...any)
 }
 
@@ -377,7 +378,9 @@ func (a *LBAdvert) runEdge(ctx context.Context) {
 			}
 			ls = append(ls, l)
 		}
+		cur := a.zduCur
 		a.mu.Unlock()
+		ls = zduReportLinks(ls, cur) // b436: the new Kharej's report while the old one drains (zdu_report436.go)
 		for _, l := range ls {
 			ro, ok := l.(rawStreamOpener)
 			if ok && a.exchange(ro) == nil {

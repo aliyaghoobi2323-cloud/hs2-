@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -94,7 +95,8 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		lm.EnableSteer() // HS2_LB_STEER (lb_auto2.go); off: nothing changes
 	}
 	if cfg.Advert != nil {
-		cfg.Advert.OnReport(lm.SteerReport) // the dialing side's path report (lb_report.go)
+		cfg.Advert.OnReport(lm.SteerReport)     // the dialing side's path report (lb_report.go)
+		cfg.Advert.SetZDUCurrent(lm.zduCurrent) // b436: the report from the current Kharej (zdu_report436.go)
 		if b331SparePath && lbAuto2 {
 			cfg.Advert.SetServing(lm.edgePathCounts) // b331: per-path serving counts (lb_sparepath331.go)
 		}
@@ -285,40 +287,29 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	for _, p := range cfg.Ports {
 		bind := net.JoinHostPort(cfg.ListenIP, p)
 		port, _ := strconv.Atoi(p) // the tag the exit routes by (0: none)
-		ln, err := ListenReuse(bind)
+		// b428: EADDRINUSE waits in the background (listen_retry.go).
+		tw, err := listenUserRetry(ctx, p+"/tcp", logf, func() (net.Listener, error) { return ListenReuse(bind) }, func(ln net.Listener) {
+			go func() { <-ctx.Done(); ln.Close() }()
+			go serveUserPort(ctx, ln, &cfg, lm, p, port, logf)
+		})
 		if err != nil {
 			return err
 		}
-		go func() { <-ctx.Done(); ln.Close() }()
-		go func() {
-			// A user port must not die on a transient accept error (out of
-			// file descriptors under a connection flood): back off and retry.
-			var bo acceptBackoff
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					if !bo.wait(ctx, err, logf, "user port "+p) {
-						return
-					}
-					continue
-				}
-				bo.ok()
-				if cfg.ACME.On(port) {
-					go acmeServeUser(cfg.ACME, c, port, func(c net.Conn) { serveUserTCP(ctx, c, lm, port) })
-					continue
-				}
-				go serveUserTCP(ctx, c, lm, port)
-			}
-		}()
 		msg := "tcp"
 		if cfg.UDP {
-			pc, err := listenPacketUDP(bind)
+			uw, err := listenUserRetry(ctx, p+"/udp", logf, func() (net.PacketConn, error) { return listenPacketUDP(bind) }, func(pc net.PacketConn) {
+				go func() { <-ctx.Done(); pc.Close() }()
+				go serveUserUDP(ctx, pc, lm, port, logf)
+			})
 			if err != nil {
 				return err
 			}
-			go func() { <-ctx.Done(); pc.Close() }()
-			go serveUserUDP(ctx, pc, lm, port, logf)
+			tw = tw || uw
 			msg = "tcp+udp"
+		}
+		if tw {
+			logf("user port %s waiting for its address (%s), carried over the link pool once bound", p, msg)
+			continue
 		}
 		logf("user port %s open (%s), carried over the link pool", p, msg)
 	}
@@ -327,6 +318,29 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	}
 	<-ctx.Done()
 	return nil
+}
+
+// serveUserPort is a user port's accept loop (b428: split out so a bind that
+// waited on EADDRINUSE starts it later).
+func serveUserPort(ctx context.Context, ln net.Listener, cfg *IranConfig, lm *LinkManager, p string, port int, logf func(string, ...any)) {
+	// A user port must not die on a transient accept error (out of
+	// file descriptors under a connection flood): back off and retry.
+	var bo acceptBackoff
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			if !bo.wait(ctx, err, logf, "user port "+p) {
+				return
+			}
+			continue
+		}
+		bo.ok()
+		if cfg.ACME.On(port) {
+			go acmeServeUser(cfg.ACME, c, port, func(c net.Conn) { serveUserTCP(ctx, c, lm, port) })
+			continue
+		}
+		go serveUserTCP(ctx, c, lm, port)
+	}
 }
 
 // pickWait returns a link, waiting up to a few seconds for one to come up.
@@ -395,13 +409,28 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 	return st, release, ok
 }
 
+// openStreamSkip is openStream leaving out the links in skip while another
+// link can take the stream (b449h: serveUserTCP's fallback after a failed
+// mconn open).
+func openStreamSkip(ctx context.Context, lm *LinkManager, port int, skip []Link) (stream, func(), bool) {
+	st, release, _, ok := openStreamOnSkip(ctx, lm, false, port, skip)
+	return st, release, ok
+}
+
 // openStreamOn is openStream, also returning the link the stream is on (UDP
 // flows keep it for the ZDU move, zdu_udpmove.go).
 func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), Link, bool) {
+	return openStreamOnSkip(ctx, lm, udp, port, nil)
+}
+
+// openStreamOnSkip is openStreamOn starting with the links in skip left out;
+// each try's failed link joins them (b449h, mconn_b449h_openskip.go).
+func openStreamOnSkip(ctx context.Context, lm *LinkManager, udp bool, port int, skip []Link) (stream, func(), Link, bool) {
 	// A link can die between Pick and OpenStream; try another one.
 	t0 := time.Now()
+	skip = slices.Clip(skip)
 	for try := 0; try < 3; try++ {
-		link, release, ok := pickWait(ctx, lm, !udp)
+		link, release, ok := pickWaitSkip(ctx, lm, !udp, skip)
 		if !ok {
 			obs.openErr.Add(1)
 			return nil, nil, nil, false
@@ -414,6 +443,7 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int) (str
 			}
 			st.Close()
 		}
+		skip = append(skip, link) // b449h: the next try leaves it out
 		release()
 	}
 	obs.openErr.Add(1)
@@ -423,11 +453,20 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int) (str
 func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {
 	// HS2_MCONN: one connection over several links (mconn_link.go), when the
 	// exit reads it; otherwise, or when no sub could be opened, the one stream.
-	if mconnOn.Load() && lm.exitInfo.Load().mconn() && serveUserMConn(ctx, user, lm, port) {
-		return
+	fb := false
+	var skip []Link
+	if mconnOn.Load() && lm.exitInfo.Load().mconn() {
+		done, failed := serveUserMConn(ctx, user, lm, port)
+		if done {
+			return
+		}
+		fb, skip = true, failed
 	}
-	st, release, ok := openStream(ctx, lm, false, port)
+	st, release, ok := openStreamSkip(ctx, lm, port, skip)
 	if !ok {
+		if fb {
+			b449gOpen.fbFail.Add(1) // b449g diagnostic
+		}
 		user.Close()
 		return
 	}

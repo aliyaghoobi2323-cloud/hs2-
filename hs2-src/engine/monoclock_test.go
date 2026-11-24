@@ -38,8 +38,10 @@ func TestMonoNanoRoundTrip(t *testing.T) {
 func TestNoWallClockNanosInEngine(t *testing.T) {
 	// control: an echoed ping stamp, rtt>0 guarded; zdu: the process instance
 	// id is a one-off start stamp (not a hot-path clock), compared only
-	// between two processes of one server
-	allow := map[string]bool{"control.go": true, "monoclock.go": true, "zdu.go": true}
+	// between two processes of one server; zdu_lbseed: the LBSTATE snapshot
+	// stamp (b438), aged across the two processes of one hand-off (monoNano
+	// has a per-process base), a step only makes it stale = no seed
+	allow := map[string]bool{"control.go": true, "monoclock.go": true, "zdu.go": true, "zdu_lbseed.go": true}
 	re := regexp.MustCompile(`\.UnixNano\(\)|time\.Unix\(0,`)
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {

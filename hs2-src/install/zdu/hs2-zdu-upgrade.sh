@@ -5,6 +5,7 @@
 # Needs: the unit runs a binary with "features: zdu", HS2_ZDU=1 in its environment and 30-zdu.conf
 # (Type=notify, NotifyAccess=all): see hs2-zdu-install.sh. Otherwise use hs2-safe-deploy.sh (cold restart).
 # Steps: verify (sha, root-owned path, zdu feature, unit, env, drop-in, no HS2_ZDU_DRAIN < probation + 60 s) -> refuse HH:00-HH:03 UTC
+#   and when READY + probation would reach that window (the running binary decides: hs2 zdu-window)
 #   -> refuse when the unit's HS2_* environment (drop-ins, EnvironmentFile) differs from the running process's
 #      (a live handover inherits the running environment: env changes need a cold restart, hs2-safe-deploy.sh)
 #   -> refuse while a previous handover's old process still drains (review 4 M1)
@@ -53,15 +54,19 @@ DD=$(dropin_env "$(dirname "$CONF")" HS2_ZDU_DRAIN); DP=$(dropin_env "$(dirname 
 drain_override_ok "$DD" "$DP" || fin "ABORT a drop-in of $U sets HS2_ZDU_DRAIN=$DD: below probation ${DP:-45s} + 60 s (or unparseable)" 1
 OLD=$(grep -oE '^ExecStart=/[^ ]+' "$CONF" | head -1 | cut -d= -f2)
 [ "$OLD" = "$NEW" ] && fin "ALREADY $NEW in $(basename "$CONF")" 0
-# HH:00-HH:03:59 UTC (the hourly xray restart storm): refused here, and by the process too
-M=$(date -u +%-M)
-[ -n "${HS2_ZDU_UPGRADE_FAKE_MIN:-}" ] && M=$HS2_ZDU_UPGRADE_FAKE_MIN # lab only
+# HH:00-HH:03:59 UTC (the hourly xray restart storm): refused here, and by the process too. b430: one rule for both:
+# the running binary decides (`hs2 zdu-window`, feature "zduwin": the same check its SIGUSR2 handler makes, READY +
+# probation + margin must end before the window opens), asked for now + HS2_ZDU_WINDOW_SLACK (10 s: this script's
+# remaining checks before the SIGUSR2), so the script is never less strict than the process. An older running binary:
+# zdu_window_sh, the same arithmetic in seconds.
+NOW=$(date +%s)
+[ -n "${HS2_ZDU_UPGRADE_FAKE_MIN:-}" ] && NOW=$(( NOW / 3600 * 3600 + 10#$HS2_ZDU_UPGRADE_FAKE_MIN * 60 )) # lab/tests only
+[ -n "${HS2_ZDU_UPGRADE_FAKE_NOW:-}" ] && NOW=$HS2_ZDU_UPGRADE_FAKE_NOW # tests only (unix seconds)
 # The restart minute follows the Kharej xray-loop's phase (sleep 3600, seen at HH:01 UTC), not a time zone:
 # HS2_ZDU_STORM_MIN in the running process's environment moves the window [M-1, M+3) (default 1).
-SM=$(storm_min "$(env_of "$PROC/$PID/environ" HS2_ZDU_STORM_MIN)")
-REL=$(( (M - (SM + 59) % 60 + 60) % 60 )) # minutes since the window opened
-[ "$REL" -le 3 ] && fin "REFUSED window HH:$(printf %02d $(( (SM+59)%60 )))-HH:$(printf %02d $(( (SM+2)%60 ))) UTC (minute $M)" 4
-[ "$REL" -ge 58 ] && fin "REFUSED window opens in <= 2 min (minute $M): READY + probation would run into the restart storm" 4
+SMV=$(env_of "$PROC/$PID/environ" HS2_ZDU_STORM_MIN)
+WR=$(zdu_window "$OLDEXE" "$NOW" "$SMV" "$PR" "${HS2_ZDU_WINDOW_SLACK:-10}")
+case "$WR" in OK*) ;; *) fin "REFUSED $WR" 4;; esac
 # Every connected peer must run ZDU (capExtZDU + instance): without it the far side has no generation pin
 # (review F2). The running process rewrites $RUN/$U.peers every 5 s; the process re-checks at SIGUSR2.
 PF="$RUN/$U.peers"; P=$(cat "$PF" 2>/dev/null)
@@ -69,7 +74,12 @@ PF="$RUN/$U.peers"; P=$(cat "$PF" 2>/dev/null)
 PA=$(( $(date +%s) - $(stat -c %Y "$PF") ))
 [ "$PA" -le 30 ] || fin "REFUSED $PF is ${PA}s old (stale)" 4
 case "$P" in ZDU-DIRECT*) fin "REFUSED direct (non-reverse) mode: live handover is supported in reverse mode only (only Iran dials in direct mode; the new Kharej would get no links of its own). Use a cold restart (hs2-safe-deploy.sh)" 4;; esac
-case "$P" in ZDU-OK*) ;; *) fin "REFUSED peers: $P (every connected peer must run ZDU; upgrade the other side first)" 4;; esac
+# b443: right after a drain end (the other side's old process just exited) a link can be up for a moment before its
+# kindInfo (the ZDU pin) arrives: "ZDU-NO links=194 zdu=193" 9 s after a drain end (lab r443). Wait once and re-read.
+PRW="${HS2_ZDU_PEER_RETRY:-15}"
+case "$P" in ZDU-OK*) ;; *) log "peers: $P: waiting ${PRW}s once (a link just up may not have announced ZDU yet), then re-checking"
+  sleep "$PRW"; P=$(cat "$PF" 2>/dev/null)
+  case "$P" in ZDU-OK*) log "peers: $P after the wait: going on";; *) fin "REFUSED peers: $P (every connected peer must run ZDU; upgrade the other side first; re-checked after ${PRW}s)" 4;; esac;; esac
 # Review 4 M1: no new handover while the previous one's old process still drains (3 processes / 3
 # generations were never designed). The running MainPID is then a hand-off child whose parent (the old
 # process) is alive: its PPid is not 1. UNIT.handover says OK/PROBATION until the old logs "drain end"
@@ -89,17 +99,27 @@ DRIFT=$(env_drift "$U" "$PROC/$PID/environ")
 
 [ -d "$RUN" ] || mkdir -m 0700 -p "$RUN"  # b396: rel69q /run/hs2 is 0700 root (sec370); never widen an existing dir
 T=$(mktemp "$RUN/.next.XXXXXX"); printf '%s\n' "$NEW" > "$T"; chmod 0600 "$T"; chown 0:0 "$T"; mv -f "$T" "$NEXT"
-rm -f "$HO"
+# b430: a refused SIGUSR2 leaves UNIT.handover as it was (a previous DRAIN-END/DRAIN-ABORT stays readable); only a
+# marker written after the signal (a new inode from the process's atomic write, or new content) is this handover's.
+HO0=$(stat -c %i "$HO" 2>/dev/null); HOC0=$(cat "$HO" 2>/dev/null)
 log "upgrade $OLDEXE (pid $PID) -> $NEW: SIGUSR2"
 T0=$(date +%s); SINCE="@$((T0-1))"
 kill -USR2 "$PID" || fin "ABORT kill -USR2 $PID failed" 1
 state=""; seen=""
 while [ $(( $(date +%s) - T0 )) -lt "$WAIT" ]; do
   s=$(cat "$HO" 2>/dev/null)
+  [ -n "$s" ] && [ "$(stat -c %i "$HO" 2>/dev/null)" = "$HO0" ] && [ "$s" = "$HOC0" ] && s="" # still the previous marker
   if [ -n "$s" ] && [ "$s" != "$seen" ]; then seen="$s"; log "handover: $s (t+$(( $(date +%s)-T0 ))s, MainPID $(mp))"; fi
   case "$s" in OK*) state=OK; break;; REVERTED*) state=REVERTED; break;; esac
   if [ -z "$s" ]; then
     r=$(journalctl -u "$U" --since "$SINCE" --no-pager -o cat 2>/dev/null | grep 'zdu: handover refused' | tail -1)
+    # b443: the process re-checks its peers at SIGUSR2; a ZDU-NO there (a link without its kindInfo yet) gets one
+    # retry after the same wait, with the file gate re-run first.
+    case "$r" in *"handover refused: peers: ZDU-NO"*) if [ -z "${PRT:-}" ]; then PRT=1
+        log "process refused (${r#*handover refused: }): waiting ${PRW}s once, then SIGUSR2 again"; sleep "$PRW"
+        P=$(cat "$PF" 2>/dev/null); case "$P" in ZDU-OK*) ;; *) rm -f "$NEXT"; fin "REFUSED by pid $PID: $r (re-checked after ${PRW}s: $P)" 4;; esac
+        log "upgrade $OLDEXE (pid $PID) -> $NEW: SIGUSR2 (retry)"; T0=$(date +%s); SINCE="@$((T0-1))"
+        kill -USR2 "$PID" || fin "ABORT kill -USR2 $PID failed" 1; sleep 0.5; continue; fi;; esac
     [ -n "$r" ] && { rm -f "$NEXT"; fin "REFUSED by pid $PID: $r" 4; }
     kill -0 "$PID" 2>/dev/null || fin "ABORT old pid $PID died before any handover state; unit $(systemctl is-active "$U")" 5
   fi
@@ -116,4 +136,5 @@ sed -i "s#^ExecStart=$OLD #ExecStart=$NEW #" "$CONF"
 grep -q "^ExecStart=$NEW " "$CONF" || { cp -a "$BK/$U.service.d/$(basename "$CONF")" "$CONF"; fin "OK-LIVE pid $NP but the ExecStart sed failed (drop-in left at $OLD: a cold start runs the old binary)" 6; }
 systemctl daemon-reload
 mkdir -p "$ETC"; cp -a "$CONF" "$LG"
+prune_backups "$ST" "$U" zdu "$BK" | while IFS= read -r l; do log "$l"; done # b430
 fin "OK $NEW pid=$NP ($(basename "$CONF") ExecStart switched, last-good recorded, backup $BK)" 0

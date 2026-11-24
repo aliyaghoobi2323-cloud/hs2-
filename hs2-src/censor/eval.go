@@ -202,7 +202,10 @@ type ctr struct {
 	// step back R1: RST / timeout kills on the scope after one of our
 	// redials or accepts succeeded in the open episode (the redials being
 	// killed too: an injector, not a one-shot restart).
-	killPostOK                                    uint32
+	killPostOK uint32
+	// b414: resets on links the Iran end reported it aborted itself
+	// (NotePeerAborts); kept out of every rule, shown as peerab=.
+	peerAb                                        uint32
 	acc                                           [nAcceptOutcomes]uint32
 	samples, silent, lossy, highQ                 uint32
 	moving                                        uint32 // slot 5: readings with bytes acked (path carries data)
@@ -234,6 +237,7 @@ func (c *ctr) add(o *ctr) {
 	c.rstFastNoQ += o.rstFastNoQ
 	c.rstPreBurst += o.rstPreBurst
 	c.killPostOK += o.killPostOK
+	c.peerAb += o.peerAb
 	for i := range c.acc {
 		c.acc[i] += o.acc[i]
 	}
@@ -350,7 +354,12 @@ type episode struct {
 	id           string
 	scope        netip.Addr
 	opened, last time.Time
-	sum          ctr
+	// b414: the open time a held reset's own time would have given (one
+	// tick earlier, when resets held for a late abort report opened it);
+	// zero means opened. Used only for "born after the open" and for which
+	// released resets join the kill statistics.
+	bornFrom time.Time
+	sum      ctr
 	killStats
 	// slot 10 (u): the episode saw a standing-queue tick. The clean ticks
 	// after the queue's last tick are held apart (pend, pendKill) until
@@ -406,7 +415,46 @@ type scope struct {
 	// step back R1: a redial / accept succeeded while the episode was open
 	// (kills from then on count as killPostOK); cleared with no episode.
 	okAfterKill bool
+	// b414: when okAfterKill was set (the first success in the open
+	// episode), so a held reset released later is judged at its own time.
+	okAt time.Time
+	// b414: this tick's flushHeld released resets of the previous tick.
+	released bool
+	// b414 peer-abort matching (Kharej side). peerSig: the Iran end of
+	// this scope has reported its own aborts at least once (a newer Iran);
+	// until then nothing below is used and resets count as they always
+	// did. peerCredit: reported aborts not yet matched to a reset, valid
+	// until peerCreditAt+peerWin. held: resets waiting up to peerHold for
+	// the report (it rides the next control ping, 2-4 s on a busy link).
+	peerSig      bool
+	peerCredit   uint64
+	peerCreditAt time.Time
+	held         []event
+	// b414 v4: peerOrphan: the last link on this IP whose pings carried the
+	// count ended (evPeerOrphan); held resets then wait for the next link's
+	// first ping (any evPeerAbort clears it) or PeerOrphanHold.
+	peerOrphan bool
+	// b414 v5: when the Iran end's own-abort count on this IP last rose
+	// (an evPeerAbort with n > 0); zero: never. Gates the orphan hold.
+	peerAbAt time.Time
 }
+
+// b414: how long a Kharej reset waits for the Iran end's abort report, and
+// how long a report stays valid for a later reset. Neither is a score knob:
+// they bound the control ping's cadence (controlInterval 3 s, 2-4 s off the
+// beat) plus one evaluator tick.
+const (
+	peerHold = 5 * time.Second
+	peerWin  = 10 * time.Second
+	heldCap  = 256
+	// PeerOrphanHold (b414 v4): how long a reset on an IP with no live
+	// reporting link waits for the next link's first ping, which carries
+	// the aborts the dead links could not report. Two minutes: an Iran end
+	// that has not got a link through by then is cut off (the episode is
+	// the handshake failures, judged without the resets), and a reset is
+	// still counted at its own time, so only the verdict line is later.
+	PeerOrphanHold = 2 * time.Minute
+)
 
 // pathIn tallies the path-sample inputs one scope received since start:
 // samples, how many had PeerLoss / PathLimited known, the maxima, and the
@@ -453,6 +501,16 @@ type evaluator struct {
 	usersBase   float64
 	usersHave   bool
 	peerRestart time.Time
+	// b437 Q2: ZDU generation changes. ownUntil: the own-restart grace's end
+	// for a ZDU child (its handover's end; zero: start + ownGrace).
+	// peerZDU: the last peer grace came from a peer generation change, not
+	// a restart. genAt: the last generation event of the peer (a burst of
+	// old-link ends opens one grace, at its first). nGenOld / nGenNew:
+	// peerOld link ends / new peer generations seen (status).
+	ownUntil         time.Time
+	ownZDU, peerZDU  bool
+	genAt            time.Time
+	nGenOld, nGenNew uint64
 	// slot 4: the mass-RST peer-restart candidate (zero: none)
 	massAt   time.Time
 	massPost int
@@ -569,6 +627,10 @@ func (e *evaluator) ingest(ev event) {
 		e.noteUsers(ev.n, time.Unix(0, ev.at))
 		return
 	}
+	if ev.kind == evGen {
+		e.noteGen(ev)
+		return
+	}
 	ir, kh := e.ids(ev.local, ev.remote)
 	if ev.kind == evPath {
 		e.pathEv++
@@ -607,7 +669,7 @@ func (e *evaluator) ingest(ev event) {
 		ok := st == DialOK
 		if ok {
 			c.dialOK++
-			s.noteOK()
+			s.noteOK(time.Unix(0, ev.at))
 		}
 		switch ev.front {
 		case FrontReality:
@@ -627,81 +689,75 @@ func (e *evaluator) ingest(ev event) {
 	case evAccept:
 		if AcceptOutcome(ev.stage) == AcceptOK {
 			s.dead = false
-			s.noteOK()
+			s.noteOK(time.Unix(0, ev.at))
 		}
 		if ev.stage < uint8(nAcceptOutcomes) {
 			c.acc[ev.stage]++
 		}
+	case evPeerOrphan:
+		// b414 v5: hold only with evidence that the Iran end itself is
+		// killing links on this IP: its own-abort count rose within
+		// PeerOrphanHold before the last link ended. The Iran end counts a
+		// link only when its own socket ends in ECONNABORTED (killed on
+		// the Iran host, e.g. ss -K), never for a reset that reached it,
+		// so an injector cannot raise the count; and an own-abort round
+		// that leaves links on the IP is reported by their next ping
+		// (2-4 s), so own aborts that end in an orphan show the rise
+		// first. With no recent rise the last links died to something the
+		// Iran end did not do (an injected reset kills them all before any
+		// ping), and their resets keep the v1 peerHold. The window equals
+		// the engine's ctrlAbortLastAge: an older count cannot credit the
+		// next link's first ping anyway.
+		peerStat.orphans.Add(1)
+		at := time.Unix(0, ev.at)
+		if s.peerSig && !s.peerAbAt.IsZero() && at.Sub(s.peerAbAt) <= PeerOrphanHold {
+			s.peerOrphan = true
+			peerStat.orphanHolds.Add(1)
+		}
+	case evPeerAbort:
+		s.peerOrphan = false
+		s.peerSig = true
+		n := ev.n
+		if n > 0 {
+			peerStat.reports.Add(1)
+			peerStat.repAborts.Add(n)
+		} else {
+			peerStat.edgeSigs.Add(1)
+		}
+		for n > 0 && len(s.held) > 0 { // resets that came before the report
+			s.held = s.held[1:]
+			c.peerAb++
+			peerStat.credited.Add(1)
+			n--
+		}
+		if len(s.held) == 0 {
+			s.held = nil
+		}
+		at := time.Unix(0, ev.at)
+		if ev.n > 0 {
+			s.peerAbAt = at
+		}
+		if at.Sub(s.peerCreditAt) > peerWin {
+			s.peerCredit = 0
+		}
+		s.peerCredit += n
+		s.peerCreditAt = at
 	case evDeath:
-		d := ev.d
-		if d.Class < nDeathClasses {
-			c.death[d.Class]++
-		}
-		if d.Class == DeathLocal || d.Class == DeathEOF || d.Class == DeathAbort {
-			return // our own close, a clean peer close, or killed on this host
-		}
-		life := time.Duration(d.LifeMs) * time.Millisecond
-		fresh := life < freshLife
-		if fresh {
-			c.fresh++
-		}
-		if d.Class == DeathRST && d.HaveTCP && d.MinRTTUs > 0 {
-			rho := float64(d.LastSentMs) * 1000 / float64(d.MinRTTUs)
-			lim := 0.8
-			if e.side == SideIran {
-				lim = 0.5
-			}
-			if rho < lim {
-				c.rstFast++
-			}
-		}
-		if d.Class == DeathRST && !e.massAt.IsZero() && d.HaveTCP {
-			// slot 9 (p): an old link of the dead process: born before the
-			// burst and nothing received on it since (the peer process is
-			// gone). An injected RST on a live old link follows data from
-			// the live peer, so its last receive is recent.
+		if e.side == SideKharej && s.peerSig && ev.d.Class == DeathRST {
 			at := time.Unix(0, ev.at)
-			if at.Add(-life).Before(e.massAt) && at.Add(-time.Duration(d.LastRecvMs)*time.Millisecond).Before(e.massAt) {
-				c.rstPreBurst++
+			if s.peerCredit > 0 && at.Sub(s.peerCreditAt) <= peerWin {
+				s.peerCredit--
+				c.peerAb++
+				peerStat.credited.Add(1)
+				return
+			}
+			if len(s.held) < heldCap {
+				s.held = append(s.held, ev)
+				peerStat.held.Add(1)
+				return
 			}
 		}
-		if d.Class == DeathRST || d.Class == DeathTimeout {
-			if fresh {
-				c.freshKill++
-			}
-			if s.okAfterKill {
-				c.killPostOK++
-			}
-			if ep := s.ep; ep != nil {
-				ep.killDeaths++
-				if life < youngLife {
-					ep.killYoung++
-					if d.HaveTCP && d.Bytes <= hsBytes {
-						ep.killHS++
-					} else if d.HaveTCP {
-						ep.killBig++
-					}
-				} else if fresh {
-					ep.killMid++
-				}
-				if fresh {
-					lb := math.Log(float64(max(d.Bytes, 1)))
-					ll := math.Log(float64(max(d.LifeMs, 1)))
-					ep.fkN++
-					ep.fkLb += lb
-					ep.fkLb2 += lb * lb
-					ep.fkLl += ll
-					ep.fkLl2 += ll * ll
-				}
-				ep.bytesHist[log2b(d.Bytes, 24)]++
-				ep.lifeHist[log2b(uint64(d.LifeMs/1000), 20)]++
-				if time.Unix(0, ev.at).Add(-life).After(ep.opened) {
-					ep.bornKills++
-					ep.bornLife[log2b(uint64(d.LifeMs/1000), 20)]++
-				}
-			}
-		}
-		c.khBad |= bit
+		e.death(s, c, ev, bit, false)
 	case evPath:
 		p := ev.p
 		s.pin.add(p)
@@ -742,13 +798,137 @@ func (e *evaluator) ingest(ev event) {
 	}
 }
 
+// death is the evDeath part of ingest (b414: also run for a held reset
+// that no abort report claimed within peerHold, released true). A released
+// reset is judged at its own time, not the release tick's: it is a kill
+// after recovery (R1) only if it came after the episode's first success,
+// and it joins the episode's kill statistics only if it came after the
+// episode opened (a reset at or before the opening tick is part of the
+// evidence that opened it, as when it is not held).
+func (e *evaluator) death(s *scope, c *ctr, ev event, bit uint64, released bool) {
+	d := ev.d
+	evAt := time.Unix(0, ev.at)
+	if d.Class < nDeathClasses {
+		c.death[d.Class]++
+	}
+	if d.Class == DeathLocal || d.Class == DeathEOF || d.Class == DeathAbort {
+		return // our own close, a clean peer close, or killed on this host
+	}
+	life := time.Duration(d.LifeMs) * time.Millisecond
+	fresh := life < freshLife
+	if fresh {
+		c.fresh++
+	}
+	if d.Class == DeathRST && d.HaveTCP && d.MinRTTUs > 0 {
+		rho := float64(d.LastSentMs) * 1000 / float64(d.MinRTTUs)
+		lim := 0.8
+		if e.side == SideIran {
+			lim = 0.5
+		}
+		if rho < lim {
+			c.rstFast++
+		}
+	}
+	if d.Class == DeathRST && !e.massAt.IsZero() && d.HaveTCP {
+		// slot 9 (p): an old link of the dead process: born before the
+		// burst and nothing received on it since (the peer process is
+		// gone). An injected RST on a live old link follows data from
+		// the live peer, so its last receive is recent.
+		if evAt.Add(-life).Before(e.massAt) && evAt.Add(-time.Duration(d.LastRecvMs)*time.Millisecond).Before(e.massAt) {
+			c.rstPreBurst++
+		}
+	}
+	if d.Class == DeathRST || d.Class == DeathTimeout {
+		if fresh {
+			c.freshKill++
+		}
+		postOK := s.okAfterKill
+		if released {
+			postOK = postOK && evAt.After(s.okAt)
+		}
+		if postOK {
+			c.killPostOK++
+		}
+		if ep := s.ep; ep != nil && (!released || evAt.After(ep.born())) {
+			ep.killDeaths++
+			if life < youngLife {
+				ep.killYoung++
+				if d.HaveTCP && d.Bytes <= hsBytes {
+					ep.killHS++
+				} else if d.HaveTCP {
+					ep.killBig++
+				}
+			} else if fresh {
+				ep.killMid++
+			}
+			if fresh {
+				lb := math.Log(float64(max(d.Bytes, 1)))
+				ll := math.Log(float64(max(d.LifeMs, 1)))
+				ep.fkN++
+				ep.fkLb += lb
+				ep.fkLb2 += lb * lb
+				ep.fkLl += ll
+				ep.fkLl2 += ll * ll
+			}
+			ep.bytesHist[log2b(d.Bytes, 24)]++
+			ep.lifeHist[log2b(uint64(d.LifeMs/1000), 20)]++
+			if evAt.Add(-life).After(ep.born()) {
+				ep.bornKills++
+				ep.bornLife[log2b(uint64(d.LifeMs/1000), 20)]++
+			}
+		}
+	}
+	c.khBad |= bit
+}
+
+// flushHeld (b414) counts the held resets that no abort report claimed
+// within peerHold as ordinary resets, in the current bucket.
+func (e *evaluator) flushHeld(now time.Time) {
+	for _, s := range e.scopes {
+		s.released = false
+		n := 0
+		hold := peerHold
+		if s.peerOrphan {
+			hold = PeerOrphanHold
+		}
+		for n < len(s.held) && now.Sub(time.Unix(0, s.held[n].at)) >= hold {
+			ev := s.held[n]
+			_, kh := e.ids(ev.local, ev.remote)
+			c := &s.buckets[s.cur]
+			bit := e.khBit(kh)
+			c.khSeen |= bit
+			e.death(s, c, ev, bit, true)
+			n++
+		}
+		if n > 0 {
+			peerStat.released.Add(uint64(n))
+			s.released = true
+			s.held = s.held[n:]
+			if len(s.held) == 0 {
+				s.held = nil
+			}
+		}
+	}
+}
+
+// born (b414) is the time links must be born after to count as the
+// episode's redial wave: its open time, or one tick earlier when held
+// resets opened it (bornFrom).
+func (ep *episode) born() time.Time {
+	if !ep.bornFrom.IsZero() {
+		return ep.bornFrom
+	}
+	return ep.opened
+}
+
 // noteOK (R1): a redial or accept succeeded while an episode is open; the
 // kills from now on are kills of recovered links. The kills that opened the
 // episode (a restart's burst, with its refill often in the same tick) are
-// before it and never count.
-func (s *scope) noteOK() {
-	if s.ep != nil {
-		s.okAfterKill = true
+// before it and never count. at is the success's time (b414: a held reset
+// released later is compared with it).
+func (s *scope) noteOK(at time.Time) {
+	if s.ep != nil && !s.okAfterKill {
+		s.okAfterKill, s.okAt = true, at
 	}
 }
 
@@ -929,6 +1109,7 @@ func (e *evaluator) massStep(now time.Time) {
 	// Confirmed: the peer restarted. Its RSTs are explained, so they leave
 	// the open episodes' rst/kill evidence (later RSTs count again).
 	e.peerRestart = e.massAt
+	e.peerZDU = false
 	e.nMass++
 	for _, s := range e.scopes {
 		ep := s.ep
@@ -1018,9 +1199,43 @@ func (e *evaluator) oldStep(now time.Time) {
 	}
 	if all {
 		e.peerRestart = e.oldAt
+		e.peerZDU = false
 		e.nOld++
 	}
 	e.oldAt, e.oldPost = time.Time{}, 0
+}
+
+// noteGen (b437 Q2) takes a ZDU generation event. The peer's generation
+// change is handled like a peer restart (e.peerRestart: episodes it opens
+// get the peer grace); a link of the peer's older process that ended is
+// not counted as a death (its process closed it at its drain end, or
+// reclaimed it idle). Our own handover's end ends the own-restart grace.
+func (e *evaluator) noteGen(ev event) {
+	at := time.Unix(0, ev.at)
+	switch ev.stage {
+	case genOldEnd, genPeerNew:
+		if ev.stage == genOldEnd {
+			e.nGenOld++
+		} else {
+			e.nGenNew++
+		}
+		// one grace per change: the first event after a quiet peer grace
+		// opens it; the rest of the burst (120 closes over a few seconds)
+		// must not move it past the episode the burst opened.
+		if e.genAt.IsZero() || at.Sub(e.genAt) >= peerGrace {
+			if at.After(e.peerRestart) {
+				e.peerRestart, e.peerZDU = at, true
+			}
+		}
+		e.genAt = at
+	case genOwnTakeover:
+		e.ownZDU = true
+	case genOwnDone:
+		e.ownZDU = true
+		if end := at.Add(tick); e.ownUntil.IsZero() && end.Before(e.start.Add(ownGrace)) || end.Before(e.ownUntil) {
+			e.ownUntil = end
+		}
+	}
 }
 
 func (e *evaluator) noteUsers(total uint64, at time.Time) {
@@ -1098,6 +1313,7 @@ func inXrayWindow(t time.Time) bool {
 // step runs every tick: triggers, episode open/update/close, rotation.
 func (e *evaluator) step(now time.Time) {
 	e.evals++
+	e.flushHeld(now)
 	e.oldStep(now)
 	e.massStep(now)
 	open := 0
@@ -1131,6 +1347,12 @@ func (e *evaluator) step(now time.Time) {
 				s.seq++
 				s.ep = &episode{id: fmt.Sprintf("%s#%d", ip, s.seq), scope: ip, opened: now, usersAtOpen: e.usersRatio(), class: ClUnknown}
 				s.ep.sum = w // the evidence that opened it
+				if s.released {
+					// b414: resets of the last tick, released this
+					// tick, helped open it: they would have opened it
+					// one tick earlier without the hold.
+					s.ep.bornFrom = now.Add(-tick)
+				}
 				open++
 			}
 			if s.ep != nil {
@@ -1138,7 +1360,7 @@ func (e *evaluator) step(now time.Time) {
 			}
 		}
 		if s.ep == nil {
-			s.okAfterKill = false
+			s.okAfterKill, s.okAt = false, time.Time{}
 		}
 		if ep := s.ep; ep != nil {
 			if ep.killDeaths > ep.killPrev {
@@ -1170,7 +1392,7 @@ func (e *evaluator) step(now time.Time) {
 				ep.xray = true
 			}
 			switch {
-			case now.Sub(e.start) < ownGrace:
+			case e.ownUntil.IsZero() && now.Sub(e.start) < ownGrace || now.Before(e.ownUntil):
 				ep.grace = "own"
 			case !e.peerRestart.IsZero() && now.Sub(e.peerRestart) < peerGrace && !ep.opened.Before(e.peerRestart.Add(-tick)):
 				// slot 8 (o): only an episode the restart opened. One open
@@ -1405,6 +1627,24 @@ func (e *evaluator) classify(ep *episode, s *scope, now time.Time) {
 				x.disc++
 			}
 			x.high = c.hsFails() >= 4 && c.accFails() >= 4 && dur >= 2*time.Minute
+		}
+		// b414 v6 (held-out #6): one reset injector, not two censors. A
+		// handshake-block censor drops or blackholes the ClientHello /
+		// ServerHello; it does not also kill links that are already
+		// established. When most failed handshakes died by a reset (not a
+		// timeout) and established links on the same IP died by resets with
+		// injection timing in the same episode (C1 necessity and a fast
+		// one), the handshake resets are the same injector hitting the
+		// redials in their TLS stage: on an IP with few live links they can
+		// outnumber the link resets, and rst-inject is the verdict. A real
+		// handshake-block keeps its verdict: its handshakes time out (or
+		// its established links do not die by fast reset). Not inside our
+		// own or the peer's restart grace: a restart resets the links and
+		// the handshakes in flight, the ordinary explanation (replays #3,
+		// #4, #5: own-restart high would turn rst-inject low).
+		if x.nec && ep.grace == "" && hsResetInject(c, rst, rstFast) {
+			x.disc, x.high = min(x.disc, 1), false
+			sc[ClRSTInject].disc++
 		}
 	}
 	// C3 blackhole
@@ -1855,6 +2095,17 @@ func rstUnexplained(c *ctr) (rst, fast uint32) {
 	return min(c.rstNoQ, c.death[DeathRST]), min(c.rstFastNoQ, c.rstFast)
 }
 
+// hsResetInject (b414 v6) reports the reset injector's signature in an
+// episode with failed handshakes: resets are the majority of the failed
+// handshakes (dial and accept side together), and established links died
+// by unexplained resets (C1 necessity, rst >= 3) at least one of them with
+// injection timing.
+func hsResetInject(c *ctr, rst, rstFast uint32) bool {
+	fails := c.hsFails() + c.accFails()
+	resets := c.stage[DialHelloReset] + c.acc[AcceptReset]
+	return rst >= 3 && rstFast > 0 && fails > 0 && resets*2 > fails
+}
+
 // tickQueue (slot 9, q) marks the current tick's RSTs as clean-path RSTs
 // when no standing queue holds: none in this tick's own readings, and
 // none in the last qHoldTicks ticks' (a tick may have no reading).
@@ -1956,6 +2207,10 @@ func (e *evaluator) emit(ep *episode, st string, now time.Time) {
 	if grace == "" {
 		grace = "no"
 	}
+	// b437 Q2: a grace from a ZDU generation change, not a restart
+	if grace == "own" && e.ownZDU || grace == "peer" && e.peerZDU {
+		grace += "-zdu"
+	}
 	ploss := "-"
 	if c.peerLossN > 0 {
 		ploss = fmt.Sprintf("%.1f%%", 100*c.peerLossSum/float64(c.peerLossN))
@@ -1972,6 +2227,9 @@ func (e *evaluator) emit(ep *episode, st string, now time.Time) {
 		ep.killDeaths, c.death[DeathRST], c.rstFast, c.death[DeathEOF], c.death[DeathTimeout], c.death[DeathLocal], c.freshKill,
 		mode(bm, bsh, "B"), mode(lm, lsh, "s"), c.meanLoss()*100, c.meanQ(), c.corr(), c.silent, users, ep.allIPs,
 		c.failR, c.dialR, c.failT, c.dialT, now.UTC().Hour(), grace, ep.xray, ploss, ep.peerMass, ep.cutHeld)
+	if c.peerAb > 0 { // b414: only against a newer Iran, so older lines stay as they were
+		line += fmt.Sprintf(" peerab=%d", c.peerAb)
+	}
 	e.logf("%s", line)
 	if st == "close" {
 		e.closedLines = append(e.closedLines, strings.TrimPrefix(line, "censor351: "))

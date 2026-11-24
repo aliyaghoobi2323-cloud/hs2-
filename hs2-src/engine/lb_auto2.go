@@ -142,8 +142,10 @@ type q2Path struct {
 	factor     float64     // the edge's applied weight (the dialing side keeps its own)
 	target     float64
 	reason     string
-	silentRuns int  // HS2_LB_SILENT: silent readings in a row (lb_silent.go)
-	silentHeld bool // HS2_LB_SILENT: a noAck reading was held silent in this silence (logged once)
+	silentRuns int       // HS2_LB_SILENT: silent readings in a row (lb_silent.go)
+	silentHeld bool      // HS2_LB_SILENT: a noAck reading was held silent in this silence (logged once)
+	seeded     bool      // b438 HS2_ZDU_LBSEED: inherited from the old process, not read here yet (zdu_lbseed.go)
+	seedUntil  time.Time // b438: when an unread inherited state falls back to "no reading yet"
 }
 
 // q2Judge judges a set of paths named "local>remote".
@@ -508,10 +510,12 @@ func (b *LB) adapt2(rs map[int]q2Reading) {
 			in[p.Name()] = r
 		}
 	}
+	b.coolStashLocked(keep, now) // b443 HS2_ZDU_LBSEED: a cooled path's verdict rides a hand-off (zdu_lbseed.go)
 	b.judge.forget(keep)
 	b.judge.cutOut = b.l3Cut // HS2_LB_RESCUE_CUT_L3: this tunnel's set (l3_cutavoid.go)
 	b.judge.update(now, lb2QualEvery, in)
 	b.judgeAt = now
+	b.seedAgeLocked(now) // b438 HS2_ZDU_LBSEED (zdu_lbseed.go)
 	// b337 (lb_fl337.go): HS2_B335_FASTLOWER / HS2_B337_FL_LOGONLY
 	b.fastLower2Locked(now, keep)
 	b.stripeSteerMarkLocked() // HS2_LB_STRIPE_STEER on the exit (mconn_stripe_steer.go)
@@ -807,6 +811,8 @@ type lbSteerState struct {
 	callPaths       map[any]bool // HS2_LB_CALL_STUCK: links whose path is recorded (lb_call_stuck.go)
 	stuckLogged     int64
 	lateLogged      int64                 // HS2_LB_CALL_LATE: callLateOpened at the last log line
+	stuckLogAt      time.Time             // b437 F2: last "lb call stuck" line (at most one a minute)
+	lateLogAt       time.Time             // b437 F2: last "lb call late" line
 	cmLogged        int64                 // HS2_B336_CALLMOVE: moves + refused at the last log line
 	sil             map[string]*silentAcc // HS2_LB_SILENT: this tick's counts per path (lb_silent.go)
 	up              *lbUpState            // HS2_LB_UPLOSS: the upload judge (lb_uploss.go)

@@ -73,6 +73,7 @@ if [ $ok = 1 ]; then
   P1=$(systemctl show -p MainPID --value "$U")
   if systemctl is-active -q "$U" && [ "$P0" = "$P1" ]; then
     cp -a "$CONF" "$LG"
+    prune_backups "$ST" "$U" safe "$BK" | while IFS= read -r l; do log "$l"; done # b430
     fin "OK $NEW pid=$P1" 0
   fi
   log "unstable after start (pid $P0 -> $P1)"

@@ -153,6 +153,7 @@ type stripeSteerPickLog struct {
 	mu                 sync.Mutex
 	total, onCut, last int64
 	asks               int64 // sd151: asked + dropped at the last line
+	cut                int64 // b437 F11: the cut counts' sum at the last line
 	at                 time.Time
 }
 
@@ -176,6 +177,10 @@ func (m *LinkManager) stripeSteerNoteLocked(ml *managedLink) {
 	stripeSteerLogLocked(p)
 }
 
+// stripeSteerQuietLog (b437 F11): the steer line's period when no cut
+// count moved; the counters are cumulative, so nothing is lost.
+const stripeSteerQuietLog = 5 * time.Minute
+
 // stripeSteerLogAsk (a refused pick, sd151): the line also when only the
 // asks moved (a cut path's spin shows with no pick between).
 func stripeSteerLogAsk() {
@@ -188,15 +193,23 @@ func stripeSteerLogAsk() {
 	stripeSteerLogLocked(p)
 }
 
-// stripeSteerLogLocked: the line, every 10 s at most, when a count moved.
-// Caller holds p.mu.
+// stripeSteerLogLocked: the line, every 10 s at most, when a cut count
+// moved (a pick on a cut path, an ask, a move/fallback/hold/send off a cut
+// sub); when only the picks moved, every stripeSteerQuietLog (b437 F11:
+// prod Iran ~375 lines/h, nearly all picks-only). Caller holds p.mu.
 func stripeSteerLogLocked(p *stripeSteerPickLog) {
 	now := time.Now()
-	asks := stripeSteerStat.askDial.Load() + stripeSteerStat.askSup.Load()
-	if now.Sub(p.at) < 10*time.Second || p.total == p.last && asks == p.asks {
+	st := &stripeSteerStat
+	asks := st.askDial.Load() + st.askSup.Load()
+	cut := p.onCut + asks + st.moved.Load() + st.fallback.Load() + st.held.Load() + st.sendCut.Load() + st.sendOff.Load() + st.adoptSkipCut.Load()
+	gap := 10 * time.Second
+	if cut == p.cut {
+		gap = stripeSteerQuietLog
+	}
+	if now.Sub(p.at) < gap || p.total == p.last && asks == p.asks && cut == p.cut {
 		return
 	}
-	p.at, p.last, p.asks = now, p.total, asks
+	p.at, p.last, p.asks, p.cut = now, p.total, asks, cut
 	log.Printf("stripe steer: key=%v picks=%d on-cut-path=%d moved-off-cut=%d cut-fallback=%d asked-dial=%d asked-dial-dropped=%d steer-held=%d send-cut-only=%d send-kept-off=%d adopt-skip-cut=%d", lbStripeSteer, p.total, p.onCut, stripeSteerStat.moved.Load(), stripeSteerStat.fallback.Load(), stripeSteerStat.askDial.Load(), stripeSteerStat.askSup.Load(), stripeSteerStat.held.Load(), stripeSteerStat.sendCut.Load(), stripeSteerStat.sendOff.Load(), stripeSteerStat.adoptSkipCut.Load())
 }
 

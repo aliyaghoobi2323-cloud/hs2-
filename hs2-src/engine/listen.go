@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"syscall"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/freebind"
 )
 
 // listenReuse creates a TCP listener with SO_REUSEADDR so a fast service
@@ -45,7 +47,9 @@ func listenReuseRcvBuf(addr string, rcvbuf int) (net.Listener, error) {
 
 func listenReuseRcvBufCold(addr string, rcvbuf int) (net.Listener, error) {
 	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
+		// b425: freebind for a specific address, so a boot never fails on
+		// an IPv6 address still in DAD or an address added late.
+		Control: freebind.Chain(func(network, address string, c syscall.RawConn) error {
 			var serr error
 			if err := c.Control(func(fd uintptr) {
 				serr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
@@ -54,8 +58,12 @@ func listenReuseRcvBufCold(addr string, rcvbuf int) (net.Listener, error) {
 				return err
 			}
 			return serr
-		},
+		}),
 	}
 	lc.SetMultipathTCP(false)
-	return lc.Listen(context.Background(), "tcp", addr)
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err == nil {
+		freebind.Watch(addr)
+	}
+	return ln, err
 }

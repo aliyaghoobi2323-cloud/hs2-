@@ -296,6 +296,14 @@ func (a *LBAdvert) gotReport(r LBReport) {
 	}
 }
 
+// SetZDUCurrent (edge) sets the pool's current peer instance, for the order
+// of the report exchange (b436, zdu_report436.go).
+func (a *LBAdvert) SetZDUCurrent(f func() zduInst) {
+	a.mu.Lock()
+	a.zduCur = f
+	a.mu.Unlock()
+}
+
 // OnReport sets a func called with every report the edge reads.
 func (a *LBAdvert) OnReport(f func(LBReport)) {
 	a.mu.Lock()

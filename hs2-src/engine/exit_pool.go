@@ -86,7 +86,16 @@ type exitPool struct {
 	initial int // the count held until the edge speaks (first setTarget)
 	live    int // slots whose link is currently up (for the log)
 	zduBoot int // HS2_ZDU: boot spares started in this boost episode (zdu_gate.go)
+	zduAsk  int // HS2_ZDU: the last unclamped target asked (b441 boost re-arm, zdu_gate.go)
 	parent  context.Context
+
+	// b443 (zdu_gate.go): the boot round (when, the newest Iran instance
+	// then, the boot spare links up by then) and the boot spare links up.
+	zduBootRound          int
+	zduBootAt             time.Time
+	zduBootInst           zduInst
+	zduBootUp, zduBootUp0 int
+	bootDial              func() (dialedLink, error) // b443: a boot spare's dial (a proven path); nil: dial
 
 	// pk236: "exit pool target" lines at most once per exitTargetLogGap; the
 	// changes in between are counted (with their range) into the next line.
@@ -131,6 +140,9 @@ type exitSlot struct {
 	// spare: started beyond the target for the balancer (addSpares) and not
 	// dialed yet: it does not retire for being over the target. Under p.mu.
 	spare bool
+	// boot: a ZDU handover boot spare (zdu_gate.go): its one dial goes to a
+	// proven path (bootDial), and its link coming up is counted. Under p.mu.
+	boot bool
 	// zmtr: the meter of the slot's live link, bound with HS2_ZDU=1 so the
 	// pool can tell a legacy slot (its edge an older Iran instance,
 	// zdu_exit.go). Nil with the key off and between links.
@@ -424,10 +436,20 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		if p.scoutDial != nil && p.isScout(s) {
 			dial = p.scoutDial // keeps its SYNs ~1-2 s apart while the path is dead
 		}
+		p.mu.Lock()
+		boot := s.boot
+		p.mu.Unlock()
+		if boot && p.bootDial != nil {
+			dial = p.bootDial // b443: a ZDU boot spare on a proven path (zdu_gate.go)
+		}
 		car, err := dial()
 		release()
 		p.mu.Lock()
 		s.spare = false // dialed once: an ordinary slot from now on
+		if boot && err == nil {
+			p.zduBootUp++ // b443: the round's spare reached an Iran process
+		}
+		s.boot = false
 		p.mu.Unlock()
 		if err != nil {
 			wait := p.dialFailed(s, err, &backoff)

@@ -19,7 +19,8 @@ const modPath = "github.com/hosseintaghipoursori-alt/hs2-tunnel"
 // status block, and that only in the status writer/CLI.
 var allowedUse = map[string]bool{
 	"Active": true, "Init": true,
-	"NoteDial": true, "NoteAccept": true, "NoteDeath": true, "NotePath": true, "NoteUsers": true,
+	"NoteDial": true, "NoteAccept": true, "NoteDeath": true, "NotePath": true, "NoteUsers": true, "NotePeerAborts": true, "NotePeerOrphan": true, "NotePeerOldDeath": true, "NotePeerGeneration": true, "NoteOwnHandover": true, "DeathAbort": true,
+	"NoteOwnAbort": true, "NoteOwnAbortsReported": true, "NoteOwnRstClose": true, "NoteOwnStallClose": true, // b429/b430/o432 counters (write-only)
 	"AddrOf": true, "ParseAddr": true,
 	"ConnectStage": true, "HandshakeStage": true, "AcceptStage": true, "DeathOf": true,
 	"Death": true, "PathSample": true, "DialStage": true,
@@ -31,8 +32,9 @@ var allowedUse = map[string]bool{
 
 // status output: only these files may read the status block.
 var statusUse = map[string]map[string]bool{
-	"StatusJSON": {"cmd/hs2/status.go": true},
-	"Render":     {"cmd/hs2/status.go": true},
+	"StatusJSON":  {"cmd/hs2/status.go": true},
+	"Render":      {"cmd/hs2/status.go": true},
+	"PeerLogLine": {"cmd/hs2/status.go": true}, // b429
 }
 
 func TestIsolationNoOneReadsDetectorState(t *testing.T) {

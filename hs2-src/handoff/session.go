@@ -226,6 +226,14 @@ func (c *Conn) Give(self Hello, fds []FD, step, ready time.Duration) (Hello, err
 // it (its listeners are up, the fds adopted); otherwise right after FDS. The
 // READY wait (ready) counts from FDS. listening may be nil.
 func (c *Conn) GiveListening(self Hello, fds []FD, step, ready time.Duration, listening func()) (Hello, error) {
+	return c.GiveListeningUnused(self, fds, step, ready, listening, nil)
+}
+
+// GiveListeningUnused is GiveListening that also reads the new process's
+// UNUSED (b428) when both Hellos carry FeatUnused: unused(names) runs before
+// GO is sent, with the handed-off fds the new process did not adopt. With a
+// peer without the bit unused is never called (today's behaviour).
+func (c *Conn) GiveListeningUnused(self Hello, fds []FD, step, ready time.Duration, listening func(), unused func([]string)) (Hello, error) {
 	m, err := c.expect(TypeHello, step)
 	if err != nil {
 		if !errors.Is(err, ErrAborted) {
@@ -245,6 +253,13 @@ func (c *Conn) GiveListening(self Hello, fds []FD, step, ready time.Duration, li
 		c.abort(err.Error())
 		return peer, err
 	}
+	lbState := self.Features&peer.Features&FeatLBState != 0
+	if lbState {
+		if err := c.sendLBState(step); err != nil {
+			c.abort(err.Error())
+			return peer, err
+		}
+	}
 	end := time.Now().Add(ready)
 	if self.Features&peer.Features&FeatListening != 0 {
 		if _, err := c.expect(TypeListening, ready); err != nil {
@@ -257,17 +272,50 @@ func (c *Conn) GiveListening(self Hello, fds []FD, step, ready time.Duration, li
 	if listening != nil {
 		listening()
 	}
-	left := time.Until(end)
-	if left < time.Millisecond {
-		left = time.Millisecond
+	left := func() time.Duration {
+		l := time.Until(end)
+		if l < time.Millisecond {
+			l = time.Millisecond
+		}
+		return l
 	}
-	if _, err := c.expect(TypeReady, left); err != nil {
+	if self.Features&peer.Features&FeatUnused != 0 {
+		m, err := c.expect(TypeUnused, left())
+		if err != nil {
+			if !errors.Is(err, ErrAborted) {
+				c.abort(err.Error())
+			}
+			return peer, err
+		}
+		if unused != nil {
+			unused(m.Names)
+		}
+	}
+	if _, err := c.expect(TypeReady, left()); err != nil {
 		if !errors.Is(err, ErrAborted) {
 			c.abort(err.Error())
 		}
 		return peer, err
 	}
+	if lbState {
+		if err := c.sendLBState(step); err != nil {
+			c.abort(err.Error())
+			return peer, err
+		}
+	}
 	return peer, c.Send(&Msg{Type: TypeGo}, step)
+}
+
+// sendLBState sends LBSTATE (b438): the payload of c.LBState, empty without one.
+func (c *Conn) sendLBState(step time.Duration) error {
+	var b []byte
+	if c.LBState != nil {
+		b = c.LBState()
+	}
+	if len(b) > MaxLBState {
+		b = nil
+	}
+	return c.Send(&Msg{Type: TypeLBState, Blob: b}, step)
 }
 
 // Listening tells the old process this one's listeners are up (before the
@@ -282,12 +330,29 @@ func (t *Taken) Listening(step time.Duration) error {
 	return t.Conn.Send(&Msg{Type: TypeListening}, step)
 }
 
+// Unused tells the old process which handed-off fds this one did not adopt
+// (b428); a no-op unless both Hellos carry FeatUnused. Sent right before
+// READY (the old process expects it there).
+func (t *Taken) Unused(names []string, step time.Duration) error {
+	if t.Self.Features&t.Peer.Features&FeatUnused == 0 {
+		return nil
+	}
+	if len(names) > MaxFDs {
+		names = names[:MaxFDs]
+	}
+	return t.Conn.Send(&Msg{Type: TypeUnused, Names: names}, step)
+}
+
 // Taken is what the new process received.
 type Taken struct {
 	Conn *Conn
 	Self Hello // the Hello this side sent (Take)
 	Peer Hello
 	FDs  []FD
+	// LBState (b438): the old process's LBSTATE sent after FDS, LBStateGo the
+	// one sent right before GO (nil: none, or a peer without FeatLBState).
+	LBState   []byte
+	LBStateGo []byte
 }
 
 // File returns the fd named name and removes it from t (the caller owns it).
@@ -335,7 +400,21 @@ func (c *Conn) Take(self Hello, step time.Duration) (*Taken, error) {
 		}
 		return nil, err
 	}
-	return &Taken{Conn: c, Self: self, Peer: m.Hello, FDs: f.FDs}, nil
+	t := &Taken{Conn: c, Self: self, Peer: m.Hello, FDs: f.FDs}
+	if self.Features&m.Hello.Features&FeatLBState != 0 {
+		l, err := c.expect(TypeLBState, step)
+		if err != nil {
+			for _, fd := range t.FDs {
+				fd.File.Close()
+			}
+			if !errors.Is(err, ErrAborted) {
+				c.abort(err.Error())
+			}
+			return nil, err
+		}
+		t.LBState = l.Blob
+	}
+	return t, nil
 }
 
 // Ready tells the old process the new one is up (its links are warm) and
@@ -343,6 +422,13 @@ func (c *Conn) Take(self Hello, step time.Duration) (*Taken, error) {
 func (t *Taken) Ready(step time.Duration) error {
 	if err := t.Conn.Send(&Msg{Type: TypeReady}, step); err != nil {
 		return err
+	}
+	if t.Self.Features&t.Peer.Features&FeatLBState != 0 {
+		l, err := t.Conn.expect(TypeLBState, step)
+		if err != nil {
+			return err
+		}
+		t.LBStateGo = l.Blob
 	}
 	_, err := t.Conn.expect(TypeGo, step)
 	return err

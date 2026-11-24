@@ -290,7 +290,10 @@ Let's Encrypt certificates renew 30 days before expiry (certbot's default,
 so a few days with port 80 or Let's Encrypt unreachable never matter) and are
 **hot-reloaded** (SIGHUP / `systemctl reload`) — new connections pick up the
 fresh certificate while existing ones keep running, so a renewal never drops
-the tunnel.
+the tunnel. certbot's hook is `/usr/local/sbin/hs2-reload-certs` (written by the
+installer, rel69r-rc14): it reloads every running hs2 tunnel unit by name, so it
+also works when the binary has a versioned name (the old `pkill -HUP -x hs2`
+hook did not) and covers tunnels added later.
 
 **Whether it renews by itself depends on how the certificate was issued:**
 
@@ -862,8 +865,8 @@ systemctl daemon-reload
 `systemd-run`, so a dropped ssh session cannot stop them half-way:
 
 ```bash
-cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r && chmod 755 /usr/local/bin/hs2-rel69r
-systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r 58982b22
+cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r14 && chmod 755 /usr/local/bin/hs2-rel69r14
+systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r14 2f3d34a2
 cat /root/hs2-safe-deploy.$U.out                  # OK … or the reason it stopped
 ```
 
@@ -1015,6 +1018,11 @@ Restore the old behaviour:
   since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
   are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
   512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69r-rc14** (heavy-download stall fixes, smooth ZDU drain end, close pacing): `Environment=HS2_B449J_UPGSAFE=0`,
+  `HS2_B449_PSTUCK=0`, `HS2_B449_TGT_WAIT_MS=0`, `HS2_B449_KEEP_FLOOR_KB=0` (both sides), `HS2_B449_DARKOPEN=0`,
+  `HS2_B449_SLOWOPEN_MS=0`, `HS2_B449H_OPENSKIP=0`, `HS2_B469_DRAINSMOOTH=0` (Iran), `HS2_B468_DRAINFAST=0` and
+  `HS2_ZDU_PACE_RATE=0` (Kharej), `HS2_B457_PICKCAP=0`, `HS2_CLOSE_PACE=0`, `HS2_RESC_FASTPICK=0`, `HS2_ZDU_LBSEED=0`
+  (both); freebind and the certificate hook have no key (see CHANGELOG rel69r-rc14);
 - **before rel69r** (new opens avoid a silent path, censorship detector, saved peer IPs, L3 duplicate filter per
   process): `Environment=HS2_B399_STALLPICK=0` (both sides; new user connections are again placed on a path that has
   gone silent until the LB cuts it), `Environment=HS2_CENSOR_DETECT=0` (Iran; the detector only logs, so this only
@@ -1396,6 +1404,25 @@ older behaviour.
 | `HS2_B399_STALLPICK` (b399, rel69r-rc2; off in rel69r-rc4; on again since rel69r-rc5) | on (`=0` off) | both | rel69r-rc5: on again with the v3 marks (sk405: precision 74 %, reconnect-wave fails -97 %, storm call tails within A/A noise; a mark needs >= 2 pending links that read within 2 s of now, a cleared path re-marks only after 3 s; a marked path is no callmove target, b406). rc4 had it off (sk402: rc3 precision 34-47 %). New user opens rank the links of a silent path last (as a reported cut is) before the LB judge's cut verdict: no read on any link of the path for `HS2_B399_STALL_MS` and >= 2 links with writes unanswered as long, while another path is healthy (every path silent: no mark). A new mark needs the pool and the path up >= 10 s and a read on the path within 10 s (no start-up marks). Nothing is closed or moved; marked links are still used when nothing else is eligible. sk399b (lab3, 5 pairs): reconnect-wave open fails -98 %, storm-open fails and p99 better, tail cost = A/A noise. Log `b399 stallpick: path P stalled` / `clear after` |
 | `HS2_B399_STALL_MS` (b399, rel69r-rc2) | 300 | both | the silence (ms, 150-10000) that makes a path stalled for `HS2_B399_STALLPICK` |
 | `HS2_CENSOR_DETECT` (b382, step-3 F2 censor351 v1 level 1, rel69r-rc6; alias `HS2_CENSOR`) | Iran: on, Kharej: off (`=0` off, `=1` on; per host) | both | rel69r-rc6: on by default on the Iran side only (LOGONLY data collection); the Kharej side stays off until its version is proven (`=1` turns it on there).  censorship detector, **detect and log only**: read-only hooks (dial stage, listener handshake outcome, link death class with TCP_INFO RST timing, LB path loss/queue/silence, front, user opens) feed a bounded event ring; an evaluator every 5 s groups trouble into episodes per Iran IP and classifies them into 9 censorship and 7 ordinary classes with a confidence. Lines `censor351: v1 ep=… class=… conf=…` (max 30/min), status block `censor`, `hs2 status --censor`. Feeds no LB, dial, close or timing; off = no goroutine, no allocation. Level 2 (raw RST/SYN sampler) not built (owner decision D4) |
+| `HS2_B449_PSTUCK` / `HS2_B449_PSTUCK_MS` / `HS2_B449_PSTUCK_HARD_MS` (b449, rel69r-rc12) | on / 1500 / 8000 (`=0` off) | both | a lite one-copy connection whose primary sub has not written for 1.5 s while another usable sub exists moves to the live sub (its kept chunks resent); one with nothing kept is ended cleanly after 8 s instead of hanging (lab b446: heavy downloads hung 63-87 s after a link-retire wave) |
+| `HS2_B449_DARKOPEN` (b449, rel69r-rc12) | on (`=0` off) | Iran (edge) | a connection that received within 10 s and whose link went silent while a write waits for an answer gets a light sub on another link at once (the Kharej's stuck rule moves the primary there) |
+| `HS2_B449_KEEP_FLOOR_KB` (b449c) | 64 (`=0` off) | both | a connection's kept bytes up to the floor are dropped only on TCP proof and kept over the global cap, so a small request never has an age or cap gap (no lost-copy reset after a sub death) |
+| `HS2_B449_FLOORFAST` (rc14d) | on (`=0` the old scan) | both | when a connection's kept bytes are at or under the floor the write path skips the age-trim scan (same result; Iran CPU) |
+| `HS2_B449_TGT_WAIT_MS` (b449d) | 1500 (`=0` off) | both | where the old rule reset a connection for a lost copy with no fresh target, its chunks wait up to this long for a live sub (or a new join) and are resent; at the deadline it resets as before |
+| `HS2_B449_SLOWOPEN_MS` (b449e) | 1000 (`=0` off) | Iran (edge) | a light open still pending after this long gets one second open in parallel on another link; the first to answer carries the connection |
+| `HS2_B449E_CAPWAIT` (b449e, rel69r-rc14) | on (`=0` off) | Iran (edge) | the slow-open clock skips the time an open waited for a `HS2_B457_PICKCAP` slot (a queue wait is not a dark link; without it a ZDU exit fired ~4.6k second opens) |
+| `HS2_B449H_OPENSKIP` (b449h) | on (`=0` off) | Iran (edge) | an open retry leaves out the links this connection's open already failed on whenever another link can take it |
+| `HS2_B449J_UPGSAFE` (b449j, rel69r-rc14) | on (`=0` off) | both | a non-raw sub dying in the raw -> records upgrade handshake keeps the connection when the raw first sub lives and nothing was lost: Iran sends UPGRADE again (same boundary) on another sub, Kharej answers it again. Lab: every heavy-download death in the handshake (second 5-6) is gone. Mixed versions end as before |
+| `HS2_B457_PICKCAP` (b457, rel69r-rc14) | 2 (`=0` off) | both | at most N join-sub link picks run at once in the process (a new connection's first sub is not capped). At a ZDU exit thousands of joins used to scan every link together (Iran 8-9 of 10 cores, TUN ping waiting behind them) |
+| `HS2_B458_CAPLAT` (b458, rel69r-rc14) | on (`=0` off; acts only with the cap on) | both | call- and game-like connections skip the pick cap. Counters `pickcap_*` / `join_*` in `status.json`, a `b458:` log line every 30 s while they move |
+| `HS2_ZDU_PACE_RATE` (b447/b454) | 2667 (`=0` unpaced) | Kharej (old ZDU process) | users closed a second at a drain end with users left; the pace starts early enough to exit at the deadline |
+| `HS2_B468_DRAINFAST` (b468, rel69r-rc14) | on (`=0` the b454 link pace) | Kharej (old ZDU process) | the drain-end pace closes user connections (each one cleanly, all its subs at once) instead of links; every link stays up for the users not yet closed and the links close together right before the exit |
+| `HS2_B469_STEP_MS` (b469, rel69r-rc14) | 5 (1..25; 25 = the rc14g step) | Kharej (old ZDU process) | the DRAINFAST pace step: the same rate in smaller batches (~13 users instead of ~66) |
+| `HS2_B469_DRAINSMOOTH` / `HS2_B469_ENDS` / `HS2_B469_PCT` (b469, rel69r-rc14) | on / 500 / 400 (`=0` off) | Iran (edge) | >= ENDS user-connection ends in 500 ms raise the GC target to PCT % until 2 s after the storm (15 s at most; the soft memory limit still bounds the heap), so the GC cycle does not land inside a drain-end pace (lab: TUN stalls 116-161 ms before the exit gone) |
+| `HS2_CLOSE_PACE` / `HS2_CLOSE_PACE_MAXWAIT` (b450/b452) | 500 x GOMAXPROCS a second / 2.5s (`=0` off / no cap) | both | a burst of user-connection closes (drain end, HH:01 xray restart, client network drop) tears down at a paced rate so the TUN's links keep their turn (lab 6000 users: one-way TUN delay 37 -> 250-380 ms without it) |
+| `HS2_RESC_FASTPICK` (b451) | on (`=0` off) | both | rescue placement scans under the read lock with the fast path's compare-and-swap (the same link a serial pick would choose); no writer convoy in open storms |
+| `HS2_ZDU_LBSEED` (b438) | on (`=0` off) | both | the old ZDU process sends its LB judge's per-path state; the new one seeds its judge from it instead of starting with "no reading yet" for 10-16 s |
+| `HS2_B459_DEADGEN` / `HS2_B460_DGBATCH` (b459/b460, lab) | off (`=1` on) | Iran (edge) | joins pinned to a dead old ZDU generation fail at once / in batches (off: ping max +77 ms after the exit in r459) |
 | `HS2_B340_CUTCLEAR` (b340, rel69p-rc2) | on (`=0` off) | both | the report carries a per-path OK bit (3 clean raw readings in a row while cut); the steering side keeps such a path lowered but no longer cut-marked, so rescue-cut stops dropping copies on a recovered path |
 | `HS2_B405_CMSPREAD` (b405, lab) | off (`=1` on) | Iran (edge) | callmove target spread: a move picks among eligible paths within 0.05 % loss of the best (still `cmDelta` under the source and inside the b338 damper), fewest moves in the last 2 s first; a path that took 2 moves in 2 s is no target; none left: no move this tick (`spread-held` in the callmove log line). sk402: same-tick moves herded onto one path |
 | `HS2_B336_CALLMOVE` lab hook `HS2_B338_CM_HOLD_MS` (lab) | unset | Iran (edge) | a move is not released before it is this old (lab only; not in the table) |

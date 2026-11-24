@@ -59,6 +59,17 @@ if [ -x "$T/hs2" ]; then
   sleep 0.3
   check "kill_this_tunnel: a recycled PID that is not hs2 is left alone" 'alive $notours'
   check "kill_this_tunnel: the unit's PID is stopped when it is hs2" '! alive $other'
+  # b430: a versioned binary name (comm hs2-t1.r69r7; `pgrep -x hs2` missed it) is still this tunnel's hs2;
+  # a non-hs2 binary with the same -c is not
+  cp "$T/hs2" "$T/hs2-t1.r69r7"; cp "$T/hs2" "$T/xray"
+  "$T/hs2-t1.r69r7" run -c /etc/hs2/v.json & ver=$!
+  "$T/xray" run -c /etc/hs2/v.json & xr=$!
+  sleep 0.3
+  bash -c "source '$T/run.sh'; CFG=/etc/hs2/v.json; kill_this_tunnel TERM ''" 2>/dev/null
+  sleep 0.3
+  check "kill_this_tunnel: a versioned hs2 binary (hs2-t1.r69r7) running this config is stopped" '! alive $ver'
+  check "kill_this_tunnel: a non-hs2 binary with the same -c keeps running" 'alive $xr'
+  kill $xr 2>/dev/null
   kill $similar $notours 2>/dev/null
 else
   echo "SKIP kill_this_tunnel (no go toolchain to build a stand-in hs2)"

@@ -292,6 +292,12 @@ type liveStatus struct {
 	ObsWedgeReleases         uint64 `json:"obs_wedge_releases,omitempty"`
 	ObsPostReleaseStall      uint64 `json:"obs_post_release_stall,omitempty"`
 	ObsPostReleaseStallMaxMs int64  `json:"obs_post_release_stall_max_ms,omitempty"`
+	// b449g: totals since start of failed first mconn opens by reason and the one-stream fallback (Iran)
+	B449gOpenFail map[string]uint64 `json:"b449g_open_fail,omitempty"`
+	// b449j/b449k: totals since start of HS2_B449J_UPGSAFE (a sub dying in the
+	// raw upgrade handshake): kept/done per side, the exit's repeated replies,
+	// ends at the wait bound, Iran's failed reopens, deaths not kept
+	B449jUpgSafe map[string]uint64 `json:"b449j_upgsafe,omitempty"`
 	// HS2_SMUX_AUTOWIN: the adaptive smux windows' budget (MiB) — out now, the
 	// most ever out, its size — streams holding a grown window now, and since
 	// start the doublings, those the budget refused, and the halvings.
@@ -320,12 +326,27 @@ type liveStatus struct {
 	// از برش، token سطل سراسری خالی، full باز کامل)، closed تصمیم‌هایی که
 	// پهنا ۰ ماند با sub زنده، و در بازهٔ گذشته میانگین/بیشینهٔ پهنا، کمینه/
 	// بیشینهٔ صف خام؛ آخرین صف خام، صف پس از کسر پایه، پایه (µs).
-	StripeActive      int32   `json:"stripe_active,omitempty"`
-	StripeRxActive    int32   `json:"stripe_rx_active,omitempty"`
-	StripeSubs        uint64  `json:"stripe_subs,omitempty"`
-	StripeBytes       uint64  `json:"stripe_bytes,omitempty"`
-	StripeSubBytes    uint64  `json:"stripe_sub_bytes,omitempty"`
-	StripeRefused     uint64  `json:"stripe_refused,omitempty"`
+	StripeActive   int32  `json:"stripe_active,omitempty"`
+	StripeRxActive int32  `json:"stripe_rx_active,omitempty"`
+	StripeSubs     uint64 `json:"stripe_subs,omitempty"`
+	StripeBytes    uint64 `json:"stripe_bytes,omitempty"`
+	StripeSubBytes uint64 `json:"stripe_sub_bytes,omitempty"`
+	StripeRefused  uint64 `json:"stripe_refused,omitempty"`
+	// b437 F10: connections that reached a stripe of 2,3,..,7,8+ subs (the
+	// per-connection log line is kept only from 5)
+	StripeReach []uint64 `json:"stripe_reach,omitempty"`
+	// b437 F8/F9: call silent-rx episodes (all, with link evidence, without,
+	// >= 2 s, >= 5 s, longest ms) and cross-side switch records sent/acted;
+	// their per-event lines are kept only for link trouble / long gaps / acts
+	DCSilent          uint64  `json:"dc_silent,omitempty"`
+	DCSilentLink      uint64  `json:"dc_silent_link,omitempty"`
+	DCSilentApp       uint64  `json:"dc_silent_app,omitempty"`
+	DCSilent2s        uint64  `json:"dc_silent_2s,omitempty"`
+	DCSilent5s        uint64  `json:"dc_silent_5s,omitempty"`
+	DCSilentMaxMs     int64   `json:"dc_silent_max_ms,omitempty"`
+	XSSent            uint64  `json:"xs_sent,omitempty"`
+	XSActed           uint64  `json:"xs_acted,omitempty"`
+	DCLogDrop         uint64  `json:"dc_log_drop,omitempty"` // b437 F12: darkcall lines over the 12/min budget
 	StripePickNone    uint64  `json:"stripe_pick_none,omitempty"`
 	StripeFastChained uint64  `json:"stripe_fast_chained,omitempty"`
 	StripeFastEarly   uint64  `json:"stripe_fast_early,omitempty"`
@@ -415,6 +436,8 @@ type liveStatus struct {
 	// Censor is censor351's read-only block (HS2_CENSOR_DETECT; absent when
 	// off). Rendered by `hs2 status --censor`; nothing else reads it.
 	Censor json.RawMessage `json:"censor,omitempty"`
+	// b458: HS2_B457_PICKCAP waits and join delays (mconn_b458_capstat.go).
+	B458 *engine.B458Counts `json:"b458_pickcap,omitempty"`
 }
 
 // fillAutoWin copies the smux autowin budget counters.
@@ -445,6 +468,13 @@ func fillDiag73(ls *liveStatus) {
 func fillStripe(ls *liveStatus, s engine.StripeSnap) {
 	ls.StripeActive, ls.StripeRxActive, ls.StripeSubs, ls.StripeBytes, ls.StripeSubBytes = s.Active, s.RxActive, s.Subs, s.Bytes, s.SubBytes
 	ls.StripeRefused, ls.StripePickNone, ls.StripeGrowUnused, ls.StripeGrowRate = s.Refused, s.PickNone, s.GrowUnused, s.GrowRate
+	ls.StripeReach = s.Reach
+	ls.DCSilent, ls.DCSilentLink, ls.DCSilentApp, ls.DCSilent2s, ls.DCSilent5s, ls.DCSilentMaxMs = engine.DC254Silent()
+	ls.XSSent, ls.XSActed = engine.XS261Counts()
+	ls.DCLogDrop = engine.DCLogDrops()
+	if c := engine.B458Snapshot(); c != (engine.B458Counts{}) {
+		ls.B458 = &c
+	}
 	ls.StripeFastChained, ls.StripeFastEarly, ls.StripeFastRetry = s.FastChained, s.FastEarly, s.FastRetry
 	ls.StripeFastRsv, ls.StripeFastRefill, ls.StripeFastHsKick = s.FastReserved, s.FastRefills, s.FastHsKicks
 	ls.StripeFastBump = s.FastBumps
@@ -513,6 +543,13 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.MConnDupBytes = now.MConnDupBytes
 	ls.ObsLossRelKept, ls.ObsProbationOnceDenied = now.LossRelKept, now.ProbationOnceDenied
 	ls.ObsWedgeReleases, ls.ObsPostReleaseStall, ls.ObsPostReleaseStallMaxMs = now.WedgeReleases, now.PostReleaseStall, now.PostReleaseStallMaxMs
+	if o := now.B449gOpen; o != (engine.B449gOpenSnap{}) {
+		ls.B449gOpenFail = map[string]uint64{"nopick": o.NoPick, "nomconn": o.NoMConn, "stream": o.Stream, "header": o.Header, "ended": o.Ended,
+			"fallback": o.Fallback, "fallback_fail": o.FallbackFail, "late_fail": o.LateFail}
+	}
+	if u := now.B449jUpg; u != (engine.B449jUpgSnap{}) {
+		ls.B449jUpgSafe = b449jUpgMap(u)
+	}
 }
 
 // fillSmuxWin copies the adaptive smux window budget (HS2_SMUX_AUTOWIN).
@@ -699,7 +736,7 @@ func (w *warmWriter) note(target int) {
 func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats engine.StatsFn) {
 	path := statusPath(cfgPath)
 	// censor351 (step-3 F2, rel69r-rc6): detect and log only; no reaction.
-	// Default on the Iran side, off on the Kharej side; HS2_CENSOR_DETECT=0/1
+	// Default on both sides (Kharej since rel69r-rc8); HS2_CENSOR_DETECT=0/1
 	// on a host overrides its side's default.
 	if fc.Mode == "dial" {
 		censor.Init(censor.SideIran, log.Printf)
@@ -829,6 +866,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			censor.NoteUsers(opens) // M6 domestic witness (read-only copy)
 		}
 		ls.Censor = censor.StatusJSON()
+		if l := censor.PeerLogLine(time.Now()); l != "" {
+			log.Print(l) // b429: abort-report path counters, at most every 10 min, only on change
+		}
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
@@ -1454,4 +1494,11 @@ func printCensor(path string) {
 		return
 	}
 	fmt.Print(censor.Render(ls.Censor))
+}
+
+// b449jUpgMap: the status JSON names of the HS2_B449J_UPGSAFE totals (the
+// lab's ups.sh columns).
+func b449jUpgMap(u engine.B449jUpgSnap) map[string]uint64 {
+	return map[string]uint64{"ir_kept": u.IranKept, "ir_done": u.IranDone, "kh_kept": u.ExitKept, "kh_done": u.ExitDone,
+		"kh_reply": u.Reply, "end_bound": u.BoundEnded, "reopen_fail": u.ReopenFail, "refused": u.Refused}
 }

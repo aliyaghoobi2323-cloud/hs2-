@@ -523,6 +523,8 @@ func isErrLine(l string) bool {
 
 // errSig: an error line without its numbers, addresses and ids — the "kind".
 func errSig(text string) string {
+	// b437 F5: a draining old process prefixes its lines; same kind.
+	text = strings.Replace(text, "[draining] ", "", 1)
 	s := reSigNum.ReplaceAllString(text, "#")
 	s = reSigWS.ReplaceAllString(strings.TrimSpace(s), " ")
 	if len(s) > 80 {

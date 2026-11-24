@@ -9,8 +9,8 @@
 //   - Hooks never block (select with default; a full ring drops and counts),
 //     take no lock, and allocate nothing when the key is off.
 //   - A panic in the evaluator is recovered and turns the detector off.
-//   - HS2_CENSOR_DETECT (alias HS2_CENSOR), default 1 on the Iran side and
-//     0 on the Kharej side (rel69r-rc6, LevelFor): 0 off, 1 level 1
+//   - HS2_CENSOR_DETECT (alias HS2_CENSOR), default 1 on both sides
+//     (Iran since rel69r-rc6, Kharej since rel69r-rc8, LevelFor): 0 off, 1 level 1
 //     (hooks + evaluator + lines + status). Level 2 (the raw-socket RST/SYN
 //     sampler, M8) is not built: it waits for owner decision D4; 2 runs as 1.
 //   - HS2_CENSOR_RECORD=<file> (lab only, default unset): with the detector
@@ -126,6 +126,27 @@ const (
 	evDeath
 	evPath
 	evUsers
+	_            // 6 is recTick in a recording
+	evPeerAbort  // b414: the Iran end aborted n of its own links (Kharej side)
+	evPeerOrphan // b414 v4: the last reporting link on an Iran IP ended (Kharej side)
+	evGen        // b437 Q2: a ZDU generation change (stage: genOldEnd, genPeerNew, genOwnTakeover, genOwnDone)
+)
+
+// ZDU generation events (b437 Q2), the stage of an evGen event.
+const (
+	// genOldEnd: a link the other server's OLDER process held (ZDU peerOld:
+	// it announced an instance older than the newest one) ended. Its old
+	// process closes its drained links at its drain end (120 at once on
+	// prod t1): a planned close of the peer, not evidence. The death rides
+	// in the event (d) for the recording.
+	genOldEnd uint8 = iota + 1
+	// genPeerNew: the other server's links announced a newer instance (its
+	// new process took over).
+	genPeerNew
+	// genOwnTakeover: this process took over from an older one (ZDU child).
+	genOwnTakeover
+	// genOwnDone: this process's handover is over (probation passed).
+	genOwnDone
 )
 
 // event is the fixed-size record the hooks put in the ring.
@@ -199,6 +220,67 @@ func NotePath(p PathSample) {
 	send(event{kind: evPath, local: p.Local, remote: p.Remote, p: p, at: nowNs()})
 }
 
+// NotePeerAborts records that the Iran end of the tunnel reported n links on
+// Iran IP ir that it aborted itself (b414: the Iran side's own ECONNABORTED
+// deaths, carried in spare bits of its control pings). Kharej side only: a
+// reset on such a link is the peer's own act, not evidence of an injector.
+// An older Iran never reports, so nothing changes against it. n 0: the
+// Iran end reports (its first ping), so resets wait for its reports.
+func NotePeerAborts(ir netip.Addr, n uint64) {
+	if !active.Load() {
+		return
+	}
+	send(event{kind: evPeerAbort, remote: ir.Unmap(), n: n, at: nowNs()})
+}
+
+// NotePeerOrphan records that the last link on Iran IP ir whose control
+// pings carried the Iran end's abort count ended (b414 v4, Kharej side): no
+// abort report for the IP can come before the next link's first ping, so
+// its resets wait for that ping (NotePeerAborts) or PeerOrphanHold.
+func NotePeerOrphan(ir netip.Addr) {
+	if !active.Load() {
+		return
+	}
+	send(event{kind: evPeerOrphan, remote: ir.Unmap(), at: nowNs()})
+}
+
+// NotePeerOldDeath records the death of a link that the other server's
+// older (draining) process held (b437 Q2, ZDU peerOld). In place of
+// NoteDeath: the death is the peer's generation ending, not evidence.
+func NotePeerOldDeath(d Death) {
+	if !active.Load() {
+		return
+	}
+	d.Local, d.Remote = d.Local.Unmap(), d.Remote.Unmap()
+	send(event{kind: evGen, stage: genOldEnd, local: d.Local, remote: d.Remote, front: d.Front, d: d, at: nowNs()})
+}
+
+// NotePeerGeneration records that the other server's links announced a
+// newer process instance (b437 Q2: its ZDU took over).
+func NotePeerGeneration() {
+	if !active.Load() {
+		return
+	}
+	send(event{kind: evGen, stage: genPeerNew, at: nowNs()})
+}
+
+// NoteOwnHandover records this process's own ZDU generation change (b437
+// Q2): done false at the takeover (this process is the new one), true when
+// the handover is over (probation passed). The own-restart grace then ends
+// with the handover, not 5 min after the start: the takeover adopted every
+// listener and the links of the old process keep running, so nothing
+// restarted after it.
+func NoteOwnHandover(done bool) {
+	if !active.Load() {
+		return
+	}
+	st := genOwnTakeover
+	if done {
+		st = genOwnDone
+	}
+	send(event{kind: evGen, stage: st, at: nowNs()})
+}
+
 // NoteUsers records the cumulative count of user connections opened at this
 // end (the domestic witness M6 on the Iran side).
 func NoteUsers(total uint64) {
@@ -209,13 +291,13 @@ func NoteUsers(total uint64) {
 }
 
 // Level reads HS2_CENSOR_DETECT (alias HS2_CENSOR) for the Kharej side's
-// default (off). 2 is treated as 1 (no sampler in this build).
+// default (on since rel69r-rc8). 2 is treated as 1 (no sampler in this build).
 func Level() int { return LevelFor(SideKharej) }
 
 // LevelFor is the level for side: an explicit HS2_CENSOR_DETECT (alias
 // HS2_CENSOR) wins; unset (or empty), the side's default applies:
-// rel69r-rc6 runs the Iran side on (LOGONLY data collection) and keeps the
-// Kharej side off (its verdicts are not accurate enough yet). With
+// both sides run on, LOGONLY (Iran since rel69r-rc6; Kharej since
+// rel69r-rc8 with the b414 peer-abort fix, pooled precision 53/54). With
 // HS2_DEFAULTS=legacy both sides default off. 2 is treated as 1.
 func LevelFor(side Side) int {
 	v := strings.TrimSpace(os.Getenv("HS2_CENSOR_DETECT"))
@@ -223,7 +305,7 @@ func LevelFor(side Side) int {
 		v = strings.TrimSpace(os.Getenv("HS2_CENSOR"))
 	}
 	if v == "" {
-		if side == SideIran && !legacyDefaults() {
+		if !legacyDefaults() { // rel69r-rc8: every side defaults on
 			return 1
 		}
 		return 0

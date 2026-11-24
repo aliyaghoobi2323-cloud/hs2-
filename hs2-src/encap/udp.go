@@ -3,6 +3,8 @@ package encap
 import (
 	"fmt"
 	"net"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/freebind"
 )
 
 // The udp encapsulation is the ordinary case: a native UDP socket. *net.UDPConn
@@ -49,10 +51,13 @@ func listenUDP(addr string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := net.ListenUDP(listenNetwork(ua), ua)
+	// b425: freebind for a specific address (an address in DAD or added late
+	// never fails the start).
+	pc, err := freebind.ListenPacket(listenNetwork(ua), ua.String())
 	if err != nil {
 		return nil, err
 	}
+	c := pc.(*net.UDPConn)
 	setSockBufs(c, sockBuf)
 	return c, nil
 }

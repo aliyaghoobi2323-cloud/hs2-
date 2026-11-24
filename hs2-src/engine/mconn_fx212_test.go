@@ -341,6 +341,9 @@ func TestFx212SubSweeper(t *testing.T) {
 // only the TCP look heals it.
 func TestFx212AgeTrimGap(t *testing.T) {
 	fx212SubKeys(t)
+	oldF := b449KeepFloor.Load()
+	b449KeepFloor.Store(0) // b449c: the floor holds a small connection's chunks (mconn_b449_floor_test.go)
+	t.Cleanup(func() { b449KeepFloor.Store(oldF) })
 	la := linkAck{srtt: 10 * time.Millisecond}
 	subLinkAck = func(*msub) (linkAck, bool) { return la, true }
 	m := &mConn{mode: planeLight}

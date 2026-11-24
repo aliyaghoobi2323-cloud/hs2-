@@ -271,6 +271,11 @@ func zduNeedOf(t int) int {
 // pool's ceiling (the old Iran's boot boost while the pool is at its max).
 const zduExitBoot = 2
 
+// zduBootJump: the rise of the asked target over the last ask (prev) that
+// starts a new boot episode. The handover boost doubles the ask (+ the old
+// Iran's target); a cut-drain replacement adds a few links.
+func zduBootJump(prev int) int { return max(prev/2, zduExitBoot) }
+
 // zduExitBootN counts them (zdu_exit_boot on the mem line).
 var zduExitBootN atomic.Int64
 
@@ -280,15 +285,95 @@ var zduExitBootN atomic.Int64
 // Iran (the old stopped accepting links), and at that first new-instance link
 // the old links turn legacy and the new Iran's own poolctl grows its pool in
 // full (zdu_exit.go). A target at or below the ceiling ends the episode.
+//
+// b441 (l437 finding 6: an Iran handover got "0 links after 20s, need 93"):
+// the edge also asks above the ceiling without any handover, for the links
+// its lb cut-drain replaces (ctlTarget's ctlDrain term). Such an overshoot
+// opened an episode and spent the spares on the old Iran (zdu_exit_boot=8 on
+// the new Kharej in the minute before); while it lasted, the real boost that
+// followed was the same episode: no spare dialed, and the old Iran's
+// zduBootClose links were retired as over target instead of redialing. The
+// boost adds the old Iran's whole target, so an ask that rises by at least
+// zduBootJump over the last one starts a new episode even while the ask was
+// already above the ceiling. Any Iran version (the wire is unchanged).
 // Caller holds p.mu.
 func (p *exitPool) zduBootLocked(asked, hi int) {
+	prev := p.zduAsk
+	p.zduAsk = asked
 	if !zduOn.Load() || asked <= hi || p.want == 0 {
-		p.zduBoot = 0
+		p.zduBoot, p.zduBootRound = 0, 0
 		return
+	}
+	if prev > 0 && asked-prev >= zduBootJump(prev) {
+		p.zduBoot = 0 // a boost on top of an overshoot: a new episode
+		p.zduBootRound = 0
+	}
+	now := time.Now()
+	if p.zduBoot >= zduExitBoot && p.zduBootRound < zduBootRounds && now.Sub(p.zduBootAt) >= zduBootRetry &&
+		p.zduBootUp == p.zduBootUp0 && !p.peers.zduCur().newer(p.zduBootInst) {
+		p.zduBoot = 0 // b443: no spare of the last round reached any Iran process and no new instance yet: one more round
+		p.zduBootRound++
+		zduExitBootRetryN.Add(1)
+	}
+	if p.zduBoot < zduExitBoot && !p.outage {
+		p.zduBootAt, p.zduBootInst, p.zduBootUp0 = now, p.peers.zduCur(), p.zduBootUp
 	}
 	for ; p.zduBoot < zduExitBoot && !p.outage; p.zduBoot++ {
 		p.startSlotLocked()
-		p.slots[len(p.slots)-1].spare = true // never retired before its one dial
+		s := p.slots[len(p.slots)-1]
+		s.spare = true // never retired before its one dial
+		s.boot = true  // b443: dialed on a proven path
 		zduExitBootN.Add(1)
 	}
+}
+
+// b443 (lab r443 op4: an Iran handover 37 s after the previous Iran drain got
+// "3 links after 20s, need 96"): the boot spares did start (zdu_exit_boot
+// +2) but the LB put both on the lossy path (35 % loss), just back from its
+// dial cooldown: a cooled path's probe comes first and the "two per path"
+// rule sends the next dial to the path with the fewest links. Their TLS
+// handshakes took ~19 s, the new Iran had no link to send its own poolctl on,
+// and the old Iran's boost could not grow a pool at its ceiling. Now:
+//
+//   - a boot spare dials a proven path (zduBootPathLocked: eligible, factor
+//     >= zduBootMinMult, at least two links held there), by weight among them;
+//   - the episode is tied to the new Iran instance, not only to the ask: when
+//     no spare of the last round reached any Iran process (no link up) within
+//     zduBootRetry and no newer Iran instance has appeared on a link since the
+//     round began, one more round starts (at most zduBootRounds). Without a
+//     handover the spares land on the running Iran at once (zduBootUp moves),
+//     so no extra round and no churn; once a link of the new instance is up,
+//     the new Iran's own poolctl grows its pool (zdu_exit.go).
+//
+// Exit-side only, wire unchanged, any Iran version.
+const (
+	zduBootRetry   = 5 * time.Second
+	zduBootRounds  = 3
+	zduBootMinMult = 0.5
+)
+
+// zduExitBootRetryN counts the extra rounds (zdu_exit_boot_retry on the mem line).
+var zduExitBootRetryN atomic.Int64
+
+// zduBootPathLocked is the path for a boot spare: among the eligible paths
+// with factor >= zduBootMinMult and at least two links (live or dialing), the
+// one furthest under its weighted share; -1 when none (the usual pick then).
+// Caller holds b.mu.
+func (b *LB) zduBootPathLocked() int {
+	now := b.now()
+	ok := func(j int) bool {
+		return b.eligibleLocked(j, now) && j < len(b.mult) && b.mult[j] >= zduBootMinMult && b.links[j] >= 2 &&
+			(j >= len(b.probing) || !b.probing[j])
+	}
+	found := false
+	for j := range b.paths {
+		if ok(j) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return -1
+	}
+	return pickLargestRemainder(b.effWeightsLocked(), b.links, ok, -1)
 }

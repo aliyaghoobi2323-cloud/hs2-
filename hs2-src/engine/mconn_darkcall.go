@@ -57,7 +57,10 @@ var (
 	darkcallCheck = 2 * time.Second
 	// darkcallCapMin: the in-flight cap's floor (bytes)
 	darkcallCapMin = envIntDef("HS2_MCONN_DARKCALL_CAPKB", 256) << 10
-	darkcallLogMax = int64(3000)
+	// b437 F4: 300 free lines per process (was 3000). A new process (ZDU,
+	// restart) spent 3000 lines in its first minutes, which looked like a
+	// darkcall spike in the journal; past it dcOverLog keeps 30 a minute.
+	darkcallLogMax = int64(300)
 	// fx212 (an210 Q2): HS2_FX212_DARKCALL (default on) gates the in-flight
 	// cap by link evidence. smux written - consumed includes bytes the peer
 	// read but has not reported (AutoWindow sends an update only every
@@ -112,11 +115,11 @@ var darkcallStat struct {
 
 func darkcallLogLine() string {
 	s := &darkcallStat
-	return fmt.Sprintf("mconn darkcall: on %v · visits %d looks %d nosock %d · dark %d prim %d · switched %d covered %d short %d nocand %d · rrec %d (rx %d) notelig %d rearm %d · ok %d bad %d · capped %d · resent %d KB moved %d KB · again %d uncapall %d · cs221 held %d (%d KB) skipq %d rxlive %d samepair %d",
+	return fmt.Sprintf("mconn darkcall: on %v · visits %d looks %d nosock %d · dark %d prim %d · switched %d covered %d short %d nocand %d · rrec %d (rx %d) notelig %d rearm %d · ok %d bad %d · capped %d · resent %d KB moved %d KB · again %d uncapall %d · cs221 held %d (%d KB) skipq %d rxlive %d samepair %d · log drop %d",
 		darkcallOn.Load(), s.visits.Load(), s.looks.Load(), s.noSock.Load(), s.dark.Load(), s.darkPrim.Load(),
 		s.switched.Load(), s.covered.Load(), s.short.Load(), s.noCand.Load(), s.rrec.Load(), s.rrRx.Load(), s.rrNo.Load(), s.rearm.Load(),
 		s.okAfter.Load(), s.badAfter.Load(), s.capped.Load(), s.resent.Load()>>10, s.moved.Load()>>10, s.again.Load(), s.uncapAll.Load(),
-		cs221Stat.held.Load(), cs221Stat.heldB.Load()>>10, cs221Stat.skipQ.Load(), cs221Stat.rxLive.Load(), cs221Stat.samePair.Load()) +
+		cs221Stat.held.Load(), cs221Stat.heldB.Load()>>10, cs221Stat.skipQ.Load(), cs221Stat.rxLive.Load(), cs221Stat.samePair.Load(), dcOverLog.drop.Load()) +
 		cs223LogPart() + cs224LogPart() + cs226LogPart() + dc254LogPart() + xs261LogPart() + b262LogPart() + b262RepLogPart() + b270LogPart() + b274LogPart() + b296LogPart() + b342LogPart()
 }
 
@@ -159,6 +162,7 @@ type dcConn struct {
 	// dc254: silent-rx / tx-stall episode state
 	silent    bool
 	silentFor time.Duration
+	silentEv  bool // b437 F9: the silent episode's onset had link evidence
 	txStall   bool
 	xs        xsConn // xs261: the cross-side switch (mconn_xs261.go)
 }
@@ -203,14 +207,48 @@ func darkcallLoop() {
 			last = time.Time{}
 			continue
 		}
+		darkcallLoopMu.Lock()
+		if darkcallLoopHold.Load() > 0 {
+			darkcallLoopMu.Unlock()
+			last = time.Time{}
+			continue // b449h: a test holds the global timer (holdDarkcallLoop)
+		}
 		now := time.Now()
 		dc254TickLate(last, now) // dc254: a late tick = the process (not a link) stalled
 		last = now
 		darkcallTick(now, ctrlNow())
+		darkcallLoopMu.Unlock()
+		// b454: a late tick is either the scheduler (no P for this
+		// goroutine) or this loop's own visit (blocked on an mConn's lock,
+		// or slow): name which one.
+		if d := time.Since(now); d >= dc254SilentAfter/2 {
+			b454SlowTicks.Add(1)
+			log.Printf("mconn darkcall tick work took %v over %d conns (a lock wait or a slow visit, not the scheduler)", d.Round(time.Millisecond), rrConnsLen())
+		}
 	}
 }
 
+// b449h (tests only; never set in production): the package's darkcallLoop
+// is started once and never stopped, so a test that counts the global
+// darkcallStat / b296Stat or drives darkcallTick itself shared them with
+// visits of every conn earlier tests left in rrConns (order-dependent
+// failures in `go test ./...`). holdDarkcallLoop pauses it; darkcallLoopMu
+// lets the hold wait out a tick in progress.
+var (
+	darkcallLoopHold atomic.Int32
+	darkcallLoopMu   sync.Mutex
+)
+
 var b296Tick atomic.Uint64
+
+var b454SlowTicks atomic.Uint64
+
+// rrConnsLen: the mConns the darkcall loop visits.
+func rrConnsLen() int {
+	n := 0
+	rrConns.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
 
 func darkcallTick(now time.Time, nowc int64) {
 	full := b296Tick.Add(1)%b296FullEvery == 0 // b296 backstop
@@ -278,7 +316,9 @@ func (m *mConn) darkcallLiteLocked(now time.Time, nowc int64, lite bool) bool {
 		} else {
 			darkcallStat.badAfter.Add(1)
 		}
-		m.dcLogf("%x darkcall outcome iran=%v progress=%v", m.id, m.iran, ok)
+		if !ok { // b437 F12: a good outcome is the norm (ok/bad in the summary)
+			m.dcLogf("%x darkcall outcome iran=%v progress=%v", m.id, m.iran, ok)
+		}
 		d.checkAt, d.chkTo = time.Time{}, nil
 	}
 	live := m.rrLiveSubsLocked()
@@ -544,7 +584,16 @@ func (m *mConn) dcTraceLocked(live []*msub, now time.Time, nowc int64, next uint
 // coming at this many a minute. The lifetime cap alone was used up by lite
 // (cs226) switches ~25 min into the run, and a call's later 4.3 s stall
 // left no darkcall line at all to tell whether it switched.
-var dcOverLog = logBudget{per: 30}
+//
+// b437 F12: 30 -> 12 a minute. With the per-send xs261 and the good-outcome
+// lines gone the budget no longer fills with routine lines (prod: 176 of 180
+// Iran minutes were at 30), so switches, acts and bad outcomes, which those
+// lines crowded out, would come back in their place; the drops are counted
+// (summary "log drop", status dc_log_drop).
+var dcOverLog = logBudget{per: 12}
+
+// DCLogDrops (b437 F12, status.json): darkcall lines dropped by dcOverLog.
+func DCLogDrops() uint64 { return dcOverLog.drop.Load() }
 
 func (m *mConn) dcLogf(format string, a ...any) {
 	if darkcallStat.logged.Add(1) > darkcallLogMax && !dcOverLog.ok(time.Now()) {

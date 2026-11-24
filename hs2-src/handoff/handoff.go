@@ -32,6 +32,10 @@
 //	GO         (empty)                          old -> new
 //	ABORT      reason (utf-8, <= 512)           either way
 //	DRAINSTAT  links u32, users u32             old -> new, every 2 s
+//	LISTENING  (empty)                          new -> old (FeatListening)
+//	UNUSED     n u8, n x (namelen u8, name)     new -> old (FeatUnused, b428)
+//	LBSTATE    opaque engine blob (<= 32 KiB)   old -> new (FeatLBState, b438):
+//	           right after FDS, and again right before GO
 //
 // A reader rejects an unknown version, an unknown type, a payload whose
 // length does not match its type, and fds on any message but FDS (they are
@@ -69,10 +73,31 @@ const (
 	// carry FeatListening): its listeners are up and the fds are adopted;
 	// the old process moves link accept over now (zdu350 review M2).
 	TypeListening = 7
+	// TypeUnused (b428, new process -> old, right before READY, only when
+	// both Hellos carry FeatUnused): the names of the handed-off fds this
+	// process did not adopt (its config no longer binds them). At GO the old
+	// process closes its copies of those sockets so the port is free for
+	// another unit (moving a user port between tunnels). Payload as FDS
+	// (n u8, names), n may be 0; no fds ride with it.
+	TypeUnused = 8
+	// TypeLBState (b438, old process -> new, only when both Hellos carry
+	// FeatLBState): the old process's LB judge state (an engine blob, may be
+	// empty), once right after FDS and once right before GO. The new process
+	// seeds its judge from it (engine.ZDULBStateSeed); no fds ride with it.
+	TypeLBState = 9
 )
 
 // FeatListening (Hello.Features): this side sends / waits for LISTENING.
 const FeatListening uint32 = 1
+
+// FeatUnused (b428, Hello.Features): this side sends / waits for UNUSED.
+const FeatUnused uint32 = 2
+
+// FeatLBState (b438, Hello.Features): this side sends / reads LBSTATE.
+const FeatLBState uint32 = 4
+
+// MaxLBState is the largest LBSTATE payload.
+const MaxLBState = 32 << 10
 
 const (
 	hdrLen       = 4
@@ -126,11 +151,16 @@ type Msg struct {
 	FDs    []FD
 	Drain  DrainStat
 	Reason string
+	Names  []string // UNUSED (b428)
+	Blob   []byte   // LBSTATE (b438)
 }
 
 // Conn is one end of the channel.
 type Conn struct {
 	c *net.UnixConn
+	// LBState (old process, b438; nil: none) builds the LBSTATE payload when
+	// both Hellos carry FeatLBState.
+	LBState func() []byte
 }
 
 // NewConn wraps a connected SOCK_SEQPACKET unix socket.
@@ -224,9 +254,38 @@ func encode(m *Msg) ([]byte, error) {
 			i += 1 + copy(p[i+1:], f.Name)
 		}
 		return b, nil
+	case TypeUnused:
+		if len(m.Names) > MaxFDs {
+			return nil, fmt.Errorf("handoff: %d unused names (0..%d)", len(m.Names), MaxFDs)
+		}
+		n := 1
+		for _, nm := range m.Names {
+			if len(nm) == 0 || len(nm) > maxName {
+				return nil, fmt.Errorf("handoff: unused name %q", nm)
+			}
+			n += 1 + len(nm)
+		}
+		b := make([]byte, hdrLen+n)
+		putHdr(b, TypeUnused, n)
+		p := b[hdrLen:]
+		p[0] = byte(len(m.Names))
+		i := 1
+		for _, nm := range m.Names {
+			p[i] = byte(len(nm))
+			i += 1 + copy(p[i+1:], nm)
+		}
+		return b, nil
 	case TypeReady, TypeGo, TypeListening:
 		b := make([]byte, hdrLen)
 		putHdr(b, m.Type, 0)
+		return b, nil
+	case TypeLBState:
+		if len(m.Blob) > MaxLBState {
+			return nil, fmt.Errorf("handoff: lbstate %d bytes (max %d)", len(m.Blob), MaxLBState)
+		}
+		b := make([]byte, hdrLen+len(m.Blob))
+		putHdr(b, TypeLBState, len(m.Blob))
+		copy(b[hdrLen:], m.Blob)
 		return b, nil
 	case TypeAbort:
 		r := m.Reason
@@ -297,10 +356,34 @@ func decode(b []byte, nfds int) (*Msg, []string, error) {
 			return nil, nil, ErrBadMsg
 		}
 		return m, names, nil
+	case TypeUnused:
+		if n < 1 || int(p[0]) > MaxFDs {
+			return nil, nil, ErrBadMsg
+		}
+		i := 1
+		for k := 0; k < int(p[0]); k++ {
+			if i >= len(p) {
+				return nil, nil, ErrBadMsg
+			}
+			l := int(p[i])
+			if l == 0 || l > maxName || i+1+l > len(p) {
+				return nil, nil, ErrBadMsg
+			}
+			m.Names = append(m.Names, string(p[i+1:i+1+l]))
+			i += 1 + l
+		}
+		if i != len(p) {
+			return nil, nil, ErrBadMsg
+		}
 	case TypeReady, TypeGo, TypeListening:
 		if n != 0 {
 			return nil, nil, ErrBadMsg
 		}
+	case TypeLBState:
+		if n > MaxLBState {
+			return nil, nil, ErrBadMsg
+		}
+		m.Blob = append([]byte(nil), p...)
 	case TypeAbort:
 		if n > maxAbort {
 			return nil, nil, ErrBadMsg
@@ -391,7 +474,7 @@ func (c *Conn) Recv(timeout time.Duration) (*Msg, error) {
 		c.c.SetReadDeadline(time.Now().Add(timeout))
 		defer c.c.SetReadDeadline(time.Time{})
 	}
-	b := make([]byte, maxMsg+1)
+	b := make([]byte, max(maxMsg, hdrLen+MaxLBState)+1)
 	oob := make([]byte, unix.CmsgSpace(4*MaxFDs))
 	n, oobn, flags, _, err := c.c.ReadMsgUnix(b, oob)
 	if err != nil {

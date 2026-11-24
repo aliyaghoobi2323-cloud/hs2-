@@ -558,6 +558,7 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 	s.b278Log.Store(&logf)
 	var b278Last [4]int64
 	var fc fecCounts
+	var pacedLast uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -566,6 +567,10 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 			if c := [4]int64{b278Moved.Load(), b278DupSkip.Load(), b278Stuck.Load(), b278OtherPath.Load()}; c != b278Last {
 				b278Last = c
 				logf("l3 b278 stall: on %v · lane flows moved off a stuck link %d · dup copies kept off one %d · stuck verdicts %d · dup copies moved off the first's path %d · b303 on %v kept %d picks %d · b308 on %v held %d moved %d · b309 on %v held %d moved %d", b278On.Load(), c[0], c[1], c[2], c[3], b303On.Load(), b303Hit.Load(), b303Pick.Load(), b308On.Load(), b308Held.Load(), b308Moved.Load(), b309On.Load(), b309Held.Load(), b309Moved.Load())
+			}
+			if n := closePaced.Load(); n != pacedLast {
+				logf("close pace (b450, HS2_CLOSE_PACE): %d relay closes waited their turn in 30s (a mass close; %d so far; %d new lanes past the %v wait cap so far)", n-pacedLast, n, closeLanes.Load(), time.Duration(closePaceCap.Load()))
+				pacedLast = n
 			}
 			if n := s.drops.Swap(0); n > 0 {
 				logf("l3: dropped %d packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected", n)

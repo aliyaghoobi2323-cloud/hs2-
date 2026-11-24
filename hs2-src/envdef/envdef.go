@@ -493,10 +493,11 @@ var Table = []Key{
 	// the censorship detector, detect and LOG only (lines "censor351: v1 ...",
 	// status block, `hs2 status --censor`). It feeds nothing: no LB, dial,
 	// close or timing change. 0 off (no goroutine, no allocation); 1 on. Alias
-	// HS2_CENSOR. On by default on the edge (Iran) only; the exit (Kharej)
-	// side stays off (not accurate enough yet). The code default is the same
-	// (censor.LevelFor), so other layouts match.
-	{"HS2_CENSOR_DETECT", "1", Edge},
+	// HS2_CENSOR. On by default on both sides: the edge (Iran) since
+	// rel69r-rc6, the exit (Kharej) since rel69r-rc8 (b414 peer-abort fix;
+	// pooled precision Kharej 53/54, Iran 63/63). The code default is the
+	// same (censor.LevelFor), so other layouts match.
+	{"HS2_CENSOR_DETECT", "1", Both},
 	// rel69h (st244/st245/st246): the edge paces lite raw->dual upgrades
 	// through one token bucket, "auto" = max(500, 100 x GOMAXPROCS) a second
 	// (burst rate/10); call upgrades and interactive flows

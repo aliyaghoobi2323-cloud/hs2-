@@ -2,6 +2,7 @@ package engine
 
 import (
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
@@ -27,8 +28,23 @@ func censorDeath(w *watchConn, err error) {
 	if tc := censorTCPOf(w.raw); tc != nil {
 		censorTCP(tc, &d)
 	}
-	censor.NoteDeath(d)
+	if w.meter != nil && w.meter.zduOld.Load() {
+		// b437 Q2: a link of the other server's older (draining) process:
+		// its end is that generation ending, not evidence (Iran: the old
+		// Kharej closes its drained links at its drain end; Kharej: the
+		// old Iran's links). Its own aborts are still counted below.
+		censorNotePeerOld(d)
+	} else {
+		censorNoteDeath(d)
+	}
+	if d.Class == censor.DeathAbort && censorIsEdge.Load() && !w.ownClosed.Load() { // b430: not again after an own close
+		censorNoteOwnAbort(d.Local) // b414: told to the Kharej end in the control pings
+	}
 }
+
+// censorIsEdge: this process is the Iran edge (set where its control
+// pings start); only its own aborts are counted for the Kharej end.
+var censorIsEdge atomic.Bool
 
 // censorTCPOf unwraps net.Conn wrappers (TLS) down to the kernel socket, as
 // tlscarrier.Carrier.TCPConn does; bounded.

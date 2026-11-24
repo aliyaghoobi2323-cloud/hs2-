@@ -47,7 +47,13 @@ func (m *LinkManager) zduRefreshLocked() {
 	if !zduOn.Load() || m.zdu.gen.Load() == 0 {
 		return
 	}
+	if b459DeadGen.Load() { // wakes cap waiters of a generation that just lost its last link
+		if s := m.b459.snap.Load(); s == nil || s.epoch != m.b327.epoch.Load() {
+			m.b459ScanLocked() // only when the pool changed: no allocation on a steady refresh
+		}
+	}
 	cur := m.zduCurrentLocked()
+	censorPeerInst(cur) // b437 Q2: a newer peer instance is a generation change
 	mx := m.zduMixNow() // review issue 3: both generations serve (zdu_phase.go)
 	mixing := mx != nil
 	var old, conns int64
@@ -125,6 +131,7 @@ func zduCountsLine() string {
 		zduExitSeen.Store(true)
 		s += fmt.Sprintf(" zdu_exit_cur=%d zdu_exit_old=%d", cur, old)
 	}
+	s += zduReportLine()                // b436 (zdu_report436.go)
 	if n := zduUDPMoved.Load(); n > 0 { // zdu_udpmove.go
 		s += fmt.Sprintf(" zdu_udp_moved=%d", n)
 	}

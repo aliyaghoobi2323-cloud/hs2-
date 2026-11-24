@@ -161,6 +161,7 @@ type LB struct {
 	// verdicts, and the drain guard (retires in the last minute, the link
 	// count at the last retire and when).
 	judge      *q2Judge
+	judgeCool  map[string]*q2Path // b443 HS2_ZDU_LBSEED: the judge state of a path dropped while cooled (zdu_lbseed.go)
 	localN     string
 	remN       string
 	drained    []time.Time
@@ -703,8 +704,24 @@ func LBLine(st []LBPathStat) string {
 // The paths may change (SetPaths) while the dial runs: the result is matched
 // to the path by name (a path with a dial in flight is never dropped).
 func (b *LB) dialVia(dial func(LBPath) (any, error)) (any, error) {
+	return b.dialViaPick(dial, false)
+}
+
+// dialViaPick is dialVia; boot: the path is a proven one (b443 ZDU boot spare,
+// zdu_gate.go), not the cooled path's probe or the one furthest under share.
+func (b *LB) dialViaPick(dial func(LBPath) (any, error), boot bool) (any, error) {
 	b.mu.Lock()
-	i, probe := b.acquireLocked()
+	i, probe := -1, false
+	if boot {
+		i = b.zduBootPathLocked()
+		if i >= 0 {
+			b.links[i]++
+			b.dials[i]++
+		}
+	}
+	if i < 0 {
+		i, probe = b.acquireLocked()
+	}
 	p := b.paths[i]
 	b.mu.Unlock()
 	link, err := dial(p)

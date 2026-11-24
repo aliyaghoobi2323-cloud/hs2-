@@ -1137,6 +1137,7 @@ check_domain_ip(){ # domain expected_ip
 }
 
 ensure_certbot(){
+  install_cert_hook  # b430: the --deploy-hook every certbot run below names
   command -v certbot >/dev/null 2>&1 && return 0
   info "Installing certbot…"
   apt-get install -y -q certbot >/dev/null 2>&1 \
@@ -1298,12 +1299,40 @@ cert_offer_webroot_switch(){
   return 0
 }
 
-# CERT_HOOK runs after every renewal: SIGHUP to every running hs2 tunnel, which
+# CERT_HOOK runs after every renewal: reload every hs2 tunnel unit, which
 # hot-swaps the certificate of those that have one and is ignored by the rest.
-# One hook for all tunnels, so adding or deleting a tunnel never leaves a
-# renewal pointing at a service that is gone (it used to be `systemctl reload
-# hs2`, which only reached the default tunnel).
-CERT_HOOK="pkill -HUP -x hs2"
+# b430: it used to be `pkill -HUP -x hs2`, which matched no process once the
+# binary got a versioned name (comm is the basename, e.g. hs2-t1.r69r7), so a
+# renewed certificate only loaded at the next restart. Now a helper
+# (install_cert_hook) finds the tunnel units AT RUN TIME by unit name and
+# `systemctl reload`s them (ExecReload=kill -HUP $MAINPID): one hook for all
+# tunnels, so adding or deleting a tunnel never leaves a renewal pointing at a
+# service that is gone.
+CERT_HOOK="${HS2_CERT_HOOK:-/usr/local/sbin/hs2-reload-certs}"
+# install_cert_hook writes the CERT_HOOK helper (idempotent): before every
+# certbot run that names it, and whenever a renewal conf is pointed at it.
+install_cert_hook(){
+  local d; d=$(dirname "$CERT_HOOK"); mkdir -p "$d" || return 0
+  cat > "$CERT_HOOK.tmp" <<'HOOK' || return 0
+#!/bin/bash
+# hs2-reload-certs: certbot renew/deploy hook written by the hs2 installer. Reloads every running hs2 tunnel
+# unit (hs2.service, hs2-*.service whose ExecStart runs "... run -c CONFIG"), found now, by unit name, so tunnels
+# added later are included and no process name is assumed (the binary may be hs2-t1.r69r7). A tunnel's
+# ExecReload is kill -HUP $MAINPID: the certificate is hot-swapped without dropping connections.
+SC="${HS2_SYSTEMCTL:-systemctl}"; rc=0; n=0
+for u in $($SC list-units --type=service --state=active --plain --no-legend 2>/dev/null | awk '{print $1}'); do
+  case "$u" in hs2.service|hs2-*.service) ;; *) continue;; esac
+  $SC show -p ExecStart --value "$u" 2>/dev/null | grep -q ' run -c ' || continue
+  if [ -n "$($SC show -p ExecReload --value "$u" 2>/dev/null)" ]; then $SC reload "$u" || rc=1
+  else $SC kill -s HUP --kill-whom=main "$u" || rc=1; fi
+  n=$((n+1))
+done
+logger -t hs2-reload-certs "reloaded $n hs2 unit(s), rc=$rc" 2>/dev/null || true
+exit $rc
+HOOK
+  chmod 0755 "$CERT_HOOK.tmp" && mv -f "$CERT_HOOK.tmp" "$CERT_HOOK"
+  return 0
+}
 LE_DIR=/etc/letsencrypt   # certbot's tree (lineages in live/, renewal configs in renewal/)
 
 # configure_renewal makes an existing certbot renewal do two things the tunnel
@@ -1315,6 +1344,7 @@ LE_DIR=/etc/letsencrypt   # certbot's tree (lineages in live/, renewal configs i
 configure_renewal(){ # lineage (the domain, as get_cert lays it out)
   local conf="$LE_DIR/renewal/$1.conf"
   [ -f "$conf" ] || return 0
+  install_cert_hook
   # deploy hook -> reload
   if grep -q '^renew_hook' "$conf"; then
     sed -i "s#^renew_hook.*#renew_hook = $CERT_HOOK#" "$conf"
@@ -2672,13 +2702,19 @@ uninstall(){
 # kill_this_tunnel SIGNAL [PID] [CFG]: signal one tunnel's hs2 process — PID
 # when it is still an hs2 process, and any `hs2 run -c CFG` — and nothing else.
 kill_this_tunnel(){ # signal [pid] [cfg]
-  local sig="$1" pid="${2:-}" cfg="${3:-$CFG}" p args
+  local sig="$1" pid="${2:-}" cfg="${3:-$CFG}" p args a0
   if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -r "/proc/$pid/cmdline" ]; then
     args=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
     case "$args" in *hs2*) kill -"$sig" "$pid" 2>/dev/null || true ;; esac
   fi
-  for p in $(pgrep -x hs2 2>/dev/null || true); do
+  # b430: not `pgrep -x hs2`: comm is the binary's basename, which may be
+  # versioned (hs2-t1.r69r7) and then matched nothing. Match argv instead: an
+  # hs2* binary (by basename) running with -c CFG.
+  for p in /proc/[0-9]*; do
+    p=${p#/proc/}
     args=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || true)
+    a0=${args%% *}
+    case "${a0##*/}" in hs2*) ;; *) continue ;; esac
     case "$args" in *" -c $cfg "*) kill -"$sig" "$p" 2>/dev/null || true ;; esac
   done
   return 0
@@ -4115,6 +4151,7 @@ tm_cert(){ # unit cfg
     local -a dlist=() dargs=()
     read -ra dlist <<< "$doms"            # no glob expansion of *.example.com
     for d in "${dlist[@]}"; do dargs+=(-d "$d"); done
+    install_cert_hook
     certbot certonly --manual --preferred-challenges dns --cert-name "$ln" "${dargs[@]}" \
       --force-renewal --agree-tos --register-unsafely-without-email --deploy-hook "$CERT_HOOK" </dev/tty >&2 || rc=$?
   elif [ "$c" = 1 ]; then

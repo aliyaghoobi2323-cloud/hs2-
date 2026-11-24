@@ -149,6 +149,11 @@ type watchConn struct {
 	// when the detector is on; read by censorDeath before our close.
 	raw  net.Conn
 	born time.Time
+	// ownClosed (b430): hs2 closed the link itself (censorOwnClose ran).
+	ownClosed atomic.Bool
+	// meter (b437 Q2, detector on only): the link's meter, for its ZDU
+	// peerOld mark at death.
+	meter *linkMeter
 }
 
 func (w *watchConn) fail(op string, err error) {
@@ -166,6 +171,7 @@ func (w *watchConn) fail(op string, err error) {
 // session watchdog), recording why as a socket error would be.
 func (w *watchConn) expire(why string) {
 	w.once.Do(func() {
+		w.censorOwnClose() // b430: the watchdog closes the link itself
 		w.why.Store(&why)
 		go w.onErr()
 	})
@@ -254,7 +260,7 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 	}
 	w := &watchConn{Conn: c}
 	if censor.Active() {
-		w.raw, w.born = conn, time.Now()
+		w.raw, w.born, w.meter = conn, time.Now(), meter
 	}
 	w.onErr = func() {
 		conn.Close()

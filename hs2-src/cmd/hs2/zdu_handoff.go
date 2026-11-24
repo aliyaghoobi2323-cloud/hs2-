@@ -35,5 +35,9 @@ func zduTakeHello() handoff.Hello { return zduHello(0, [32]byte{}) }
 
 func zduHello(gen uint32, cfgHash [32]byte) handoff.Hello {
 	s, r := engine.ZDUInstance()
-	return handoff.Hello{Proto: handoff.Proto, Features: handoff.FeatListening, InstStart: s, InstRand: r, Gen: gen, ConfigHash: cfgHash}
+	f := handoff.FeatListening | handoff.FeatUnused
+	if engine.ZDULBSeedOn() {
+		f |= handoff.FeatLBState // b438: the LB judge state rides the hand-off
+	}
+	return handoff.Hello{Proto: handoff.Proto, Features: f, InstStart: s, InstRand: r, Gen: gen, ConfigHash: cfgHash}
 }

@@ -404,19 +404,20 @@ func (s *Session) streamClosed(sid uint32) {
 		s.streamLock.Unlock()
 		return
 	}
-	if n := s.streams[sid].recycleTokens(); n > 0 { // return remaining tokens to the bucket
+	st := s.streams[sid]
+	if n := st.recycleTokens(); n > 0 { // return remaining tokens to the bucket
 		if atomic.AddInt32(&s.bucket, int32(n)) > 0 {
 			s.notifyBucket()
 		}
 	}
-	s.streams[sid].awRelease()
 	if !s.IsClosed() { // hs2 mem66: a closed session's Close counts its map
-		if _, ok := s.streams[sid]; ok {
-			liveStreams.Add(-1)
-		}
+		liveStreams.Add(-1)
 		delete(s.streams, sid)
 	}
 	s.streamLock.Unlock()
+	// b450: the window release (the process-wide budget) after streamLock: a
+	// mass close no longer holds every session's recvLoop behind it.
+	st.awRelease()
 }
 
 // returnTokens is called by stream to return token after read

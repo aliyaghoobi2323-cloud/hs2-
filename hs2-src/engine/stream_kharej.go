@@ -123,6 +123,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		cfg.traffic = newExitTraffic(cfg.peers)
 		go cfg.traffic.run(ctx.Done())
 	}
+	zduExitTraffic.Store(cfg.traffic) // HS2_B468_DRAINFAST (zdu_b468_drainfast.go)
 	if queueCtlOn {
 		go exitQueue.run(ctx, logf)
 	}
@@ -292,7 +293,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 				st.Close()
 				return
 			}
-			c := cfg.traffic.open(mtr)
+			c := cfg.traffic.openKill(mtr, func() { up.Close(); st.Close() })
 			defer cfg.traffic.done(c)
 			relayUDPConn(exitCountedStream{st, c}, up)
 			return
@@ -306,7 +307,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		if mtr != nil {
 			g = mtr.guard
 		}
-		c := cfg.traffic.open(mtr)
+		c := cfg.traffic.openKill(mtr, func() { up.Close(); st.Close() })
 		defer cfg.traffic.done(c)
 		if relayStreamHC(up, exitCountedStream{st, c}, g, hcIf(halfCloseLink(mtr), hcExit)) { // hc183
 			streamLocalRst.Add(1) // fx170: the upload was cut; the target got an RST

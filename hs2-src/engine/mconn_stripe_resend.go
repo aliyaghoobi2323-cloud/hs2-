@@ -200,6 +200,7 @@ func (m *mConn) stripeResendLocked(s *msub) bool {
 		return false
 	}
 	var b *msub
+	tw := false // b449d: wait for a target (mconn_b449_tgtwait.go)
 	if sub && !s.subGapT.IsZero() {
 		subResendStat.noFull.Add(1) // r68fix3: a resend would leave a hole
 		subResendLog()
@@ -216,10 +217,12 @@ func (m *mConn) stripeResendLocked(s *msub) bool {
 				subResendStat.noTarget.Add(1)
 				s.noTgt = true // b271 Q5: subGone counts the outcome
 				subResendLog()
+				tw = m.b449TwOKLocked(s)
 			}
-			return false // no live sub: the old rule (no stripe grace for a call)
-		}
-		if call {
+			if !tw {
+				return false // no live sub: the old rule (no stripe grace for a call)
+			}
+		} else if call {
 			callResendStat.Add(1)
 		} else {
 			subResendStat.resends.Add(1)
@@ -228,7 +231,7 @@ func (m *mConn) stripeResendLocked(s *msub) bool {
 	} else {
 		b = m.resendTargetLocked()
 	}
-	if b == nil && !(m.graceOKLocked() && (len(m.subs) == 0 || m.onlyClosingLocked())) {
+	if b == nil && !tw && !(m.graceOKLocked() && (len(m.subs) == 0 || m.onlyClosingLocked())) {
 		return false
 	}
 	var cs []*mchunk
@@ -262,6 +265,10 @@ func (m *mConn) stripeResendLocked(s *msub) bool {
 		cs = fx212SkipHeld(cs, b) // fx212: no duplicate of what b itself sends ahead of b's queue
 		cs = cs223SkipGave(cs, s) // cs223: given to s.gaveTo at the give-up
 		cs = m.cs223SkipDelivered(cs, b)
+	}
+	if tw {
+		m.b449TwStartLocked(s, cs, time.Now())
+		return true
 	}
 	if b == nil {
 		// HS2_MCONN_STRIPE_GRACE_MS: no live sub; the chunks wait for the

@@ -453,17 +453,35 @@ func (m *mConn) rescueEndedHook() {
 
 func rescueSweeper() {
 	var last string
+	var lastBad uint64
 	for i := 1; ; i++ {
 		time.Sleep(time.Second)
 		rescueSweep(time.Now())
 		rrSweep(time.Now()) // er97
 		if i%10 == 0 {
+			// b437 F3: the summary every rescueLogEvery (60 s), or at the
+			// next 10 s check when a failure counter rose (a user saw a
+			// loss); never when nothing changed.
+			bad := rescueBadCount()
+			if bad == lastBad && i%rescueLogEvery != 0 {
+				continue
+			}
 			if l := rescueLogLine() + " | " + rescueRecLogLine() + " | " + rescue145LogLine() + " | " + rescue169LogLine() + " | " + rescueRstLogLine() + " | " + darkcallLogLine() + " | " + ul268LogLine() + " | " + ul268ScaleLogLine() + " | " + rpLogLine(); l != last {
-				last = l
+				last, lastBad = l, bad
 				log.Print(l)
 			}
 		}
 	}
+}
+
+// rescueLogEvery (b437 F3): seconds between two rescue summary lines.
+const rescueLogEvery = 60
+
+// rescueBadCount (b437 F3): the failure counters whose rise logs the
+// summary at once: a rescue that failed or lost its join, a connection
+// reset for a lost copy.
+func rescueBadCount() uint64 {
+	return rescueStat.failed.Load() + rescueStat.lostJoin.Load() + subLostResets.Load()
 }
 
 // rescueLogLine: the counters as one log line (printed every 10 s when they

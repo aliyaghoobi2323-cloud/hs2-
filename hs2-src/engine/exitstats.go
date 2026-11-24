@@ -27,6 +27,9 @@ type exitConn struct {
 	// toward its link's heavy streams only; the connection itself is counted
 	// once, by its own exitConn (no link).
 	sub bool
+	// kill (b468, nil = none): ends this user connection on purpose (its
+	// target and its stream). Set before the conn is registered, never after.
+	kill func()
 
 	// sampler-only
 	prev       uint64
@@ -98,6 +101,11 @@ func newExitTraffic(peers *linkPeers) *exitTraffic {
 // (nil: unknown); close it with done.
 func (t *exitTraffic) open(mtr *linkMeter) *exitConn {
 	return t.add(&exitConn{lastActive: time.Now(), mtr: mtr})
+}
+
+// openKill is open with a kill for HS2_B468_DRAINFAST (zdu_b468_drainfast.go).
+func (t *exitTraffic) openKill(mtr *linkMeter, kill func()) *exitConn {
+	return t.add(&exitConn{lastActive: time.Now(), mtr: mtr, kill: kill})
 }
 
 func (t *exitTraffic) add(c *exitConn) *exitConn {

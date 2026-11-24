@@ -72,6 +72,14 @@ type rawState struct {
 	rawBorn     time.Time // Iran: when the raw connection started (HS2_MCONN_STRIPE_FAST_EARLY_MS)
 	rawWBlkSnap int64     // ul257: rawWBlk + in-progress at the last sample (mconn_ul257.go)
 	hsStart     time.Time // Iran: when the upgrade's handshake started (HS2_MCONN_STRIPE_LOG)
+	// b449j (mconn_b449j_upgsafe.go): the boundaries (Iran's Bi, Kharej's
+	// Bk), Iran's open plane, the repeats, a kept death; upgOld: tests play
+	// an old (rc12) side
+	hsBi, hsBk uint64
+	hsPlane    mPlane
+	hsTries    int
+	hsKept     bool
+	upgOld     bool
 }
 
 // mconnRawSub is a sub the opener marks as a raw first sub.
@@ -486,6 +494,7 @@ func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) error {
 	}
 	bi := uint64(m.rawSent.Load())
 	m.sendOff = bi
+	m.hsBi, m.hsPlane = bi, p
 	s2 := m.addSubLocked(sub, key, false)
 	c := getChunk(mRecUpgrade)
 	c.setOff(bi)
@@ -530,6 +539,7 @@ func (m *mConn) onUpgrade(s *msub, off uint64) bool {
 		m.setReadLimit(off) // before UPACK lets the peer write records on the first sub
 		m.mu.Lock()
 		m.handshaking = false
+		m.upgSafeDoneLocked()
 		if m.raw1.gated {
 			m.raw1.gated = false
 			select {
@@ -574,10 +584,15 @@ func (m *mConn) onUpgrade(s *msub, off uint64) bool {
 		return true
 	}
 	if m.upgraded { // step 2
+		again := m.upgSafeRepeatLocked(s, off) // b449j: Iran's UPGRADE again (its sub died)
 		m.mu.Unlock()
+		if again {
+			go m.upgradeSendExit(s, off, time.Now())
+		}
 		return true
 	}
 	m.upgraded, m.handshaking = true, true
+	m.hsBi = off
 	m.mu.Unlock()
 	m.setReadLimit(off) // before our UPGRADE tells Iran we know it
 	go m.upgradeSendExit(s, off, time.Now())
@@ -606,6 +621,7 @@ func (m *mConn) upgradeSendExit(s2 *msub, off uint64, got time.Time) {
 	}
 	bk := uint64(m.rawSent.Load())
 	m.sendOff = bk
+	m.hsBk = bk
 	c := getChunk(mRecUpgrade)
 	c.setOff(bk)
 	s2.push(c)
@@ -627,6 +643,7 @@ func (m *mConn) onUpAck() {
 		return
 	}
 	m.handshaking = false
+	m.upgSafeDoneLocked()
 	m.raw1.gated = false
 	select {
 	case m.raw1.kick <- struct{}{}:

@@ -298,6 +298,20 @@ type zduOld struct {
 	// copies of the link listeners (one the new process did not bind then
 	// refuses dials instead of holding them paused through the drain).
 	linkDrop func() int
+	// pace (b447, nil = none): at a deadline drain end with users left, close
+	// this exit's links in user-bounded batches before the exit (engine
+	// ZDUDrainEndPace: an all-at-once cut of thousands of users stalls the
+	// peer's TUN path ~0.4 s); returns links, users, batches.
+	pace func() (links, users, batches int)
+	// paceLead (b454, nil = 0): how long pace takes for this many users; the
+	// pace starts that long (plus one drain period) before the deadline, so
+	// the exit still lands at the deadline at any user count.
+	paceLead func(users int) time.Duration
+	// b428 (nil = none): at GO close this process's copies of the user
+	// sockets the new process did not adopt (handoff UNUSED); at a revert
+	// bind them again.
+	closeUnused  func([]string) []string
+	rebindUnused func([]string) ([]string, map[string]error)
 	// direct (review H1): this side runs in direct (non-reverse) mode, where
 	// only Iran dials and a live handover is not designed yet: refused.
 	direct bool
@@ -394,7 +408,7 @@ func (o *zduOld) handover() (result string) {
 	// SIGUSR2 at HH:58 would commit inside the storm. Review L1: READY may
 	// take the whole READY timeout (child exec + start + warm wait), not
 	// only the warm wait.
-	if span := max(o.ready, zduWarmMax) + o.probation + zduSpanMargin; engine.ZDURefusedSpan(start, span) {
+	if span := zduHandoverSpan(o.ready, o.probation); engine.ZDURefusedSpan(start, span) {
 		zduHORefused.Add(1)
 		o.logf("zdu: handover refused: %v: READY + probation (%v) would reach the window (%s)", engine.ErrZDUWindow, span, zduCounters())
 		return "refused-window"
@@ -517,7 +531,9 @@ func (o *zduOld) handover() (result string) {
 		}
 	}()
 	t0 := time.Now()
-	_, err = oldEnd.GiveListening(o.hello(), fds, handoff.StepTimeout, o.ready, boot)
+	var unused []string
+	oldEnd.LBState = engine.ZDULBStateExport // b438: LBSTATE (FeatLBState peers only)
+	_, err = oldEnd.GiveListeningUnused(o.hello(), fds, handoff.StepTimeout, o.ready, boot, func(n []string) { unused = n })
 	for _, f := range fds {
 		f.File.Close() // dups; ours stay open (the revert)
 	}
@@ -530,6 +546,12 @@ func (o *zduOld) handover() (result string) {
 	default:
 	}
 	n := o.pause()
+	var dropped []string
+	if o.closeUnused != nil && len(unused) > 0 {
+		dropped = o.closeUnused(unused)
+		o.logf("zdu: handover GO: closed this process's copies of %d user socket(s) the new process does not bind (%s): the port is free for another unit; their open connections drain here",
+			len(dropped), strings.Join(dropped, " "))
+	}
 	o.notify(fmt.Sprintf("MAINPID=%d\nREADY=1\nSTATUS=hs2 handover to pid %d (probation)", child.Pid(), child.Pid()))
 	o.status(fmt.Sprintf("PROBATION %d", child.Pid()))
 	o.logf("zdu: handover GO to pid %d after %v: %d listeners paused, MAINPID=%d sent, probation %v",
@@ -548,6 +570,15 @@ func (o *zduOld) handover() (result string) {
 	why := o.watch(oldEnd, child, o.probation)
 	if why != "" {
 		zduHOReverted.Add(1)
+		if o.rebindUnused != nil && len(dropped) > 0 {
+			ok, failed := o.rebindUnused(dropped)
+			if len(ok) > 0 {
+				o.logf("zdu: handover revert: rebound %d user socket(s) closed at GO (%s)", len(ok), strings.Join(ok, " "))
+			}
+			for nm, e := range failed {
+				o.logf("zdu: handover revert: cannot rebind %s closed at GO: %v (another unit holds it now; this process keeps serving everything else)", nm, e)
+			}
+		}
 		o.resume()
 		unboot()
 		self := os.Getpid()
@@ -671,8 +702,24 @@ func (o *zduOld) drain(c *handoff.Conn, child zduChild, deadline time.Time) {
 			o.logf("zdu: drain end: no user connections left after %v (links %d); exiting", now.Sub(t0).Round(time.Second), l)
 			break
 		}
-		if !now.Before(deadline) {
-			o.logf("zdu: drain end: deadline %s reached with links %d users %d; exiting", deadline.UTC().Format(time.RFC3339), l, u)
+		var lead time.Duration
+		if u > 0 && o.pace != nil && o.paceLead != nil {
+			if lead = o.paceLead(u); lead > 0 {
+				lead += o.period // the drain tick that starts it can come one period late
+			}
+		}
+		if !now.Add(lead).Before(deadline) {
+			if now.Before(deadline) {
+				o.logf("zdu: drain end: paced close of links %d users %d starts %v before the deadline %s; exiting after it", l, u, deadline.Sub(now).Round(time.Millisecond), deadline.UTC().Format(time.RFC3339))
+			} else {
+				o.logf("zdu: drain end: deadline %s reached with links %d users %d; exiting", deadline.UTC().Format(time.RFC3339), l, u)
+			}
+			if u > 0 && o.pace != nil {
+				t := o.now()
+				if pl, pu, pb := o.pace(); pl > 0 {
+					o.logf("zdu: drain end: closed %d links (%d users) in %d batches over %v", pl, pu, pb, o.now().Sub(t).Round(time.Millisecond))
+				}
+			}
 			break
 		}
 		select {
@@ -826,6 +873,9 @@ func zduTakeover(logf func(string, ...any)) {
 			nt++
 		}
 	}
+	if n := engine.ZDULBStateSeed(t.LBState, false); n > 0 || len(t.LBState) > 0 {
+		logf("zdu: takeover: LB judge state from the old process: %d bytes, %d path(s) kept for seeding", len(t.LBState), n)
+	}
 	engine.ZDUHoldUsers() // review issue 4: no user accept, UDP read or exit user stream before GO (engine/zdu_gate.go)
 	zduTakeAdopted.Add(1)
 	zduParentPid.Store(int64(os.Getppid())) // review 4 M1: no handover while it drains
@@ -833,6 +883,7 @@ func zduTakeover(logf func(string, ...any)) {
 	zduTake.t = t
 	zduTake.mu.Unlock()
 	logf("zdu: takeover: adopted %d listeners, %d udp sockets and %d tun fds from the instance %d", nl, nu, nt, t.Peer.InstStart)
+	engine.CensorOwnHandover(false) // b437 Q2: a generation change, not a restart
 	// Lab drills only (zdu391 M2 check): a child that hangs before its
 	// engine listens. Read only in a hand-off child (key on).
 	if d, err := time.ParseDuration(os.Getenv("HS2_ZDU_LAB_HANG")); err == nil && d > 0 {
@@ -932,18 +983,33 @@ func zduTakeReadyRun(t *handoff.Taken, logf func(string, ...any)) {
 			os.Exit(1)
 		}
 		logf("zdu: takeover: link pools warm (%d links after %v, need %d), sending READY", l, w.Round(time.Millisecond), engine.ZDUWarmNeed())
-		if n := engine.ZDUDropAdopted(); n > 0 {
-			logf("zdu: takeover: %d handed listeners not bound by this config, closed", n)
+		unused := engine.ZDUDropAdoptedNames()
+		if len(unused) > 0 {
+			logf("zdu: takeover: %d handed listeners not bound by this config, closed (%s)", len(unused), strings.Join(unused, " "))
+		}
+		// b428: tell the old process (UNUSED; a no-op with a peer without
+		// FeatUnused) so it closes its copies at GO.
+		if err := t.Unused(unused, handoff.StepTimeout); err != nil {
+			logf("zdu: takeover: UNUSED failed: %v (the old process keeps serving; exiting)", err)
+			os.Exit(1)
 		}
 		if err := t.Ready(handoff.StepTimeout); err != nil {
 			logf("zdu: takeover: READY/GO failed: %v (the old process keeps serving; exiting)", err)
 			os.Exit(1)
 		}
+		if len(t.LBStateGo) > 0 {
+			n := engine.ZDULBStateSeed(t.LBStateGo, true) // b438: paths this judge has not read yet
+			logf("zdu: takeover: LB judge state at GO: %d bytes, %d path(s) refreshed", len(t.LBStateGo), n)
+		}
 		tun.OpenReadGate()         // the adopted TUN reads from now on (never before GO)
 		n := engine.ZDUOpenUsers() // review issue 4: users from GO on
 		logf("zdu: takeover: READY sent, GO received; %d user listeners and sockets open; following the old process's drain", n)
 		go func() {
+			var okOnce sync.Once
 			err := t.Conn.FollowDrain(func(links int) {
+				// b437 Q2: the old process drains only after it saw our
+				// probation pass (OK): the own handover is over.
+				okOnce.Do(func() { engine.CensorOwnHandover(true) })
 				zduTake.mu.Lock()
 				d := zduTake.drain
 				zduTake.mu.Unlock()
@@ -1044,12 +1110,7 @@ func zduStart(ctx context.Context, logf func(string, ...any), exit func()) {
 			logf("zdu: lab clock offset %v (HS2_ZDU_FAKE_NOW)", off.Round(time.Second))
 		}
 	}
-	prob := zduProbation
-	if v := os.Getenv("HS2_ZDU_PROBATION"); v != "" { // lab drills only
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			prob = d
-		}
-	}
+	prob := zduProbationEnv() // HS2_ZDU_PROBATION: lab drills only
 	o := &zduOld{
 		unit: zduUnit(), runDir: zduRunDir, now: now, override: over,
 		probation: prob, floor: zduDrainFloor, period: zduDrainPeriod, ready: handoff.ReadyTimeout,
@@ -1058,6 +1119,9 @@ func zduStart(ctx context.Context, logf func(string, ...any), exit func()) {
 		stats: engine.ZDUDrainStats, readsOff: zduTunReadsOff, drainMode: zduDrainMode, exit: exit, logf: logf,
 		linkPause: engine.ZDUPauseLinkAccept, linkResume: engine.ZDUResumeLinkAccept, boost: engine.ZDUBoost,
 		linkDrop: engine.ZDUDropLinkListeners, direct: zduDirect,
+		pace:        func() (int, int, int) { return engine.ZDUDrainEndPace(time.Sleep) },
+		paceLead:    engine.ZDUDrainEndPaceLead,
+		closeUnused: engine.ZDUCloseUnused, rebindUnused: engine.ZDURebindUnused,
 		l3Quiet: func(time.Time) (bool, time.Duration) { return engine.ZDUL3Quiet(time.Now(), engine.ZDUL3DrainGrace) },
 		hello:   func() handoff.Hello { return zduHello(0, [32]byte{}) },
 		exitFail: func(why string) {

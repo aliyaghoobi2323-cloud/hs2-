@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -72,16 +73,23 @@ func (r *certReloader) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, e
 
 // reload re-reads the files, keeping the current cert if the new one is bad.
 func (r *certReloader) reload(reason string) {
+	if line, _ := r.reloadQuiet(reason); line != "" {
+		log.Print(line)
+	}
+}
+
+// reloadQuiet (b437 F6) reloads like reload; it returns a failure or a
+// changed-expiry line ("" when the cert is unchanged) and whether it is
+// unchanged, so one SIGHUP over many holders logs one summary line.
+func (r *certReloader) reloadQuiet(reason string) (line string, unchanged bool) {
 	old := r.notAfter.Load()
 	if err := r.load(); err != nil {
-		log.Printf("cert: reload (%s) failed, keeping the current certificate: %v", reason, err)
-		return
+		return fmt.Sprintf("cert: reload (%s) failed, keeping the current certificate: %v (%s)", reason, err, r.certFile), false
 	}
 	if n := r.notAfter.Load(); n != old {
-		log.Printf("cert: reloaded (%s) — now valid until %s", reason, time.Unix(n, 0).UTC().Format("2006-01-02"))
-	} else {
-		log.Printf("cert: reloaded (%s) — unchanged", reason)
+		return fmt.Sprintf("cert: reloaded (%s) — now valid until %s (%s)", reason, time.Unix(n, 0).UTC().Format("2006-01-02"), r.certFile), false
 	}
+	return "", true
 }
 
 // changedOnDisk reports whether the cert file's mtime moved since the last load.
@@ -109,8 +117,17 @@ func reloadAllCerts(reason string) {
 	certRegistry.mu.Lock()
 	rs := append([]*certReloader(nil), certRegistry.reloaders...)
 	certRegistry.mu.Unlock()
+	unchanged := 0
 	for _, r := range rs {
-		r.reload(reason)
+		line, same := r.reloadQuiet(reason)
+		if same {
+			unchanged++
+		} else if line != "" {
+			log.Print(line) // failures and new expiries keep their own line
+		}
+	}
+	if unchanged > 0 {
+		log.Printf("cert: reloaded (%s) — %d of %d holders unchanged", reason, unchanged, len(rs))
 	}
 }
 

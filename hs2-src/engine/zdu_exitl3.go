@@ -44,6 +44,7 @@ func (p *linkPeers) zduExitMark() {
 			}
 		}
 	}
+	censorPeerInst(cur) // b437 Q2: a newer peer instance is a generation change (own lock only)
 	mark := cur.known() && o > 0 && 2*n >= o
 	marked := int64(0)
 	for m := range p.m {

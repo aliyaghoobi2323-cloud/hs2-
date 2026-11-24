@@ -35,6 +35,10 @@ func zduResetGauge(t *testing.T) {
 	zduExitBootN.Store(0)
 	zduExitSeen.Store(false)
 	t.Cleanup(func() { zduExitBootN.Store(b); zduExitSeen.Store(es); zduExitPeers.Store(ep) })
+	// b449l: and the b436 report counters (TestZDUGauges failed in both
+	// -shuffle gate runs after a zdu_report436 test: " zdu_rep_cur=0 zdu_rep_held=1")
+	rc, rh := zduRepCur.Swap(0), zduRepHeld.Swap(0)
+	t.Cleanup(func() { zduRepCur.Store(rc); zduRepHeld.Store(rh) })
 }
 
 // Mixed generations: the old links are up but not capacity; the plain

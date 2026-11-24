@@ -75,6 +75,7 @@ func TestB296ExitSampleCopy(t *testing.T) {
 // bytes, a call or the backstop tick visit it.
 func TestB296DarkcallIdleSkip(t *testing.T) {
 	setDarkcall(t)
+	holdDarkcallLoop(t) // b449h: no global timer visit between the proof and the tick
 	withCs226(t, true)
 	withCs228(t, false, true)
 	b296Force.Store(true)
@@ -140,17 +141,40 @@ func TestB296DarkcallIdleSkip(t *testing.T) {
 	if !prove() {
 		t.Fatal("no proof after the call ended")
 	}
-	// the timer skips it (no lite walk) while the proof holds
-	exit.mu.Lock()
-	w0 := exit.dc.liteWalks
-	exit.mu.Unlock()
-	sk0 := b296Stat.skipped.Load()
-	b296Tick.Store(1)
-	darkcallTick(time.Now(), ctrlNow())
-	exit.mu.Lock()
-	w1 := exit.dc.liteWalks
-	exit.mu.Unlock()
-	if b296Stat.skipped.Load() == sk0 {
+	// the timer skips it (no lite walk) while the proof holds.
+	// b449h isolation: the timer walks rrConns, which exit joins only on its
+	// first ring write (rrKeepLocked, under the rescue keys other tests
+	// toggle); and the package's global darkcallLoop (started by any earlier
+	// test, never stopped) shares b296Tick and can visit exit between the
+	// proof and this tick (a backstop visit re-takes or clears the proof).
+	// In `go test ./...` this step failed now and then ("timer skipped
+	// nothing") while 30/30 alone. The timer step is what is tested here:
+	// exit is put in rrConns, and a try the global loop raced is retried.
+	if _, ok := rrConns.Load(exit); !ok {
+		t.Log("exit not in rrConns: added for the timer step")
+		rrConns.Store(exit, struct{}{})
+		t.Cleanup(func() { rrConns.Delete(exit) })
+	}
+	var w0, w1 uint32
+	skipped := false
+	for try := 0; try < 5 && !skipped; try++ {
+		if !prove() {
+			t.Fatal("no proof before the timer step")
+		}
+		exit.mu.Lock()
+		w0 = exit.dc.liteWalks
+		exit.mu.Unlock()
+		sk0 := b296Stat.skipped.Load()
+		b296Tick.Store(1)
+		darkcallTick(time.Now(), ctrlNow())
+		exit.mu.Lock()
+		w1 = exit.dc.liteWalks
+		exit.mu.Unlock()
+		if skipped = b296Stat.skipped.Load() != sk0; !skipped {
+			t.Logf("try %d: timer skipped nothing (the global darkcall loop raced the proof)", try)
+		}
+	}
+	if !skipped {
 		t.Fatal("timer skipped nothing")
 	}
 	if w1 != w0 && w1-w0 > 1 { // the global timer may race one visit in

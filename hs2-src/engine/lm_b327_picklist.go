@@ -420,7 +420,7 @@ func b327Line() string {
 		s = fmt.Sprintf(" b327: list=%d build=%d stale=%d full=%d scan=%d%s", l, b, b327Stat.stale.Load(), b327Stat.full.Load(), b327Stat.scanned.Load(), b327Cfg)
 	}
 	if n := b327Pile.busy.Load(); n != 0 {
-		s += fmt.Sprintf(" b327pile: busysec=%d maxmax=%d summax=%d max>=4=%d max>=8=%d", n, b327Pile.maxMax.Load(), b327Pile.sumMax.Load(), b327Pile.ge4.Load(), b327Pile.ge8.Load())
+		s += fmt.Sprintf(" b327pile: busysec=%d maxmax=%d summax=%d max>=4=%d max>=8=%d lines=%d unlogged=%d", n, b327Pile.maxMax.Load(), b327Pile.sumMax.Load(), b327Pile.ge4.Load(), b327Pile.ge8.Load(), b327Pile.logged.Load(), b327Pile.quiet.Load())
 	}
 	return s
 }
@@ -431,10 +431,21 @@ func b327Line() string {
 // "b327pile: t=UNIX picks=N links=N max=N list=BOOL" (storm seconds only).
 const b327PileBusy = 40
 
+// b437 F1: a busy second logs its line only when one link took
+// b327PileSpike or more placements (a real pile) and the minute's budget
+// (b327PileLog) is not spent. A busy tunnel has 100-140 placements every
+// second with max 2-4: that logged a line a second (28% of Iran t2's
+// journal). Every busy second still counts (busysec, max>=4, max>=8 in the
+// minute's mem: line), and lines=/unlogged= say how many were left out.
+const b327PileSpike = 8
+
+var b327PileLog = logBudget{per: 10}
+
 var b327Pile struct {
 	t                              atomic.Int64
 	picks, links, max              atomic.Int32
 	busy, maxMax, sumMax, ge4, ge8 atomic.Uint64
+	logged, quiet                  atomic.Uint64 // b437 F1: busy seconds logged / not
 }
 
 // b327PileNote counts one placement on ml in this second. No allocation;
@@ -459,7 +470,12 @@ func b327PileNote(ml *managedLink) {
 					break
 				}
 			}
-			log.Printf("b327pile: t=%d picks=%d links=%d max=%d list=%v", t, p, l, mx, b327PickList.Load())
+			if mx < b327PileSpike || !b327PileLog.ok(time.Unix(now, 0)) {
+				g.quiet.Add(1)
+			} else {
+				g.logged.Add(1)
+				log.Printf("b327pile: t=%d picks=%d links=%d max=%d list=%v", t, p, l, mx, b327PickList.Load())
+			}
 		}
 	}
 	if ml.b327SecT.Load() != now {

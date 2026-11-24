@@ -69,10 +69,24 @@ func upPair(t *testing.T, id uint64, perLink int64, k int, up bool) (*tNet, *mCo
 	return n, iran, n.exit
 }
 
+// uploadStuckAfter bounds one upload (b438). The uploads here take 3-12 s
+// even on a loaded host (lab3: 30 busy loops on 20 cores, or a 1 % CPU
+// quota); a transfer that stops moving fails the test here, with every
+// goroutine's stack, instead of running into the package's go test timeout
+// where the timeout panic names whatever test happened to be running.
+const uploadStuckAfter = 90 * time.Second
+
 func upload(t *testing.T, iran, exit *mConn, size int) time.Duration {
 	t.Helper()
 	data := randBytes(size, 88)
 	t0 := time.Now()
+	stuck := time.AfterFunc(uploadStuckAfter, func() {
+		buf := make([]byte, 4<<20)
+		t.Errorf("upload of %d bytes still running after %v (stuck); stacks:\n%s", size, uploadStuckAfter, buf[:runtime.Stack(buf, true)])
+		iran.Close() // Write and Read return, both() fails the test
+		exit.Close()
+	})
+	defer stuck.Stop()
 	both(t,
 		func() error { return xfer(iran, data, 32<<10, 0) },
 		func() error { return readN(exit, data) },

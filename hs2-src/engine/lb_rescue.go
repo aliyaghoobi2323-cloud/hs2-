@@ -166,13 +166,19 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	}
 	if lbCallRescue.Load() && lbCallStuck.Load() || lbCallLate || b336CallMove.Load() { // HS2_LB_CALL_STUCK, HS2_LB_CALL_LATE (lb_call_late.go), HS2_B336_CALLMOVE
 		st.callPaths = callPathMark(st.callPaths, byPath)
-		if o := callStuckOpened.Load(); o != st.stuckLogged {
-			st.stuckLogged = o
-			st.logs = append(st.logs, fmt.Sprintf("lb call stuck: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d; weak gaps %d (strict %v), old path first %d", o, callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load(), callStuckGapWeak.Load(), lbCallStuckGapStrict, callStuckOldFirst.Load()))
+		// b437 F2: at most one line a minute per counter, and only when it
+		// moved; the line gives the rise since the last line and the totals
+		// (the totals are in status.json too: call_stuck_*).
+		now := time.Now()
+		if o := callStuckOpened.Load(); o != st.stuckLogged && now.Sub(st.stuckLogAt) >= lbCallLogEvery {
+			d := o - st.stuckLogged
+			st.stuckLogged, st.stuckLogAt = o, now
+			st.logs = append(st.logs, fmt.Sprintf("lb call stuck: +%d fresh subs since the last line; fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d; weak gaps %d (strict %v), old path first %d", d, o, callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load(), callStuckGapWeak.Load(), lbCallStuckGapStrict, callStuckOldFirst.Load()))
 		}
-		if o := callLateOpened.Load(); o != st.lateLogged {
-			st.lateLogged = o
-			st.logs = append(st.logs, fmt.Sprintf("lb call late: fresh subs %d, late subs given up %d", o, callLateMoved.Load()))
+		if o := callLateOpened.Load(); o != st.lateLogged && now.Sub(st.lateLogAt) >= lbCallLogEvery {
+			d := o - st.lateLogged
+			st.lateLogged, st.lateLogAt = o, now
+			st.logs = append(st.logs, fmt.Sprintf("lb call late: +%d fresh subs since the last line; fresh subs %d, late subs given up %d", d, o, callLateMoved.Load()))
 		}
 	}
 	if !lbRescue.Load() {
@@ -207,7 +213,7 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	}
 	if t := rescueTotal.Load(); len(low) > 0 && (len(st.rescued) == 0 || t != st.rescueLogged) {
 		st.rescueLogged = t
-		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d, placed off call links %d; calls: fresh subs %d, lowered subs given up %d; stuck calls: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load(), rescueCallFreeN.Load(), callRescueOpened.Load(), callRescueMoved.Load(), callStuckOpened.Load(), callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load()))
+		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d, placed off call links %d; calls: fresh subs %d, lowered subs given up %d; stuck calls: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d; b451 fast rescue picks %d, fell back %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load(), rescueCallFreeN.Load(), callRescueOpened.Load(), callRescueMoved.Load(), callStuckOpened.Load(), callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load(), rescFastStat.fast.Load(), rescFastStat.fallback.Load()))
 	}
 	st.rescued = rescueMark(st.rescued, low)
 	if lbRescueCut || len(st.rescuedCut) > 0 {
@@ -225,3 +231,7 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 		st.logs = append(st.logs, fmt.Sprintf("lb rescue census: conn-seconds on marked links: raw %d, single %d, dual all-marked %d, dual with a good copy %d", censusRaw.Load(), censusSingle.Load(), censusAllLow.Load(), censusMixed.Load()))
 	}
 }
+
+// lbCallLogEvery (b437 F2): the least time between two "lb call stuck" (or
+// "lb call late") lines. A var so tests can shorten it.
+var lbCallLogEvery = time.Minute

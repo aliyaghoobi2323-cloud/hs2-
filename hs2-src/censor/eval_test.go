@@ -682,7 +682,7 @@ func TestLevelAndAlias(t *testing.T) {
 		detect, alias string
 		want          int
 	}{
-		{"", "", 0}, {"0", "1", 0}, {"1", "", 1}, {"2", "", 1}, {"", "1", 1}, {"x", "", 0},
+		{"", "", 1}, {"0", "1", 0}, {"1", "", 1}, {"2", "", 1}, {"", "1", 1}, {"x", "", 0}, {"", "0", 0},
 	} {
 		t.Setenv("HS2_CENSOR_DETECT", c.detect)
 		t.Setenv("HS2_CENSOR", c.alias)
@@ -692,14 +692,14 @@ func TestLevelAndAlias(t *testing.T) {
 	}
 }
 
-// rel69r-rc6: unset, the Iran side defaults on and the Kharej side off;
-// an explicit value (or alias) wins on either side; legacy defaults off.
+// rel69r-rc8: unset, both sides default on (rc6/rc7: Kharej off); an
+// explicit value (or alias) wins on either side; legacy defaults off.
 func TestLevelForSideDefaults(t *testing.T) {
 	for _, c := range []struct {
 		detect, alias, defs string
 		iran, kharej        int
 	}{
-		{"", "", "", 1, 0}, {"0", "", "", 0, 0}, {"1", "", "", 1, 1}, {"", "0", "", 0, 0},
+		{"", "", "", 1, 1}, {"0", "", "", 0, 0}, {"1", "", "", 1, 1}, {"", "0", "", 0, 0},
 		{"", "1", "", 1, 1}, {"", "", "legacy", 0, 0}, {"1", "", "legacy", 1, 1}, {"x", "", "", 0, 0},
 	} {
 		t.Setenv("HS2_CENSOR_DETECT", c.detect)

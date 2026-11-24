@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -266,6 +267,8 @@ func main() {
 		if len(os.Args) > 2 && os.Args[2] == "--features" {
 			fmt.Println(featuresLine()) // zdu350 S2: read by hs2-safe-deploy.sh
 		}
+	case "zdu-window": // b430: hs2-zdu-upgrade.sh asks the running binary
+		zduWindowCmd(os.Args[2:])
 	case "keygen":
 		k, err := core.GenerateStatic()
 		must(err)
@@ -408,6 +411,7 @@ func runCmd(args []string) {
 	// Whatever path runCmd leaves by, no icmp reply rule outlives the daemon
 	// (the listeners release theirs on close; this catches the rest).
 	defer encap.ReleaseAllEchoGuards()
+	log.Print(startLine())
 	applyTuning()
 	setMemoryLimit()
 	setGCPercentST244()
@@ -1194,6 +1198,7 @@ func newLB(fc fileConfig, logf func(string, ...any)) *engine.LB {
 	} else {
 		lb.SetSides("Iran", "Kharej")
 	}
+	defer engine.ZDULBRegister(lb) // b438: its judge state rides a ZDU hand-off (and is seeded from one)
 	if fc.LB.Mode == "auto" {
 		lb.SetAuto(true)
 		logf("lb: %d paths, auto weights (configured × quality factor 0.5–1.5): %s", len(paths), lbSummary(paths))
@@ -1230,4 +1235,19 @@ func listenLB(fc fileConfig, logf func(string, ...any)) (net.Listener, error) {
 		logf("lb: also listening on %s (port %s)", strings.Join(extra, ", "), port)
 	}
 	return engine.MergeListeners(lns...), nil
+}
+
+// startLine (b437 F7): the process's first line names what really runs. The
+// syslog tag is the first cold start's (a ZDU child inherits the journald
+// stream), so after a handover the tag shows an older version than this.
+func startLine() string {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "? (" + err.Error() + ")"
+	}
+	st := buildStamp()
+	if st == "" {
+		st = "no build stamp"
+	}
+	return fmt.Sprintf("start: pid %d binary %s · %s · %s · %s", os.Getpid(), exe, st, runtime.Version(), baseVersion)
 }

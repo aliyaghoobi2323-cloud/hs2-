@@ -119,7 +119,7 @@ func TestZDUNotifyUnset(t *testing.T) {
 }
 
 func TestZDUFeaturesLine(t *testing.T) {
-	if got := featuresLine(); got != "features: zdu" {
+	if got := featuresLine(); got != "features: zdu zduwin" {
 		t.Fatalf("%q", got)
 	}
 }

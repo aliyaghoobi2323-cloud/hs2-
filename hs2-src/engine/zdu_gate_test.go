@@ -424,3 +424,34 @@ func TestZDUExitAtCeilingAllBusyWarmNeed(t *testing.T) {
 		t.Fatalf("new pool shrank to %d", zp.liveOf(zduInstNew, false))
 	}
 }
+
+// b441 (l437 finding 6, fails before the fix): an lb cut-drain overshoot
+// above the ceiling spent the boot spares on the old Iran, and the handover
+// boost that came while the overshoot lasted was the same episode: no spare,
+// the new Iran got 0 links in 20 s. A rise of at least zduBootJump re-arms;
+// a small rise does not.
+func TestZDUExitBootAfterOvershoot(t *testing.T) {
+	setZDU(t, true)
+	zduResetExitStat(t)
+	const hi = 6
+	b0 := zduExitBootN.Load()
+	zp := newZDUExitPool(t, 1, hi)
+	zp.setIran(zduInstOld)
+	zp.setTarget(hi)
+	eventually(t, "old pool at its ceiling", func() bool { return zp.liveOf(zduInstOld, false) == hi })
+	zp.setTarget(hi + 1) // cut-drain replacements: above the ceiling, no handover
+	eventually(t, "overshoot spares on the old Iran", func() bool { return zp.liveOf(zduInstOld, false) == hi+zduExitBoot })
+	zp.setTarget(hi + 2) // a small rise: the same episode
+	time.Sleep(100 * time.Millisecond)
+	if n := zduExitBootN.Load() - b0; n != zduExitBoot {
+		t.Fatalf("small rise re-armed: boot spares %d", n)
+	}
+	zp.setIran(zduInstNew)    // the handover: only the new Iran accepts now
+	zp.setTarget(hi + 2 + hi) // the old Iran's boost on top of the overshoot
+	eventually(t, "boot spares on the new Iran", func() bool { return zp.liveOf(zduInstNew, false) == zduExitBoot })
+	if n := zduExitBootN.Load() - b0; n != 2*zduExitBoot {
+		t.Fatalf("boot spares %d, want %d", n, 2*zduExitBoot)
+	}
+	sendCtl(t, zp.exitPool, zp.meterOf(zduInstNew), hi)
+	eventually(t, "new pool full", func() bool { return zp.liveOf(zduInstNew, false) == hi })
+}

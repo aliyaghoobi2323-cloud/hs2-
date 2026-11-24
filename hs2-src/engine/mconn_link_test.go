@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +57,7 @@ type mcLink struct {
 	mtr    *linkMeter
 	mu     sync.Mutex
 	opened []*mcStream
+	dead   atomic.Bool // b460 tests: Alive() false
 }
 
 func newMCLink(caps uint8) *mcLink {
@@ -73,7 +75,7 @@ func (l *mcLink) OpenStream() (stream, error) {
 	return s, nil
 }
 func (l *mcLink) Active() int32             { return 0 }
-func (l *mcLink) Alive() bool               { return true }
+func (l *mcLink) Alive() bool               { return !l.dead.Load() }
 func (l *mcLink) Close() error              { return nil }
 func (l *mcLink) meter() *linkMeter         { return l.mtr }
 func (l *mcLink) tcpStats() (tcpStat, bool) { return tcpStat{}, false }

@@ -100,6 +100,11 @@ func TestMConnSubResendDarkTarget(t *testing.T) {
 	mconnSubResend.Store(true)
 	keepStallOn.Store(true)
 	t.Cleanup(func() { stripeResend.Store(oldR); mconnSubResend.Store(oldS); keepStallOn.Store(oldK) })
+	// the r68fix3 rule alone: b449d's target wait (Iran opens a new sub and
+	// the conn goes on) is TestB449TgtWait* (mconn_b449_tgtwait_test.go)
+	oldW := b449TgtWait.Load()
+	b449TgtWait.Store(0)
+	t.Cleanup(func() { b449TgtWait.Store(oldW) })
 	r0, n0 := subResendStat.resends.Load(), subResendStat.noTarget.Load()
 	o0 := subResendStat.noTgtLost.Load() + subResendStat.noTgtSurv.Load()
 	n, iran, exit := newLitePair(t)

@@ -468,10 +468,14 @@ type mconnEdge struct {
 	ended  bool
 	endedA atomic.Bool             // b312: ended, readable without mu (set under mu by end)
 	zduPin atomic.Pointer[zduInst] // ZDU: the peer instance its subs stay on (zdu_pin.go)
+	b458MC atomic.Pointer[mConn]   // b458: its connection, for the latency class (mconn_b458_capstat.go)
 
 	// diagnostics (HS2_MCONN_STRIPE_LOG): the first sub's placement
 	pickDur  time.Duration
 	pickLink string
+
+	lastNoMConn bool   // b449g: pickFirstLite's last miss was a non-mconn exit (under mu)
+	failed      []Link // b449h: links the first open failed on (under mu; mconn_b449h_openskip.go)
 }
 
 // open is the connection's mOpener.
@@ -499,6 +503,10 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 		wait = mconnFirstWait
 	}
 	deadline := t0.Add(wait)
+	why := b449gNoPick // b449g: the last reason, counted when the first open fails
+	if e.ended {
+		why = b449gEnded
+	}
 	for tries := 0; !e.ended && tries < 3; {
 		var l Link
 		var rel func()
@@ -508,17 +516,30 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 			// old path would (pickWait), so the connection's placement is
 			// unchanged; only a link whose exit reads kindMConn will do.
 			l, rel, raw, ok = e.pickFirstLite(p, avoid)
+			if !ok && e.lastNoMConn {
+				why = b449gNoMConn
+			}
+		} else if !e.first && len(e.failed) > 0 && b449hSkipOn.Load() {
+			l, rel, ok = e.lm.pickPlaneCall(p, slices.Concat(avoid, e.failedAny())) // b449h
+			if !ok {
+				l, rel, ok = e.lm.pickPlaneCall(p, avoid)
+			}
 		} else {
 			l, rel, ok = e.lm.pickPlaneCall(p, avoid) // HS2_MCONN_CALL_AVOID (mconn_call.go)
 		}
 		if !ok {
-			if time.Now().After(deadline) || !sleepCtx(e.ctx, mconnPickGap) {
+			if time.Now().After(deadline) {
+				break
+			}
+			if !sleepCtx(e.ctx, mconnPickGap) {
+				why = b449gEnded
 				break
 			}
 			continue
 		}
 		tries++ // a link can die between the pick and the open: try another
 		st, err := l.OpenStream()
+		why = b449gStream
 		if err == nil {
 			autoWinOffForStripe(e.lm, st) // HS2_SMUX_AUTOWIN (smux_autowin.go)
 			dl76Mark(st)
@@ -552,9 +573,19 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 				e.opened++
 				return s, l, nil
 			}
+			why = b449gHeader
 			st.Close()
 		}
+		if !e.first {
+			e.failed = append(e.failed, l) // b449h: the next try leaves it out
+		}
 		rel()
+	}
+	if !e.first {
+		if e.ended && why == b449gNoPick {
+			why = b449gEnded
+		}
+		b449gOpenFail(why)
 	}
 	return nil, nil, errMConnNoLink
 }
@@ -564,7 +595,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 // (the caller then falls back to the one stream, as with the key off).
 func (e *mconnEdge) pickFirstLite(p mPlane, avoid []any) (Link, func(), bool, bool) {
 	tp := time.Now()
-	l, rel, ok := pickWait(e.ctx, e.lm, true)
+	l, rel, ok := pickWaitSkip(e.ctx, e.lm, true, e.failed) // b449h
 	if !ok {
 		return nil, nil, false, false
 	}
@@ -590,8 +621,10 @@ func (e *mconnEdge) pickFirstLite(p mPlane, avoid []any) (Link, func(), bool, bo
 	}
 	if !pi.mconn() {
 		rel()
+		e.lastNoMConn = true // b449g diagnostic
 		return nil, nil, false, false
 	}
+	e.lastNoMConn = false
 	return l, rel, pi.mconnRaw(), true
 }
 
@@ -686,23 +719,32 @@ func closeWaitEnd(mc *mConn) {
 }
 
 // serveUserMConn carries a user connection as an mConn. false: no sub could
-// be opened at all and nothing was sent — the caller uses the one stream.
-func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManager, port int) bool {
+// be opened at all and nothing was sent — the caller uses the one stream,
+// leaving out the links returned (b449h: the ones the first open failed on).
+func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManager, port int) (bool, []Link) {
 	t0 := time.Now()
 	e := &mconnEdge{ctx: ctx, lm: lm, port: port, id: newMConnID()}
 	mc, err := newMConnIran(e.id, e.open)
 	if err == nil {
+		e.b458MC.Store(mc)
 		mc.mu.Lock()
 		mc.rstEndFn = e.sendEndNotice // rr157 (mconn_rescue_rst.go)
 		mc.mu.Unlock()
 	}
 	if err != nil {
 		if e.end() == 0 {
-			return false
+			b449gOpen.fallback.Add(1) // b449g diagnostic
+			b449Log()
+			e.mu.Lock()
+			failed := e.failed
+			e.mu.Unlock()
+			return false, failed
 		}
+		b449gOpen.lateFail.Add(1) // b449g diagnostic
+		b449Log()
 		obs.openErr.Add(1)
 		user.Close()
-		return true
+		return true, nil
 	}
 	obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
 	mc.tr.setPort(port)
@@ -741,7 +783,7 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 				time.Duration(fr-monoNano(t0)).Round(time.Millisecond), e.pickLink)
 		}
 	}
-	return true
+	return true, nil
 }
 
 // ---- exit -----------------------------------------------------------------
@@ -1078,7 +1120,7 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 			mc.Close()
 			return
 		}
-		c := cfg.traffic.open(nil) // the user connection, once; its subs count per link
+		c := cfg.traffic.openKill(nil, func() { up.Close(); mc.Close() }) // the user connection, once; its subs count per link
 		defer cfg.traffic.done(c)
 		relayStreamHC(exitTarget{up, mc}, exitMConnCounted{mc, c}, nil, hcIf(halfCloseLink(mtr), hcExit)) // hc183
 		mc.Close()

@@ -7,6 +7,7 @@ import (
 	"math/bits"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -161,7 +162,9 @@ type LinkManager struct {
 	// own answer is late goes by it (userStreamHeader).
 	exitInfo atomic.Pointer[peerInfo]
 	// zdu: the peer instances seen on the links (ZDU generation pin, zdu_pin.go)
-	zdu zduLM
+	zdu  zduLM
+	b459 b459LM // HS2_B459_DEADGEN: live peer generations (mconn_b459_deadgen.go)
+	b460 b460LM // HS2_B460_DGBATCH: live generations, batched dead-gen waiters (mconn_b460_dgbatch.go)
 
 	// The sizing brain and what feeds it. ap, sample, dec, lastSampleAt,
 	// targetDropAt and the log-throttle times are touched only by the pool's
@@ -1951,9 +1954,15 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 // placement count as read while ranking it (lm_fastpick.go re-checks it). It
 // only reads the pool, so a caller holding m.mu for reading may call it.
 func (m *LinkManager) pickLockedFP(limit int) (*managedLink, int32) {
+	return m.pickLockedSkipFP(limit, nil)
+}
+
+// pickLockedSkipFP is pickLockedFP leaving out every link in skip (b449h: the
+// links a user open just failed on). nil skip: pickLockedFP exactly.
+func (m *LinkManager) pickLockedSkipFP(limit int, skip []Link) (*managedLink, int32) {
 	// HS2_LB_STEER: the path this connection should take (lb_auto2.go).
 	drawn := m.steerDrawLocked(false, func(ml *managedLink) bool {
-		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit) && !stripeOn(ml)
+		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit) && !stripeOn(ml) && !slices.Contains(skip, ml.link)
 	})
 	// g400 (ZDU): tier 1 (a healthy retiring link) takes the current
 	// generation's links only; an older generation's healthy link (peerOld)
@@ -1967,7 +1976,7 @@ func (m *LinkManager) pickLockedFP(limit int) (*managedLink, int32) {
 		var best pickKey
 		ties := 0
 		for _, ml := range m.links {
-			if !ml.link.Alive() || !m.infoReadyLocked(ml) {
+			if !ml.link.Alive() || !m.infoReadyLocked(ml) || len(skip) > 0 && slices.Contains(skip, ml.link) {
 				continue
 			}
 			if limit > 0 && int(ml.users.Load()) >= limit || stripeGuardSkip(ml, limit) { // HS2_MCONN_STRIPE_RES_GUARD

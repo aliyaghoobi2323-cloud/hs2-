@@ -240,12 +240,18 @@ func TestReplayFile(t *testing.T) {
 		t.Skip("CENSOR_REPLAY not set")
 	}
 	outDir := os.Getenv("CENSOR_REPLAY_OUT")
-	for _, p := range strings.Split(in, ",") {
+	paths := strings.Split(in, ",")
+	// b414 (lab): CENSOR_REPLAY_PEER=1 with ir.rec,kh.rec replays kh.rec as a
+	// newer Iran would have fed it (its own aborts reported, 3 s later).
+	if os.Getenv("CENSOR_REPLAY_PEER") == "1" && len(paths) == 2 {
+		paths[1] = mergePeerReports(t, paths[0], paths[1], 3*time.Second)
+	}
+	for _, p := range paths {
 		f, err := os.Open(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		name := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)) + ".log"
+		name := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(p), ".peer"), ".rec") + ".log"
 		o, err := os.Create(filepath.Join(outDir, name))
 		if err != nil {
 			t.Fatal(err)

@@ -21,17 +21,20 @@ type Status struct {
 	PathEv   [2]uint64         `json:"path_ev,omitempty"`   // path samples received, of them without a scope
 	PeerMass uint64            `json:"peer_mass,omitempty"` // confirmed mass-RST peer restarts (slot 4)
 	PeerOld  uint64            `json:"peer_old,omitempty"`  // confirmed old-signature peer restarts (slot 5)
+	GenOld   uint64            `json:"gen_old,omitempty"`   // b437: link ends of the peer's older (ZDU) process, not counted as deaths
+	GenNew   uint64            `json:"gen_new,omitempty"`   // b437: newer peer generations seen (ZDU takeovers)
 	Open     []string          `json:"open,omitempty"`      // open episodes: "ip class/conf dur"
 	Episodes map[string]uint32 `json:"episodes,omitempty"`  // closed: "class/conf" → count
 	Recent   []string          `json:"recent,omitempty"`    // last closed episode lines
 	Paths    []string          `json:"paths,omitempty"`     // per Iran IP: path-sample inputs received (M7/O7)
+	Peer     *PeerStatus       `json:"peer,omitempty"`      // b429: abort-report path counters
 }
 
 var statusJSON atomic.Pointer[[]byte]
 
 func setStatus(e *evaluator) {
 	st := Status{V: 1, Level: 1, Side: sideName(e.side), Dropped: dropped.Load(), Evals: e.evals,
-		Scopes: len(e.scopes), Episodes: map[string]uint32{}, PathEv: [2]uint64{e.pathEv, e.pathNoScope}, PeerMass: e.nMass, PeerOld: e.nOld}
+		Scopes: len(e.scopes), Episodes: map[string]uint32{}, PathEv: [2]uint64{e.pathEv, e.pathNoScope}, PeerMass: e.nMass, PeerOld: e.nOld, GenOld: e.nGenOld, GenNew: e.nGenNew}
 	for _, s := range e.scopes {
 		if ep := s.ep; ep != nil {
 			st.Open = append(st.Open, fmt.Sprintf("%s %s/%s %s", ep.id, ClassName(ep.class), confName[ep.conf], ep.last.Sub(ep.opened).Round(1e9)))
@@ -60,6 +63,7 @@ func setStatus(e *evaluator) {
 		}
 	}
 	sort.Strings(st.Paths)
+	st.Peer = peerStatus()
 	b, err := json.Marshal(st)
 	if err != nil {
 		return
@@ -105,6 +109,11 @@ func Render(raw []byte) string {
 	fmt.Fprintf(&b, "censor351 v%d (detect and log only): %s, level %d, side %s\n", st.V, state, st.Level, st.Side)
 	fmt.Fprintf(&b, "  scopes (Iran IPs): %d   evaluations: %d   dropped events: %d\n", st.Scopes, st.Evals, st.Dropped)
 	fmt.Fprintf(&b, "  path samples: %d received, %d without an Iran-IP scope\n", st.PathEv[0], st.PathEv[1])
+	if p := st.Peer; p != nil {
+		fmt.Fprintf(&b, "  peer abort reports (kharej): %d received (%d aborts, %d edge signals), %d resets credited, %d held, %d released; orphans %d (%d long holds)\n",
+			p.Reports, p.RepAborts, p.EdgeSigs, p.Credited, p.Held, p.Released, p.Orphans, p.OrphanHolds)
+		fmt.Fprintf(&b, "  own aborts (iran): %d counted, %d reported\n", p.OwnAborts, p.OwnReported)
+	}
 	if len(st.Open) == 0 {
 		b.WriteString("  open episodes: none\n")
 	} else {

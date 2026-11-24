@@ -92,10 +92,11 @@ type StripeSnap struct {
 	Grow, Cut, Band, Hold, Token, Full  uint64 // تصمیم‌های دروازه به تفکیک علت
 	Closed, NoMeasure                   uint64
 	GrowUnused, GrowRate, PickNone      uint64
-	FastChained, FastEarly, FastRetry   uint64 // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
-	FastReserved                        int64  // up56: HS2_MCONN_STRIPE_FAST_RESERVE idle links
-	FastRefills, FastHsKicks, FastBumps uint64 // up56
-	DlEarly, DlTicks, DlChained, DlSolo uint64 // dr116: HS2_MCONN_STRIPE_DL_FAST
+	FastChained, FastEarly, FastRetry   uint64   // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+	FastReserved                        int64    // up56: HS2_MCONN_STRIPE_FAST_RESERVE idle links
+	FastRefills, FastHsKicks, FastBumps uint64   // up56
+	DlEarly, DlTicks, DlChained, DlSolo uint64   // dr116: HS2_MCONN_STRIPE_DL_FAST
+	Reach                               []uint64 // b437 F10: connections that reached 2,3,..,7,8+ subs
 	// بازهٔ گذشته (از خواندن قبلی)
 	Decisions          uint64
 	WAvg, LiveAvg      float64
@@ -108,13 +109,27 @@ type StripeSnap struct {
 	BusyLinks                          int64
 }
 
+// stripeReach (b437 F10): stripeStat.reach, nil while no stripe formed.
+func stripeReach() []uint64 {
+	var r []uint64
+	for i := range stripeStat.reach {
+		if v := stripeStat.reach[i].Load(); v > 0 || r != nil {
+			if r == nil {
+				r = make([]uint64, len(stripeStat.reach))
+			}
+			r[i] = v
+		}
+	}
+	return r
+}
+
 // StripeObserved: شمارنده‌ها؛ میانگین‌ها و بیشینه‌های بازه با هر فراخوانی صفر می‌شوند.
 func StripeObserved() StripeSnap {
 	d := &stripeDiag
 	s := StripeSnap{
 		Active: stripeStat.active.Load(), RxActive: stripeStat.rxActive.Load(),
 		Subs: stripeStat.subs.Load(), Bytes: stripeStat.bytes.Load(), SubBytes: d.subB.Load(),
-		Refused: stripeStat.refused.Load(), Cuts: stripeStat.cuts.Load(),
+		Refused: stripeStat.refused.Load(), Cuts: stripeStat.cuts.Load(), Reach: stripeReach(),
 		Grow: d.dec[gwGrow].Load(), Cut: d.dec[gwCut].Load(), Band: d.dec[gwBand].Load(),
 		Hold: d.dec[gwHold].Load(), Token: d.dec[gwToken].Load(), Full: d.dec[gwFull].Load(),
 		Closed: d.closed.Load(), NoMeasure: d.noMeas.Load(),

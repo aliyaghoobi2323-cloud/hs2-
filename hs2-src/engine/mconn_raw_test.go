@@ -247,6 +247,7 @@ func errString(err error) string {
 // The second sub dies before the handshake is over: both sides end (no hang,
 // no leak). A failed open of the second sub leaves the connection raw.
 func TestMConnRawSecondSubDies(t *testing.T) {
+	setUpgSafe(t, false) // b449j: the key-off outcome; key on: TestB449jRawSecondSubDiesBound
 	before := runtime.NumGoroutine()
 	n, iran, exit := newRawPair(t)
 	n.fail.Store(true)

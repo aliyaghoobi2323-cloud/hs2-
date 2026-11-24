@@ -70,8 +70,8 @@ const (
 	mCallSteady    = 2.5     // busier direction vs. the previous sample
 	mCallStreak    = 2       // call-like samples in a row
 	mCallBudgetDef = 1_000_000
-	mCallBudgetWin = 5 // seconds (callBud's slots)
-	mCallLogEvery  = 10 * time.Second
+	mCallBudgetWin = 5                // seconds (callBud's slots)
+	mCallLogEvery  = 60 * time.Second // b437 F3: was 10 s
 )
 
 // callState is an mConn's call bookkeeping (under mConn.mu).
@@ -170,6 +170,7 @@ func (m *mConn) callWantDualLocked(sent, got uint64, w time.Duration) bool {
 		return false
 	}
 	m.callUp = true
+	m.b458Stamp(time.Now())
 	return true
 }
 
@@ -223,6 +224,7 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 	like := w < 2*mHeavyWindow && callLikeSample(uint64(sent), got, w, &m.txPrev, &m.txStreak)
 	if like {
 		m.callLikeAt = now
+		m.b458Stamp(now)
 	}
 	was := m.callOn
 	if !like && m.dc254CopyHoldLocked(now, w, sent, was) {
@@ -283,7 +285,7 @@ func callLog(now time.Time) {
 	if up == pu && dup == pd {
 		return
 	}
-	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget) · %d call subs placed away from other copies · cs225 offpath %d samepath %d%s",
+	log.Printf("mconn call (HS2_MCONN_CALL), 60s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget) · %d call subs placed away from other copies · cs225 offpath %d samepath %d%s",
 		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load(), callStat.avoided.Load(), cs225Stat.off.Load(), cs225Stat.same.Load(), cs286LogPart())
 }
 
@@ -630,14 +632,25 @@ func (m *LinkManager) pickPlaneCallOne(p mPlane, avoid []any) (Link, func(), boo
 	avoid, resc := takeRescueMark(avoid) // HS2_LB_RESCUE_CALLFREE (lb_rescue_callfree.go)
 	if resc && p == planeLight {
 		pool := m.exitInfo.Load()
-		m.mu.Lock()
-		if ml := m.pickRescueLocked(avoid, pool); ml != nil {
-			rescueCallFreeN.Add(1)
-			m.placeLocked(ml)
-			m.mu.Unlock()
-			return ml.link, m.releaseFor(ml), true
+		fastDone := false
+		if rescFastPick.Load() && lmFastPick.Load() { // b451 (rescfast_b451.go)
+			l, rel, ok, done := m.pickRescueFast(avoid, pool)
+			if ok {
+				rescueCallFreeN.Add(1)
+				return l, rel, true
+			}
+			fastDone = done
 		}
-		m.mu.Unlock()
+		if !fastDone {
+			m.mu.Lock()
+			if ml := m.pickRescueLocked(avoid, pool); ml != nil {
+				rescueCallFreeN.Add(1)
+				m.placeLocked(ml)
+				m.mu.Unlock()
+				return ml.link, m.releaseFor(ml), true
+			}
+			m.mu.Unlock()
+		}
 	}
 	mark := false
 	for i, a := range avoid {

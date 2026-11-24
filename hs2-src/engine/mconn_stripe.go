@@ -160,7 +160,16 @@ var stripeStat struct {
 	// HS2_MCONN_STRIPE_UP (mconn_stripe_up.go)
 	rxActive    atomic.Int32  // exit receivers holding a stripe slot now
 	reorderGrow atomic.Uint64 // reorder bound growths
+	// reach (b437 F10): connections that reached a stripe of n subs
+	// (index n-2, the last 8 and more), each count once per connection
+	// and width; the per-connection line is kept for stripeLogWide and up
+	reach [7]atomic.Uint64
 }
+
+// stripeLogWide (b437 F10): the "striped over N subs" line only from this
+// width (prod Iran: 2 and 3 subs are ~90 % of ~700 lines/h); every width
+// is counted in stripeStat.reach (status stripe_reach).
+const stripeLogWide = 5
 
 // stripeState is an mConn's stripe bookkeeping (under mConn.mu).
 type stripeState struct {
@@ -568,8 +577,20 @@ func (m *mConn) stripeJoinLocked(s *msub) {
 	c := getChunk(mRecStripe)
 	s.push(c)
 	stripeStat.subs.Add(1)
-	if n := 1 + m.liveStripeLocked(); n > m.stLogged {
-		m.stLogged = n
+	m.stripeReachLocked(1 + m.liveStripeLocked())
+}
+
+// stripeReachLocked (b437 F10): the connection is striped over n subs; a
+// width it had not reached yet is counted, and logged from stripeLogWide.
+func (m *mConn) stripeReachLocked(n int) {
+	if n <= m.stLogged {
+		return
+	}
+	for w := max(m.stLogged+1, 2); w <= n; w++ {
+		stripeStat.reach[min(w, 8)-2].Add(1)
+	}
+	m.stLogged = n
+	if n >= stripeLogWide {
 		log.Printf("mconn %x: striped over %d subs", m.id&0xffffff, n)
 	}
 }

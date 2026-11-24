@@ -63,8 +63,25 @@ func b312OpenLine() string {
 func (e *mconnEdge) openNoLock(p mPlane, avoid []any, fresh, rstJ bool, t0 time.Time) (mSub, any, error) {
 	b312Open.nolock.Add(1)
 	deadline := t0.Add(mconnNextWait)
+	lat := e.b458Latency() // b458 (mconn_b458_capstat.go)
+	joined := false
+	defer func() { b458Join(t0, joined, fresh || rstJ, lat) }()
 	for tries := 0; !e.endedA.Load() && tries < 3; {
+		if e.b460PinDead() { // HS2_B460_DGBATCH (mconn_b460_dgbatch.go): never queue a join of a dead generation
+			b460Stat.fast.Add(1)
+			break
+		}
+		if e.b459PinDead() { // HS2_B459_DEADGEN (mconn_b459_deadgen.go): no link of the pin can come
+			b459Stat.fast.Add(1)
+			break
+		}
+		// HS2_B457_PICKCAP (mconn_b457_pickcap.go), HS2_B458_CAPLAT
+		capRel, dead := b457PickAcquireDG(e.ctx, lat && b458CapLat.Load(), e)
+		if dead {
+			break
+		}
 		l, rel, ok := e.lm.pickPlaneCall(p, avoid) // HS2_MCONN_CALL_AVOID (mconn_call.go)
+		capRel()
 		if !ok {
 			if time.Now().After(deadline) || !sleepCtx(e.ctx, mconnPickGap) {
 				break
@@ -96,6 +113,7 @@ func (e *mconnEdge) openNoLock(p mPlane, avoid []any, fresh, rstJ bool, t0 time.
 					return nil, nil, errMConnNoLink
 				}
 				e.zduPinTo(l)
+				joined = true
 				return s, l, nil
 			}
 			st.Close()

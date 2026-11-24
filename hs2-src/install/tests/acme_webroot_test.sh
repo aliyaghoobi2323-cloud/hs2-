@@ -11,6 +11,7 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+export HS2_CERT_HOOK="$T/sbin/hs2-reload-certs" # b430: the renew hook helper, never /usr/local/sbin in a test
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; echo "      got: $(printf '%s' "${out:-}" | tr '\n' ' ' | cut -c1-300)"; fail=1; fi; }
 command -v openssl >/dev/null 2>&1 || { echo "SKIP acme_webroot_test (needs openssl)"; exit 0; }
 
@@ -55,7 +56,7 @@ check "acme_webroot path -> that path (no trailing /)" '[ "$out" = "/srv/acme" ]
 
 : > "$CERTBOT_LOG"
 out=$(run 'cert_get_webroot '"$T/on.json"' t2.example.com')
-check "webroot: certbot certonly --webroot -w <webroot> -d <sub>" 'grep -qx "certonly --webroot -w $T/acme -d t2.example.com --non-interactive --agree-tos --register-unsafely-without-email --deploy-hook pkill -HUP -x hs2" "$CERTBOT_LOG"'
+check "webroot: certbot certonly --webroot -w <webroot> -d <sub>" 'grep -qx "certonly --webroot -w $T/acme -d t2.example.com --non-interactive --agree-tos --register-unsafely-without-email --deploy-hook $HS2_CERT_HOOK" "$CERTBOT_LOG"'
 check "webroot: challenge directory created" '[ -d "$T/acme/.well-known/acme-challenge" ]'
 check "webroot: prints the cert|key paths" 'echo "$out" | grep -q "^/etc/letsencrypt/live/t2.example.com/fullchain.pem|/etc/letsencrypt/live/t2.example.com/privkey.pem"'
 check "webroot: never standalone" '! grep -q standalone "$CERTBOT_LOG"'

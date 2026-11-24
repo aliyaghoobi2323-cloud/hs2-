@@ -470,6 +470,9 @@ type msub struct {
 	loops    int         // mem68: its readLoop/writeLoop running (under m.mu)
 	rwClosed atomic.Bool // mem68: close has finished closing rw
 	u268Idx  atomic.Bool // in ul268's link index (mconn_ul268_scale.go)
+
+	b449N    uint32 // b449: dequeues by its writer (under m.mu, mconn_b449_pstuck.go)
+	b449Kill bool   // b449: ended as a stuck primary (under m.mu)
 }
 
 func (s *msub) close() {
@@ -599,6 +602,9 @@ type mrecv struct {
 type mConn struct {
 	id   uint64
 	iran bool
+	// b458: unix ns of the last call-like sample or call upgrade (callLikeAt,
+	// callUp), read by its edge's picks without mu (mconn_b458_capstat.go)
+	b458LatAt atomic.Int64
 	// b311: it striped or moved to bulk; its subs' closes wait for their
 	// streams (mconn_b311.go)
 	b311Heavy atomic.Bool
@@ -660,6 +666,16 @@ type mConn struct {
 	err          error
 	peerFin      bool
 
+	// b449d target wait (mconn_b449_tgtwait.go): the dead sub whose chunks wait in orphan for a target
+	b449TwDead  *msub
+	b449TwN     int
+	b449TwT0    time.Time
+	b449TwUntil time.Time
+	lightOpenT0 time.Time    // b449e: when the pending light open started (mconn_b449_slowopen.go)
+	lightOpen2  bool         // b449e: the slow open's second open is pending
+	b449capW    atomic.Int32 // b449e CAPWAIT: picks of this conn waiting for a b457 cap slot now
+	b449capEnd  atomic.Int64 // b449e CAPWAIT: monoNano when the last such wait ended
+
 	// heavy detection (this side's sending direction): the rate window, and
 	// since when the carrying sub's queue has been above mHeavyQueue
 	hvStart    time.Time
@@ -677,6 +693,13 @@ type mConn struct {
 	// written, and the last switch
 	prefPrimary *msub
 	pStuckSince time.Time
+	// b449 (mconn_b449_pstuck.go), under mu: the lite stuck-primary watch
+	b449Arm     bool
+	b449NoTgt   bool
+	b449P       *msub
+	b449Cnt     uint32
+	b449At      time.Time
+	b449DarkRx  int64 // Iran: the receive time whose silence had its dark open (b449DarkOpenLocked)
 	lastPSwitch time.Time
 	dc          dcConn    // HS2_MCONN_DARKCALL (mconn_darkcall.go), under mu
 	missLost    bool      // cs221: a chunk went out by the bulk or stripe rule (subs' missEnd not kept)
@@ -1085,6 +1108,7 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			}
 			p := m.primary.Load()
 			if p == nil || !p.fits(c.n) {
+				m.b449ArmLocked() // b449: watch a primary that stops writing (mconn_b449_pstuck.go)
 				m.sendCond.Wait()
 				continue
 			}
@@ -1519,6 +1543,7 @@ func (s *msub) writeLoop() {
 		s.q = s.q[1:]
 		s.qBytes -= c.qsize()
 		s.cur = c
+		s.b449N++ // b449
 		wire := c.wire()
 		s.curMore = spare[:0] // empty: as before, nothing batched yet
 		if mconnBatch.Load() && m.lite && len(s.q) > 0 {
@@ -2182,6 +2207,10 @@ func (m *mConn) subGone(s *msub, cause error) {
 		return
 	}
 	if m.handshaking {
+		if m.upgSafeKeepLocked(s, lost, resent) { // HS2_B449J_UPGSAFE (mconn_b449j_upgsafe.go)
+			m.mu.Unlock()
+			return
+		}
 		// A sub died before both sides agreed on the raw boundaries: neither
 		// side can tell what the other reads on the first sub now. End like
 		// the old path's stream on a dead link (no RST: it might be read raw).
@@ -2331,6 +2360,7 @@ func (m *mConn) end(err error, rst bool) {
 	m.rawEnded()
 	m.stripeEnded()
 	obs.mconnOpen.Add(-1)
+	b469Ends.Add(1) // HS2_B469_DRAINSMOOTH (zdu_b469_drainsmooth.go)
 	if err != errMConnClosed && !finished {
 		obs.mconnFailed.Add(1)
 	}
@@ -2434,9 +2464,26 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			go m.subGone(x, errStripeAckStall)
 		}
 	}
+	if d, x, alt := m.b449TickLocked(now); d > 0 { // b449 (mconn_b449_pstuck.go)
+		at(d)
+		if x != nil {
+			go m.subGone(x, errB449Stuck)
+			go m.b449CloseAfter(x, alt) // b449b: the stream ends once alt wrote
+		}
+	}
 	if over, d := m.graceTickLocked(now); over {
 		m.mu.Unlock()
 		m.end(errMConnSubsDied, false)
+		return 0
+	} else if d > 0 {
+		at(d)
+	}
+	if d := m.b449SlowOpenTickLocked(now); d > 0 { // b449e (mconn_b449_slowopen.go)
+		at(d)
+	}
+	if over, d := m.b449TwTickLocked(now); over { // b449d (mconn_b449_tgtwait.go): the old verdict, later
+		m.mu.Unlock()
+		m.end(errMConnLost, true)
 		return 0
 	} else if d > 0 {
 		at(d)
@@ -2473,6 +2520,10 @@ func (m *mConn) tick(now time.Time) time.Duration {
 		}
 		m.rescueCensusLocked(live) // diagnostics (lb_rescue_cut.go)
 		m.rescueCensusLocked(live) // diagnostics (lb_rescue_cut.go)
+
+		if d := m.b449DarkOpenLocked(live, now); d > 0 { // b449 (mconn_b449_pstuck.go)
+			at(d)
+		}
 		switch {
 		case m.peerFin || m.wclosed:
 		case len(live) == 1 && !m.lightOpening && !m.stOpening:
@@ -2685,9 +2736,16 @@ func (m *mConn) gapCheck(now time.Time) (stalled, pending bool) {
 }
 
 func (m *mConn) openLight(avoid []any) {
+	m.mu.Lock()
+	m.lightOpenT0 = time.Now() // b449e (mconn_b449_slowopen.go)
+	m.mu.Unlock()
+	// no kickMgr here: the next ordinary tick arms the slow-open look. An
+	// extra manager pass at every light open broke CALLMOVE's move
+	// (TestB336CallMoveNoLossNoReorder 2/3 "timed out waiting for move done"
+	// on c6b13a00, 0/5 without the kick, lab3 2026-11-23).
 	sub, key, err := m.open(planeLight, avoid)
 	m.mu.Lock()
-	m.lightOpening = false
+	m.lightOpening, m.lightOpenT0 = false, time.Time{}
 	if err != nil {
 		m.lightRetryAt = time.Now().Add(mReopenBackoff)
 		m.deadKeys = nil // maybe only those links were left

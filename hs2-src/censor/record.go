@@ -155,12 +155,12 @@ func decode(b *[recSize]byte) event {
 	ev := event{kind: evKind(b[0]), stage: b[1], front: Front(b[2]), at: int64(le.Uint64(b[8:])), n: le.Uint64(b[48:])}
 	ev.local = getAddr(b[16:32], b[6]&3)
 	ev.remote = getAddr(b[32:48], b[6]>>2&3)
-	switch ev.kind {
-	case evDeath:
+	switch {
+	case ev.kind == evDeath || ev.kind == evGen && ev.stage == genOldEnd:
 		ev.d = Death{Local: ev.local, Remote: ev.remote, Front: Front(b[7]), Class: DeathClass(b[3]),
 			LifeMs: le.Uint32(b[56:]), Bytes: le.Uint64(b[72:]), HaveTCP: b[4] == 1,
 			LastSentMs: le.Uint32(b[60:]), LastRecvMs: le.Uint32(b[64:]), MinRTTUs: le.Uint32(b[68:])}
-	case evPath:
+	case ev.kind == evPath:
 		ev.p = PathSample{Local: ev.local, Remote: ev.remote, Loss: rf64(b[80:]), QueueMs: rf64(b[88:]), Silent: b[5] == 1,
 			PeerLoss: rf64(b[96:]), RateBps: rf64(b[104:]), BusyLinks: le.Uint16(b[120:]), PathLimited: rf64(b[112:])}
 	}
@@ -212,7 +212,7 @@ func replay(rd io.Reader, ispMap string, out func(at time.Time, line string)) (r
 			cur = time.Unix(0, int64(binary.LittleEndian.Uint64(b[8:])))
 			st.ticks++
 			e.step(cur)
-		case uint8(evDial), uint8(evAccept), uint8(evDeath), uint8(evPath), uint8(evUsers):
+		case uint8(evDial), uint8(evAccept), uint8(evDeath), uint8(evPath), uint8(evUsers), uint8(evPeerAbort), uint8(evPeerOrphan), uint8(evGen):
 			if e == nil {
 				return st, errors.New("event before header")
 			}

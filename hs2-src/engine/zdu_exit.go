@@ -202,7 +202,7 @@ func zduExitLine() string {
 	if r == 0 && c == 0 && zduExitBootN.Load() == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" zdu_exit_legacy_retired=%d zdu_poolctl_old=%d zdu_exit_boot=%d", r, c, zduExitBootN.Load())
+	return fmt.Sprintf(" zdu_exit_legacy_retired=%d zdu_poolctl_old=%d zdu_exit_boot=%d zdu_exit_boot_retry=%d", r, c, zduExitBootN.Load(), zduExitBootRetryN.Load())
 }
 
 // ---- Iran: the foreign-drain term -------------------------------------------

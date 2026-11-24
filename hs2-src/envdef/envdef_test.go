@@ -245,7 +245,7 @@ func TestB338Defaults(t *testing.T) {
 		"HS2_B375_RINGFLOOR":  {"0", Both},
 		"HS2_B399_STALLPICK":  {"1", Both},
 		"HS2_B399_STALL_MS":   {"300", Both},
-		"HS2_CENSOR_DETECT":   {"1", Edge},
+		"HS2_CENSOR_DETECT":   {"1", Both},
 	}
 	seen := map[string]int{}
 	for _, k := range Table {

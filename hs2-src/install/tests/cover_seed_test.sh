@@ -9,6 +9,7 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+export HS2_CERT_HOOK="$T/sbin/hs2-reload-certs" # b430: the renew hook helper, never /usr/local/sbin in a test
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 PY=$(command -v python3 || true)
 valid_json(){ [ -n "$PY" ] || return 0; "$PY" -c 'import json,sys; json.load(open(sys.argv[1]))' "$1"; }
@@ -21,7 +22,7 @@ check "every builtin-cover setup heredoc writes a cover_seed ($nbuiltin builtin 
 check "cover_seed is generated independently (openssl rand), not from the key" 'grep -q "COVER_SEED=\$(openssl rand -hex 16)" "$INST" && ! grep -q "COVER_SEED=.*SHARED" "$INST"'
 
 # --- migrate_config: extract it and the helpers it calls, run against sandbox -
-sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p;/^LE_DIR=/p;/^cert_lineage(){/,/^}/p;/^cert_conf_get(){/,/^}/p;/^cert_renew_method(){/,/^}/p;/^cert_until(){/,/^}/p' "$INST" \
+sed -n '/^configure_renewal(){/,/^}/p;/^install_cert_hook(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p;/^LE_DIR=/p;/^cert_lineage(){/,/^}/p;/^cert_conf_get(){/,/^}/p;/^cert_renew_method(){/,/^}/p;/^cert_until(){/,/^}/p' "$INST" \
  | sed "s#^LE_DIR=.*#LE_DIR=$T/le#" > "$T/fns.sh"
 mkdir -p "$T/le/renewal"
 run_migrate(){ # cfg-path

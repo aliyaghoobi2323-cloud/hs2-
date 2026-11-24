@@ -7,6 +7,7 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+export HS2_CERT_HOOK="$T/sbin/hs2-reload-certs" # b430: the renew hook helper, never /usr/local/sbin in a test
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 
 mkdir -p "$T/renewal"
@@ -22,7 +23,7 @@ cp "$T/renewal/z-panel.example.conf" "$T/panel.orig"
 # automatic one); extract them too (say and LE_DIR are one-liners, so they are
 # matched as single lines — a range would run on into the functions after
 # them). LE_DIR is pointed at the sandbox, whose renewal/ holds the lineages.
-sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p;/^LE_DIR=/p;/^cert_lineage(){/,/^}/p;/^cert_conf_get(){/,/^}/p;/^cert_renew_method(){/,/^}/p;/^cert_until(){/,/^}/p' "$INST" \
+sed -n '/^configure_renewal(){/,/^}/p;/^install_cert_hook(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p;/^LE_DIR=/p;/^cert_lineage(){/,/^}/p;/^cert_conf_get(){/,/^}/p;/^cert_renew_method(){/,/^}/p;/^cert_until(){/,/^}/p' "$INST" \
  | sed "s#^LE_DIR=.*#LE_DIR=$T#; s#/etc/letsencrypt/renewal#$T/renewal#g; s#/etc/modules-load.d/hs2.conf#/dev/null#; s#/etc/sysctl.d/99-hs2.conf#$T/sysctl.conf#g" > "$T/fns.sh"
 for f in configure_renewal migrate_config cert_lineage cert_conf_get cert_renew_method cert_until; do
   grep -q "^$f(){" "$T/fns.sh" || { echo "FAIL $f not found in install.sh"; exit 1; }
@@ -40,7 +41,7 @@ out=$(bash "$T/run.sh" 2>&1); rc=$?
 check "upgrade continues past migrate_config with a foreign certbot lineage" '[ $rc = 0 ] && echo "$out" | grep -x REACHED_END >/dev/null'
 check "fixed 8/16/8 pool migrated to 2/32/8" 'grep -F "\"min_links\": 2, \"max_links\": 32, \"per_link\": 8," "$T/cfg.json" >/dev/null'
 check "config is still valid JSON" 'python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$T/cfg.json"'
-check "renew_hook reloads every hs2 tunnel (in place)" 'grep -x "renew_hook = pkill -HUP -x hs2" "$T/renewal/a.example.conf" >/dev/null && ! grep -q "restart hs2" "$T/renewal/a.example.conf" && [ "$(grep -c "^renew_hook" "$T/renewal/a.example.conf")" = 1 ]'
+check "renew_hook reloads every hs2 tunnel (in place)" 'grep -x "renew_hook = $HS2_CERT_HOOK" "$T/renewal/a.example.conf" >/dev/null && ! grep -q "restart hs2" "$T/renewal/a.example.conf" && [ "$(grep -c "^renew_hook" "$T/renewal/a.example.conf")" = 1 ]'
 check "renew_before_expiry is top-level (before [renewalparams])" '[ "$(grep -n -m1 "^renew_before_expiry = 30 days" "$T/renewal/a.example.conf" | cut -d: -f1)" -lt "$(grep -n -m1 "^\[renewalparams\]" "$T/renewal/a.example.conf" | cut -d: -f1)" ]'
 check "the panel's own lineage is left untouched" 'cmp -s "$T/panel.orig" "$T/renewal/z-panel.example.conf"'
 check "old static sysctl file removed" '[ ! -e "$T/sysctl.conf" ]'

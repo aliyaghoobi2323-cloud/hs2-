@@ -12,6 +12,7 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+export HS2_CERT_HOOK="$T/sbin/hs2-reload-certs" # b430: the renew hook helper, never /usr/local/sbin in a test
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; echo "      got: $(printf '%s' "${out:-}" | tr '\n' ' ' | cut -c1-300)"; fail=1; fi; }
 command -v openssl >/dev/null 2>&1 || { echo "SKIP cert_test (needs openssl)"; exit 0; }
 
@@ -168,7 +169,7 @@ out=$(cr dns80)
 check "configure_renewal, DNS-01: warns it does NOT renew by itself" 'echo "$out" | grep -q "does NOT renew by itself" && ! echo "$out" | grep -q "Renewal set"'
 out=$(cr sa80)
 check "configure_renewal, standalone: Renewal set" 'echo "$out" | grep -q "Renewal set"'
-check "configure_renewal kept the hot-reload hook + 30-day window" 'grep -q "^renew_hook = pkill -HUP -x hs2" "$LE/renewal/sa80.conf" && head -1 "$LE/renewal/sa80.conf" | grep -q "^renew_before_expiry = 30 days"'
+check "configure_renewal kept the hot-reload hook + 30-day window" 'grep -qx "renew_hook = $HS2_CERT_HOOK" "$LE/renewal/sa80.conf" && [ -x "$HS2_CERT_HOOK" ] && head -1 "$LE/renewal/sa80.conf" | grep -q "^renew_before_expiry = 30 days"'
 
 # ---- the c) Certificate action, through the real menu on a pty --------------
 if ! command -v script >/dev/null 2>&1; then echo "SKIP pty tests (no script(1))"; exit "$fail"; fi
@@ -197,7 +198,7 @@ calls(){ cat "$T/certbot.log"; }
 out=$(act "$(cfgfor m "$LE/live/dns20/fullchain.pem" listen false)" free 'c\n1\n\n0\n')
 check "menu shows c) Certificate on the certificate side" 'echo "$out" | grep -q "c) Certificate"'
 check "DNS-01 renew: certbot certonly --manual dns on the SAME lineage with every name" \
-  'calls | grep -qx -- "certonly --manual --preferred-challenges dns --cert-name dns20 -d vpn.example.com -d \*.example.com --force-renewal --agree-tos --register-unsafely-without-email --deploy-hook pkill -HUP -x hs2"'
+  'calls | grep -qx -- "certonly --manual --preferred-challenges dns --cert-name dns20 -d vpn.example.com -d \*.example.com --force-renewal --agree-tos --register-unsafely-without-email --deploy-hook $HS2_CERT_HOOK"'
 check "DNS-01 renew: menu returns afterwards (no set -e crash)" 'echo "$out" | grep -q BACK_IN_CALLER'
 out=$(act "$(cfgfor m "$LE/live/sa80/fullchain.pem" listen false)" free 'c\n1\n\n0\n')
 check "standalone, test: certbot renew --dry-run on the lineage" 'calls | grep -qx -- "renew --cert-name sa80 --dry-run" && echo "$out" | grep -q "automatic renewal works"'

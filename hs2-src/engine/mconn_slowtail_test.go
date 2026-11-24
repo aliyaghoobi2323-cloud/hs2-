@@ -127,6 +127,27 @@ func sendTailN(addr string, id uint64, size int) (uint64, error) {
 	return uint64(n - 16), err
 }
 
+// waitTail returns the tail of connection id, skipping (and logging) any
+// other connection's end that reaches the target meanwhile. b449m: the
+// warm-up uploads (id 1<<40, 1 KB) count the mconn as used when it opens,
+// not when the target has read them; under CPU load one of them can end at
+// the target after the 300 ms drain and was then taken for the upload under
+// test ("SILENT TRUNCATION: target got 1024 of 1048576 ... after 3ms").
+func waitTail(t *testing.T, got <-chan tailGot, id uint64, d time.Duration) (tailGot, bool) {
+	dl := time.After(d)
+	for {
+		select {
+		case g := <-got:
+			if g.id == id {
+				return g, true
+			}
+			t.Logf("skipped another connection's end at the target: id %d got %d of %d (pattern ok %v) err %v", g.id, g.got, g.want, g.sum, g.err)
+		case <-dl:
+			return tailGot{}, false
+		}
+	}
+}
+
 func TestMConnCloseSlowTail(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow link")
@@ -161,17 +182,12 @@ func TestMConnCloseSlowTail(t *testing.T) {
 				t0 := time.Now()
 				wrote, werr := sendTailN(addr, id, sz)
 				tw := time.Since(t0)
-				var g tailGot
-				select {
-				case g = <-got:
-				case <-time.After(45 * time.Second):
+				g, ok := waitTail(t, got, id, 45*time.Second)
+				if !ok {
 					t.Fatalf("size %d: the target never saw the end", sz)
 				}
 				t.Logf("size %d: user wrote %d in %v (err %v); target got %d (pattern ok %v) end err %v after %v",
 					sz, wrote, tw.Round(time.Millisecond), werr, g.got, g.sum, g.err, time.Since(t0).Round(time.Millisecond))
-				if g.id != id {
-					t.Fatalf("size %d: target saw conn %d", sz, g.id)
-				}
 				if !g.sum {
 					t.Errorf("size %d: corrupt bytes at the target", sz)
 				}
@@ -222,13 +238,15 @@ func TestMConnCloseSlowTailOverLinger(t *testing.T) {
 	}
 	testHookUserMConnClosed.Store(&hook)
 	t.Cleanup(func() { testHookUserMConnClosed.Store(nil); slowPauseUntil.Store(0) })
+	// a warm-up's end that reaches the target late must be skipped, not
+	// taken for this upload: one such stale end is queued here on purpose
+	// (deterministic regression for the b449m flake).
+	got <- tailGot{id: 1 << 40, want: 1024, got: 1024, sum: true}
 	const sz = 1 << 20
 	t0 := time.Now()
 	wrote, werr := sendTailN(addr, 1, sz)
-	var g tailGot
-	select {
-	case g = <-got:
-	case <-time.After(60 * time.Second):
+	g, ok := waitTail(t, got, 1, 60*time.Second)
+	if !ok {
 		t.Fatal("the target never saw the end")
 	}
 	rsts := mconnTargetRst.Load() - rst0

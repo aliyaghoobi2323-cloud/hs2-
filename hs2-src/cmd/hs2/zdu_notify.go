@@ -28,7 +28,8 @@ import (
 // safe-deploy script reads it: "zdu" = this binary sends READY under
 // Type=notify, so 30-zdu.conf may stay installed; a binary without it (rel69p
 // and older) needs the drop-in removed before it starts (R3).
-var zduFeatures = []string{"zdu"}
+// "zduwin" (b430): `hs2 zdu-window` answers the end-of-hour check.
+var zduFeatures = []string{"zdu", "zduwin"}
 
 // featuresLine is the second line of `hs2 version --features`.
 func featuresLine() string { return "features: " + strings.Join(zduFeatures, " ") }

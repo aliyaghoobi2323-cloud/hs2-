@@ -288,6 +288,7 @@ func (b *WindowBudget) pressured() bool { return b.used.Load()*8 >= b.ceiling(ti
 func (b *WindowBudget) track(s *Stream) {
 	b.mu.Lock()
 	b.streams[s] = struct{}{}
+	s.aw.tracked.Store(true)
 	if !b.running {
 		b.running = true
 		go b.sweep()
@@ -295,9 +296,22 @@ func (b *WindowBudget) track(s *Stream) {
 	b.mu.Unlock()
 }
 
+// untrack: b450: a stream that never grew (most: light users) was never
+// tracked and skips the process-wide b.mu. A mass close (thousands of user
+// streams at once) took b.mu once per stream, a convoy every session's
+// streamLock and so its recvLoop (the TUN's L3 link too) queued behind.
+// tracked is set under b.mu by track, which runs under the stream's
+// bufferLock before awRelease marks it closed (also under bufferLock), so a
+// tracked stream's untrack always sees it.
 func (b *WindowBudget) untrack(s *Stream) {
+	if s.aw != nil && !s.aw.tracked.Load() {
+		return
+	}
 	b.mu.Lock()
 	delete(b.streams, s)
+	if s.aw != nil {
+		s.aw.tracked.Store(false)
+	}
 	b.mu.Unlock()
 }
 
@@ -347,6 +361,8 @@ func (b *WindowBudget) sweepOnce(list []*Stream, now time.Time) {
 
 // streamAW is one stream's adaptive window state, guarded by its bufferLock.
 type streamAW struct {
+	tracked atomic.Bool // b450: in cfg.Budget.streams (set and cleared under its mu)
+
 	cfg   *AutoWindow
 	base  uint32 // MaxStreamBuffer
 	win   uint32 // the window advertised now

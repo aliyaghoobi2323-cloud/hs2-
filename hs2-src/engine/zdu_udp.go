@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/freebind"
 )
 
 // ZDU (proposals/zdu350.md) slot S7: UDP sockets in the handover.
@@ -33,6 +35,10 @@ type zduPC struct {
 	cond   *sync.Cond
 	paused bool
 	closed bool
+	// dropped (b428): this process closed its copy at GO (the new process
+	// did not adopt it: its config no longer has the port); ReadFrom waits
+	// like paused until Close or a rebind (revert).
+	dropped bool
 }
 
 var zduPCs struct {
@@ -55,7 +61,7 @@ func ZDUPCName(addr string) string { return "udp:" + addr }
 // the key on).
 func listenPacketUDP(addr string) (net.PacketConn, error) {
 	if !zduOn.Load() {
-		return net.ListenPacket("udp", addr)
+		return freebind.ListenPacket("udp", addr)
 	}
 	return zduListenPacket(addr)
 }
@@ -74,15 +80,15 @@ func ZDUAdoptPacketConn(name string, f *os.File) {
 	zduPCs.adopted[name] = f
 }
 
-func zduDropAdoptedUDP() (n int) {
+func zduDropAdoptedUDP() (names []string) {
 	zduPCs.mu.Lock()
 	defer zduPCs.mu.Unlock()
 	for k, f := range zduPCs.adopted {
 		f.Close()
 		delete(zduPCs.adopted, k)
-		n++
+		names = append(names, k)
 	}
-	return n
+	return names
 }
 
 func zduListenPacket(addr string) (net.PacketConn, error) {
@@ -103,7 +109,7 @@ func zduListenPacket(addr string) (net.PacketConn, error) {
 		ZDUAdoptedUDP.Add(1)
 	}
 	if pc == nil {
-		c, err := net.ListenPacket("udp", addr)
+		c, err := freebind.ListenPacket("udp", addr)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +119,7 @@ func zduListenPacket(addr string) (net.PacketConn, error) {
 	z := &zduPC{PacketConn: pc, name: name}
 	z.cond = sync.NewCond(&z.mu)
 	zduPCs.mu.Lock()
-	z.paused = zduHold.Load() // review issue 4: no read before GO (zdu_gate.go)
+	z.paused = zduHold.Load() || zduOldPaused.Load() // review issue 4 (+rc9: old process after GO): no read before GO (zdu_gate.go)
 	if zduPCs.m == nil {
 		zduPCs.m = map[string]*zduPC{}
 	}
@@ -127,13 +133,20 @@ func zduListenPacket(addr string) (net.PacketConn, error) {
 func (z *zduPC) ReadFrom(p []byte) (int, net.Addr, error) {
 	for {
 		z.mu.Lock()
-		for z.paused && !z.closed {
+		for (z.paused || z.dropped) && !z.closed {
 			z.cond.Wait()
 		}
+		pc := z.PacketConn // b428: a revert may rebind a dropped socket
 		z.mu.Unlock()
-		n, a, err := z.PacketConn.ReadFrom(p)
+		n, a, err := pc.ReadFrom(p)
 		if err == nil {
 			return n, a, nil
+		}
+		z.mu.Lock()
+		dr, cl := z.dropped, z.closed
+		z.mu.Unlock()
+		if dr && !cl {
+			continue // our copy was closed at GO (b428): wait for Close or a rebind
 		}
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
@@ -152,24 +165,26 @@ func (z *zduPC) Close() error {
 	z.mu.Lock()
 	z.closed = true
 	z.cond.Broadcast()
+	pc := z.PacketConn
 	z.mu.Unlock()
 	zduPCs.mu.Lock()
 	if zduPCs.m[z.name] == z {
 		delete(zduPCs.m, z.name)
 	}
 	zduPCs.mu.Unlock()
-	return z.PacketConn.Close()
+	return pc.Close()
 }
 
 func (z *zduPC) setPaused(p bool) {
 	z.mu.Lock()
 	z.paused = p
 	z.cond.Broadcast()
+	pc := z.PacketConn
 	z.mu.Unlock()
 	if p {
-		z.PacketConn.SetReadDeadline(time.Unix(1, 0)) // kick a blocked ReadFrom out
+		pc.SetReadDeadline(time.Unix(1, 0)) // kick a blocked ReadFrom out
 	} else {
-		z.PacketConn.SetReadDeadline(time.Time{})
+		pc.SetReadDeadline(time.Time{})
 	}
 }
 
@@ -186,7 +201,13 @@ func zduAllPC() []*zduPC {
 // zduPacketFiles dups every registered UDP socket for the hand-off.
 func zduPacketFiles() (names []string, files []*os.File, err error) {
 	for _, z := range zduAllPC() {
-		fc, ok := z.PacketConn.(interface{ File() (*os.File, error) })
+		z.mu.Lock()
+		pc, dr := z.PacketConn, z.dropped || z.closed
+		z.mu.Unlock()
+		if dr {
+			continue // b428: a dropped copy is not ours to hand over
+		}
+		fc, ok := pc.(interface{ File() (*os.File, error) })
 		if !ok {
 			continue
 		}

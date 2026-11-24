@@ -6,8 +6,11 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
+	"net"
+	"net/netip"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/censor"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/xtaci/smux"
 )
@@ -91,6 +94,12 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	if _, err := st.Write([]byte{kindCtrl}); err != nil {
 		return
 	}
+	// b414: our own aborts on this link's Iran IP ride the pings (censor414_peerabort.go)
+	var abortIP netip.Addr
+	if censor.Active() {
+		censorIsEdge.Store(true)
+		abortIP = censorLocalIP(linkTCPConn(l))
+	}
 	var seq, npong uint64
 	pong := make([]byte, ctrlPongLen)
 	var pending ctrlPendingList
@@ -162,13 +171,16 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				wire |= ctrlIdleBit // an older exit only echoes it
 			}
 			wire |= ctrlMtuBit // mt135: and our path MTU, for the exit's status
+			// b435: + the abort extension in the time word
+			ab, abExt := censorAbortWords(abortIP)
+			wire |= ab
 			if ts, ok := linkTCPStatsOf(l); ok {
 				wire |= uint64(min(ts.pmtu, 0xFFFF)) << ctrlMtuShift
 			}
 			sentIdle = idle
 			sentBusy = ctrlLinkBusy(mtr)
 			binary.BigEndian.PutUint64(ping[0:], wire)
-			binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
+			binary.BigEndian.PutUint64(ping[8:], ctrlPingTime(time.Now().UnixNano(), abExt))
 			st.SetWriteDeadline(time.Now().Add(controlInterval))
 			if _, err := st.Write(ping); err != nil && !isTimeout(err) {
 				return // link/stream gone; the pool reaps the link on its own
@@ -193,8 +205,9 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				mtr.ctrlAnsweredSent.Store(at) // a whole round trip, and when it started (stuck.go)
 			}
 			publish() // at once: a later ping may still be on its way (one 7 s wait is not three samples)
-			sent := int64(binary.BigEndian.Uint64(pong[8:]))
-			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
+			// b435: either time-word form
+			sent := binary.BigEndian.Uint64(pong[8:])
+			if rtt := ctrlPongRTT(sent, time.Now().UnixNano()); rtt > 0 {
 				mtr.rttMicros.Store(uint64(rtt / 1000))
 				observeCtrlRTT(uint64(rtt/1000), sentBusy || ctrlLinkBusy(mtr))
 			}
@@ -286,6 +299,16 @@ func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Ca
 	}
 	ping := make([]byte, ctrlPingLen)
 	pong := make([]byte, ctrlPongLen)
+	var abortIP netip.Addr      // b414: the link's Iran IP, for the edge's abort count
+	var abortPrev peerAbortPrev // b414: this link's last abort count (b435: and instance)
+	if censor.Active() {
+		abortIP = censor.AddrOf(tcpRemote(car))
+		defer func() { // b414 v4: the IP's last reporting link: hold its resets
+			if censorPeerLinkEndP(abortIP, abortPrev) {
+				censor.NotePeerOrphan(abortIP)
+			}
+		}()
+	}
 	for ctx.Err() == nil {
 		if _, err := io.ReadFull(st, ping); err != nil {
 			return
@@ -300,10 +323,26 @@ func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Ca
 				mtr.peerPmtu.Store(pm)
 			}
 		}
+		if abortIP.IsValid() {
+			if n, sig := censorPeerAbortPing(abortIP, wire, binary.BigEndian.Uint64(ping[8:]), &abortPrev); n > 0 || sig {
+				censor.NotePeerAborts(abortIP, n) // n 0: the edge reports (sig)
+			}
+		}
 		copy(pong[0:], ping[0:16]) // echo seq + edgeNanos
 		binary.BigEndian.PutUint64(pong[16:], tcp(mtu))
 		if _, err := st.Write(pong); err != nil {
 			return
 		}
 	}
+}
+
+// tcpRemote is the carrier socket's remote address (nil without one).
+func tcpRemote(car *tlscarrier.Carrier) net.Addr {
+	if car == nil {
+		return nil
+	}
+	if tc := car.TCPConn(); tc != nil {
+		return tc.RemoteAddr()
+	}
+	return nil
 }

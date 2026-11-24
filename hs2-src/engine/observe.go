@@ -225,7 +225,9 @@ type ObsSnap struct {
 	MConnLiteUpgrade, MConnLiteCapped          uint64
 	LossRelKept, ProbationOnceDenied           uint64
 	WedgeReleases, PostReleaseStall            uint64
-	PostReleaseStallMaxMs                      int64 // a maximum, not a count (Sub keeps the newer)
+	PostReleaseStallMaxMs                      int64         // a maximum, not a count (Sub keeps the newer)
+	B449gOpen                                  B449gOpenSnap // totals since start (Sub keeps the newer)
+	B449jUpg                                   B449jUpgSnap  // totals since start (Sub keeps the newer)
 }
 
 // Observed returns the counters now.
@@ -253,6 +255,8 @@ func Observed() ObsSnap {
 		LossRelKept: obs.lossRelKept.Load(), ProbationOnceDenied: obs.probationOnceDenied.Load(),
 		WedgeReleases: obs.wedgeReleases.Load(), PostReleaseStall: obs.postReleaseStall.Load(),
 		PostReleaseStallMaxMs: obs.postReleaseStallMaxMs.Load(),
+		B449gOpen:             b449gOpenSnap(),
+		B449jUpg:              b449jUpgSnap(),
 	}
 }
 
@@ -280,5 +284,7 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		LossRelKept: s.LossRelKept - old.LossRelKept, ProbationOnceDenied: s.ProbationOnceDenied - old.ProbationOnceDenied,
 		WedgeReleases: s.WedgeReleases - old.WedgeReleases, PostReleaseStall: s.PostReleaseStall - old.PostReleaseStall,
 		PostReleaseStallMaxMs: s.PostReleaseStallMaxMs,
+		B449gOpen:             s.B449gOpen,
+		B449jUpg:              s.B449jUpg,
 	}
 }

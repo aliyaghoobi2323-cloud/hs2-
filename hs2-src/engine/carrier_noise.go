@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/freebind"
 )
 
 // noiseCarrier implements Carrier over the hs2 Noise core on a raw TCP stream.
@@ -77,7 +78,7 @@ type noiseListener struct {
 const noiseHandshakes = 64
 
 func newNoiseListener(addr string, local core.StaticKey, psk []byte) (*noiseListener, error) {
-	ln, err := net.Listen("tcp", addr)
+	ln, err := freebind.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}

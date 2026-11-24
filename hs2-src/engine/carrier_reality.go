@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/freebind"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/reality"
 )
 
@@ -102,7 +103,7 @@ type realityListener struct {
 }
 
 func newRealityListener(addr, coverAddr string, sharedKey []byte, cert tls.Certificate) (*realityListener, error) {
-	ln, err := net.Listen("tcp", addr)
+	ln, err := freebind.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}

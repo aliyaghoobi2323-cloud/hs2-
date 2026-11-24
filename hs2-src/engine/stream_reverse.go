@@ -132,6 +132,9 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 		dial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, false) }
 	}
 	pool := newExitPool(ctx, min, max, dial, logf)
+	if lb != nil { // b443: a ZDU boot spare dials a proven path (zdu_gate.go)
+		pool.bootDial = func() (dialedLink, error) { return lbDialCarrierBoot(lb, cfg.RevDialPath) }
+	}
 	if zduOn.Load() {
 		zduExitPoolRef.Store(pool) // ZDU warm need (zdu_gate.go)
 	}
@@ -148,7 +151,7 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 		go lb.Run(ctx)
 	}
 	if lb != nil && cfg.Advert != nil { // the path report after each advert answer (lb_report.go)
-		cfg.Advert.SetReport(func() []byte { return encodeReport(lb.report()) })
+		cfg.Advert.SetReport(func() []byte { return zduReportOut(func() []byte { return encodeReport(lb.report()) }) }) // b436: none while draining (zdu_report436.go)
 	}
 	if lb != nil {
 		pool.scoutDial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, true) }
@@ -272,6 +275,21 @@ func lbDialCarrier(lb *LB, dial func(LBPath, bool) (*tlscarrier.Carrier, error),
 		}
 		return c, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*tlscarrier.Carrier), nil
+}
+
+// lbDialCarrierBoot is lbDialCarrier on a proven path (b443 ZDU boot spare).
+func lbDialCarrierBoot(lb *LB, dial func(LBPath, bool) (*tlscarrier.Carrier, error)) (dialedLink, error) {
+	v, err := lb.dialViaPick(func(p LBPath) (any, error) {
+		c, err := dial(p, false)
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
+	}, true)
 	if err != nil {
 		return nil, err
 	}

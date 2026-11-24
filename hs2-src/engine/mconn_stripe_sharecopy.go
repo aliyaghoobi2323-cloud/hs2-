@@ -369,14 +369,19 @@ func fx212DlPrimNote(w stripeShareWhy) {
 	}
 }
 
-// fx212DlPrimLogAt: unix ns of the last dlprim2 line (one per 10 s at most).
+// fx212DlPrimLogAt: unix ns of the last dlprim2 line (one per
+// fx212DlPrimLogEvery at most; b437 F11: was 10 s, prod Iran ~430 lines/h of
+// cumulative counters).
 var fx212DlPrimLogAt atomic.Int64
 
-// fx212DlPrimLog: the counters' line, at most every 10 s (from the picks).
+// fx212DlPrimLogEvery (b437 F11): the dlprim2 counters' line period.
+const fx212DlPrimLogEvery = 5 * time.Minute
+
+// fx212DlPrimLog: the counters' line, at most every fx212DlPrimLogEvery (from the picks).
 func fx212DlPrimLog() {
 	now := monoNano(time.Now())
 	at := fx212DlPrimLogAt.Load()
-	if now-at < int64(10*time.Second) || !fx212DlPrimLogAt.CompareAndSwap(at, now) {
+	if now-at < int64(fx212DlPrimLogEvery) || !fx212DlPrimLogAt.CompareAndSwap(at, now) {
 		return
 	}
 	log.Printf("stripe %s quiet=%v hotk=%d", fx212DlPrimStatString(), fx212DlPrimQuiet, fx212DlPrimHotK)

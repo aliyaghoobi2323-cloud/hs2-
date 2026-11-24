@@ -95,10 +95,27 @@ var dc254Stat struct {
 	// the silence is the application's (prod: ~88 % of the episodes)
 	silentLink atomic.Uint64
 	silentApp  atomic.Uint64
+	// b437 F9: silent-rx episodes by length at their end (silentMax keeps
+	// the longest); a call gap >= 2 s is heard, >= 5 s is a dropped call
+	silent2s atomic.Uint64
+	silent5s atomic.Uint64
+}
+
+// dc254SilentLogLong (b437 F9): an application silence (every live sub's
+// link healthy, prod ~97 % of the episodes: talk pauses, muted mic) logs
+// its end only from this long; an episode with link evidence logs both its
+// onset and its end. The counters keep every episode.
+const dc254SilentLogLong = 5 * time.Second
+
+// DC254Silent (b437 F9, status.json): silent-rx episodes, by link evidence
+// and by length, and the longest (ms).
+func DC254Silent() (n, link, app, ge2s, ge5s uint64, maxMs int64) {
+	s := &dc254Stat
+	return s.silentRx.Load(), s.silentLink.Load(), s.silentApp.Load(), s.silent2s.Load(), s.silent5s.Load(), s.silentMax.Load()
 }
 
 // dc254Log (b264 audit): dc254's own log budget. Its lines used the darkcall
-// lifetime cap (darkcallLogMax 3000, shared): txdark onsets alone ran
+// lifetime cap (darkcallLogMax 300 since b437, shared): txdark onsets alone ran
 // 455-681 per side per 7 min on the lab2 bs201 soak, so in production the
 // cap was gone within the first hour and every later darkcall line (switch,
 // outcome, rrec) was dropped for the process lifetime. Now at most
@@ -161,8 +178,8 @@ func dc254TickLate(last, now time.Time) {
 
 func dc254LogPart() string {
 	s := &dc254Stat
-	return fmt.Sprintf(" · dc254 on %v silent rx %d (link %d app %d, max %d ms) txstall %d · txdark %d sw %d · copyhold %d · late ticks %d (max %d ms) · silent gone %d log drop %d txdark drop %d",
-		dc254On.Load(), s.silentRx.Load(), s.silentLink.Load(), s.silentApp.Load(), s.silentMax.Load(), s.txStall.Load(), s.txDark.Load(), s.txDarkSw.Load(), s.copyHold.Load(),
+	return fmt.Sprintf(" · dc254 on %v silent rx %d (link %d app %d, >=2s %d >=5s %d, max %d ms) txstall %d · txdark %d sw %d · copyhold %d · late ticks %d (max %d ms) · silent gone %d log drop %d txdark drop %d",
+		dc254On.Load(), s.silentRx.Load(), s.silentLink.Load(), s.silentApp.Load(), s.silent2s.Load(), s.silent5s.Load(), s.silentMax.Load(), s.txStall.Load(), s.txDark.Load(), s.txDarkSw.Load(), s.copyHold.Load(),
 		s.lateTicks.Load(), s.lateMax.Load(), s.silentGone.Load(), dc254Log.drop.Load(), dc254TxLog.drop.Load())
 }
 
@@ -198,16 +215,19 @@ func (m *mConn) dc254SilenceLocked(p *msub, live []*msub, now time.Time, nowc in
 			dc254Stat.silentRx.Add(1)
 			m.flStallNoteLocked(p, live, now) // b336 (lb_flstall336.go): per-IP stall evidence for the fast lower
 			ev := dc254LinkEvidence(live, now, nowc)
-			if ev != "" {
+			d.silentEv = ev != ""
+			if d.silentEv {
 				dc254Stat.silentLink.Add(1)
 			} else {
 				dc254Stat.silentApp.Add(1)
-				ev = "none"
 			}
-			if dc254LogOK(now) {
+			// b437 F9: the onset line only with link evidence (an
+			// application silence is counted, and logged at its end
+			// only from dc254SilentLogLong)
+			if d.silentEv && dc254LogOK(now) {
 				log.Printf("%x darkcall silent iran=%v rx stalled %v link evidence %s", m.id, m.iran, sil.Round(time.Millisecond), ev)
 			}
-			if live != nil && darkcallStat.logged.Load() < darkcallLogMax && dc254LogOK(now) {
+			if d.silentEv && live != nil && darkcallStat.logged.Load() < darkcallLogMax && dc254LogOK(now) {
 				m.dcTraceLocked(live, now, nowc, next, false) // the subs' link evidence at the onset
 			}
 		}
@@ -221,7 +241,19 @@ func (m *mConn) dc254SilenceLocked(p *msub, live []*msub, now time.Time, nowc in
 				break
 			}
 		}
-		dc254Logf(now, "%x darkcall silent iran=%v ended after >= %v", m.id, m.iran, d.silentFor.Round(time.Millisecond))
+		if d.silentFor >= 2*time.Second {
+			dc254Stat.silent2s.Add(1)
+		}
+		if d.silentFor >= 5*time.Second {
+			dc254Stat.silent5s.Add(1)
+		}
+		if d.silentEv || d.silentFor >= dc254SilentLogLong {
+			ev := "none"
+			if d.silentEv {
+				ev = "link"
+			}
+			dc254Logf(now, "%x darkcall silent iran=%v ended after >= %v evidence %s", m.id, m.iran, d.silentFor.Round(time.Millisecond), ev)
+		}
 	}
 	st := p != nil && p.dc.ok && p.dc.unacked > 0 && now.Sub(p.dc.ackAt) >= dc254SilentAfter
 	if st && !d.txStall {

@@ -121,6 +121,7 @@ func TestStripeOverlapWaitsWithoutKeyOrPeer(t *testing.T) {
 // A stripe sub dying while the overlap's handshake is on ends the connection
 // (no resend/evac before the boundaries are agreed): never wrong bytes.
 func TestStripeOverlapSubDiesInHandshake(t *testing.T) {
+	setUpgSafe(t, false) // b449j: the key-off outcome; key on: TestB449jStripeOverlapSubDies
 	setStripeOverlap(t, true, true)
 	n, iran, exit := overlapStart(t, 2)
 	mWaitFor(t, "3 stripe subs", 2*time.Second, func() bool { return liveStripe(iran) >= 3 })

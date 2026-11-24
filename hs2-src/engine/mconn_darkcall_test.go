@@ -188,7 +188,8 @@ func exitLinkOf(n *tNet, s *msub) *tLink {
 // a second action back.
 func TestDarkcallEvidenceGates(t *testing.T) {
 	setDarkcall(t)
-	setDc254(t, false) // the rel69i rule: a lossy (rx fresh) link never acts; dc254 tests it on
+	holdDarkcallLoop(t) // b449h: the global counters below are this test's alone
+	setDc254(t, false)  // the rel69i rule: a lossy (rx fresh) link never acts; dc254 tests it on
 	_, iran, exit := darkswPairDC(t)
 	f := newDcFake()
 	darkcallReadSet(f.read)
@@ -414,4 +415,14 @@ func TestDarkcallPathDiv(t *testing.T) {
 			t.Fatalf("%s vs %s: %d want %d", c.a, c.b, n, c.n)
 		}
 	}
+}
+
+// holdDarkcallLoop (b449h) pauses the package's global darkcallLoop for the
+// test, after any tick in progress has finished.
+func holdDarkcallLoop(t *testing.T) {
+	t.Helper()
+	darkcallLoopHold.Add(1)
+	darkcallLoopMu.Lock()
+	darkcallLoopMu.Unlock() //nolint:staticcheck // waits out a running tick
+	t.Cleanup(func() { darkcallLoopHold.Add(-1) })
 }

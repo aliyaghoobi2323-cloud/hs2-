@@ -204,6 +204,17 @@ func TestZDUTakeoverDeadlineExit(t *testing.T) {
 	cur := okTime
 	var mu sync.Mutex
 	r.o.now = func() time.Time { mu.Lock(); defer mu.Unlock(); cur = cur.Add(time.Second); return cur }
+	// b447: users left at the deadline: the links close paced, before the exit
+	var paced atomic.Int32
+	r.o.pace = func() (int, int, int) {
+		select {
+		case <-r.exited:
+			t.Error("paced close after the exit")
+		default:
+		}
+		paced.Add(1)
+		return 3, 5, 2
+	}
 	if got := r.o.handover(); got != "ok" {
 		t.Fatalf("result %q\n%s", got, r.logText())
 	}
@@ -214,6 +225,25 @@ func TestZDUTakeoverDeadlineExit(t *testing.T) {
 	}
 	if !strings.Contains(r.logText(), "deadline") {
 		t.Fatal(r.logText())
+	}
+	if paced.Load() != 1 || !strings.Contains(r.logText(), "drain end: closed 3 links (5 users) in 2 batches") {
+		t.Fatalf("paced %d\n%s", paced.Load(), r.logText())
+	}
+}
+
+// b447: a drain that ends with users 0 has nothing to pace.
+func TestZDUTakeoverNoPaceWithoutUsers(t *testing.T) {
+	r := newRig(t, okTime)
+	r.behave = goodChild
+	r.statsU = 0
+	r.o.pace = func() (int, int, int) { t.Error("paced with users 0"); return 0, 0, 0 }
+	if got := r.o.handover(); got != "ok" {
+		t.Fatalf("result %q\n%s", got, r.logText())
+	}
+	select {
+	case <-r.exited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no exit at users 0")
 	}
 }
 
@@ -955,5 +985,35 @@ func TestZDUTakeoverHungChildReverts(t *testing.T) {
 	r2.o.acceptQ = func() int { return int(n.Add(1) % 2 * 5) }
 	if got := r2.o.handover(); got != "ok" {
 		t.Fatalf("healthy: %q\n%s", got, r2.logText())
+	}
+}
+
+// b454: a pace that needs longer than the time left starts before the
+// deadline (lead = paceLead(users) + one drain period), then the exit.
+func TestB454PaceStartsBeforeDeadline(t *testing.T) {
+	r := newRig(t, okTime)
+	r.behave = goodChild
+	r.statsU = 5
+	r.o.override = time.Hour // the deadline is far off
+	var asked atomic.Int32
+	r.o.paceLead = func(u int) time.Duration {
+		if u != 5 {
+			t.Errorf("lead asked for %d users, want 5", u)
+		}
+		asked.Add(1)
+		return 2 * time.Hour
+	}
+	var paced atomic.Int32
+	r.o.pace = func() (int, int, int) { paced.Add(1); return 3, 5, 2 }
+	if got := r.o.handover(); got != "ok" {
+		t.Fatalf("result %q\n%s", got, r.logText())
+	}
+	select {
+	case <-r.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no exit: the pace did not start before the deadline\n%s", r.logText())
+	}
+	if paced.Load() != 1 || asked.Load() == 0 || !strings.Contains(r.logText(), "before the deadline") {
+		t.Fatalf("paced %d asked %d\n%s", paced.Load(), asked.Load(), r.logText())
 	}
 }

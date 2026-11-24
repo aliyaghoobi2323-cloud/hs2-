@@ -78,6 +78,12 @@ var xsStat struct {
 	noCandRx atomic.Uint64 // silent receive without a candidate
 }
 
+// XS261Counts (b437 F8, status.json): XS records sent (after a switch or
+// on a silent receive) and the peer's records that moved our primary.
+func XS261Counts() (sent, acted uint64) {
+	return xsStat.sentSw.Load() + xsStat.sentRx.Load(), xsStat.acted.Load()
+}
+
 func xs261LogPart() string {
 	s := &xsStat
 	return fmt.Sprintf(" · xs261 on %v sent sw %d rx %d nocap %d nocand %d · got %d acted %d same %d stale %d rate %d ign %d",
@@ -141,7 +147,9 @@ func (m *mConn) xsSendLocked(to *msub, now time.Time, rx bool) bool {
 	} else {
 		xsStat.sentSw.Add(1)
 	}
-	m.dcLogf("%x xs261 send iran=%v sub %d(%s) seq %d rx=%v", m.id, m.iran, to.idx, to.dc.path, x.seqOut, rx)
+	// b437 F8: no line per send (prod Iran ~1150/h): sent sw/rx are in the
+	// mconn rescue summary and status (xs_sent); the receiver's act line
+	// (rare: the primary moved) stays.
 	return true
 }
 

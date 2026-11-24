@@ -51,6 +51,63 @@ check "drain: 40 (b1) and 104 refused, 105 / 200 / 20m ok" '! drain_override_ok 
 check "drain: probation 10s -> 70 ok, 69 refused; bad probation refused" 'drain_override_ok 70 10s && ! drain_override_ok 69 10s && ! drain_override_ok 200 1.5s'
 check "drain: unparseable 1.5m refused" '! drain_override_ok 1.5m'
 
+# --- b430 prune_backups (real lib): keep newest HS2_BACKUP_KEEP (10) + younger than 7 days, exact names only
+PB="$T/pb"; NOWS=$(date +%s)
+mkbk(){ local d="$PB/hs2-backup-$(date -d "@$((NOWS - $2*86400 - ${4:-0}))" +%Y%m%d-%H%M%S)-pre-$3-$1"; mkdir -p "$d"; touch -d "@$((NOWS - $2*86400))" "$d"; echo "$d"; }
+nbk(){ ls -1A "$PB" | grep -c -- "-pre-$2-$1\$"; }
+mkdir -p "$PB"; for i in $(seq 20 31); do mkbk hs2 $i zdu > /dev/null; done; for i in 1 2 3; do mkbk hs2 $i zdu > /dev/null; done
+OLDEST=$(date -d "@$((NOWS-31*86400))" +%Y%m%d)
+check "prune: 12 old + 3 recent -> the newest 10 stay (3 recent + 7 old)" 'prune_backups "$PB" hs2 zdu >/dev/null; [ "$(nbk hs2 zdu)" = 10 ] && ! ls -1A "$PB" | grep -q "hs2-backup-$OLDEST"'
+rm -rf "$PB"; mkdir -p "$PB"; for i in $(seq 0 11); do mkbk hs2 0 zdu $((i*3600)) > /dev/null; done; mkbk hs2 40 zdu > /dev/null; mkbk hs2 41 zdu > /dev/null
+check "prune: 12 younger than 7 days + 2 old -> the 12 young stay (union), the 2 old go" 'prune_backups "$PB" hs2 zdu >/dev/null; [ "$(nbk hs2 zdu)" = 12 ]'
+rm -rf "$PB"; mkdir -p "$PB" "$T/etc"
+for i in $(seq 20 33); do mkbk hs2 $i zdu > /dev/null; mkbk x-hs2 $i zdu > /dev/null; mkbk hs2-x $i zdu > /dev/null; mkbk hs2 $i safe > /dev/null; done
+OLD1=$(mkbk hs2 50 zdu); OLD2=$(mkbk hs2 51 zdu); OLD3=$(mkbk hs2 52 zdu); OLD4=$(mkbk hs2 53 zdu)
+printf '[Service]\nExecStart=\nExecStart=/usr/local/bin/hs2-a run\n' > "$T/etc/last-good.hs2.conf"
+mkdir -p "$OLD1/hs2.service.d"; cp "$T/etc/last-good.hs2.conf" "$OLD1/hs2.service.d/40-tunnel1.conf"; touch -d "@$((NOWS-50*86400))" "$OLD1"
+echo "OK /x pid=1 (40-tunnel1.conf ExecStart switched, last-good recorded, backup $OLD2)" > "$PB/hs2-zdu-upgrade.hs2.out"
+B=$(basename "$OLD3"); mkdir -p "$PB/${B}x" "$PB/${B/hs2-backup-2/hs2-backup-x}"; touch "$PB/${B%hs2}hs2y"
+F=$(basename "$(mkbk hs2 60 zdu)"); rm -rf "${PB:?}/$F"; touch -d "@$((NOWS-60*86400))" "$PB/$F"   # a file, not a directory
+L=$(basename "$(mkbk hs2 61 zdu)"); rm -rf "${PB:?}/$L"; mkdir -p "$T/linktarget"; ln -s "$T/linktarget" "$PB/$L"
+mkdir -p "$PB/hs2-backup-20200101-000000-pre-zdu-hs2.d" "$PB/hs2-backup-20200101-000000-pre-zdu-hs2 x" "$PB/hs2-backup-20200101-0000000-pre-zdu-hs2"
+for d in "$PB"/*; do [ -L "$d" ] || touch -d "@$((NOWS-90*86400))" "$d"; done; touch "$PB/$B" 2>/dev/null; touch -d "@$((NOWS-52*86400))" "$PB/$B"
+OUTP=$(HS2_ZDU_ETC_DIR="$T/etc" prune_backups "$PB" hs2 zdu "$OLD4")
+# hs2 zdu: 14 (20..33 days) + OLD1..4 + file + symlink = 20 names; 22 names match the suffix (incl. near misses); 5 removed -> 17
+check "prune: hs2 zdu -> 10 newest + last-good copy + .out-named + KEEP_DIR (+ the file and the symlink) left" '[ "$(nbk hs2 zdu)" = 17 ] && [ -d "$OLD1" ] && [ -d "$OLD2" ] && [ -d "$OLD4" ] && [ ! -e "$OLD3" ]'
+check "prune: one line per removal (5), all exact hs2 zdu names" '[ "$(echo "$OUTP" | grep -c "^pruned ")" = 5 ] && ! echo "$OUTP" | grep -v -- "-pre-zdu-hs2$" | grep -q .'
+check "prune: other units (x-hs2, hs2-x) and the safe kind untouched" '[ "$(nbk x-hs2 zdu)" = 14 ] && [ "$(nbk hs2-x zdu)" = 14 ] && [ "$(nbk hs2 safe)" = 14 ]'
+check "prune: near-miss names, a plain file and a symlink (and its target) untouched" '[ -d "$PB/${B}x" ] && [ -d "$PB/${B/hs2-backup-2/hs2-backup-x}" ] && [ -e "$PB/${B%hs2}hs2y" ] && [ -f "$PB/$F" ] && [ -L "$PB/$L" ] && [ -d "$T/linktarget" ] && [ -d "$PB/hs2-backup-20200101-000000-pre-zdu-hs2.d" ] && [ -d "$PB/hs2-backup-20200101-000000-pre-zdu-hs2 x" ] && [ -d "$PB/hs2-backup-20200101-0000000-pre-zdu-hs2" ]'
+prune_backups "$PB" hs2 safe >/dev/null
+check "prune: safe kind on its own -> 10 left" '[ "$(nbk hs2 safe)" = 10 ] && [ "$(nbk x-hs2 zdu)" = 14 ]'
+N0=$(ls -1A "$PB" | wc -l)
+prune_backups "pb" hs2 zdu; prune_backups "$PB" "hs2*" zdu; prune_backups "$PB" "" zdu; prune_backups "$PB" hs2 "zdu|safe"; prune_backups / hs2 zdu; prune_backups "$PB" "x/../hs2" zdu
+HS2_BACKUP_KEEP=x prune_backups "$PB" x-hs2 zdu
+check "prune: relative or / state dir, glob/empty/path unit, bad kind, bad keep -> no-op" '[ "$(ls -1A "$PB" | wc -l)" = "$N0" ]'
+HS2_BACKUP_KEEP=0 HS2_BACKUP_DAYS=0 prune_backups "$PB" x-hs2 zdu >/dev/null
+check "prune: keep 0 days 0 -> every x-hs2 zdu backup goes, hs2 / hs2-x untouched" '[ "$(nbk x-hs2 zdu)" = 0 ] && [ "$(nbk hs2-x zdu)" = 14 ] && [ "$(nbk hs2 zdu)" = 17 ]'
+rm -rf "$PB" "$T/etc/last-good.hs2.conf" "$T/linktarget"
+
+# --- b430 zdu_window_sh (the rule of an older running binary; the process's own: hs2 zdu-window)
+H0=$(( NOWS / 3600 * 3600 ))
+wv(){ zdu_window_sh $((H0 + $1)) "$2" "$3" "$4"; }
+check "window sh: HH:57:29 slack 0 OK, HH:57:30 refused (90+45+15 = 150 s before HH:00)" '[ "$(wv 3449 "" "" 0 | cut -c1-12)" = "OK span=150s" ] && [ "$(wv 3450 "" "" 0 | cut -c1-17)" = "window opens in <" ]'
+check "window sh: slack 10 -> HH:57:19 OK, HH:57:20 refused" '[ "$(wv 3439 "" "" 10 | cut -c1-2)" = OK ] && [ "$(wv 3440 "" "" 10 | cut -c1-6)" = window ]'
+check "window sh: HH:00:00 / HH:03:59 in the window, HH:04:00 OK" '[ "$(wv 0 "" "" 0 | cut -c1-12)" = "window HH:00" ] && [ "$(wv 239 "" "" 0 | cut -c1-12)" = "window HH:00" ] && [ "$(wv 240 "" "" 0 | cut -c1-2)" = OK ]'
+check "window sh: probation 10s -> span 115 s: HH:58:04 OK, HH:58:05 refused" '[ "$(wv 3484 "" 10s 0 | cut -c1-2)" = OK ] && [ "$(wv 3485 "" 10s 0 | cut -c1-6)" = window ]'
+check "window sh: storm minute 31 -> HH:30:00 refused, HH:27:29 OK, HH:27:30 refused" '[ "$(wv 1800 31 "" 0 | cut -c1-12)" = "window HH:30" ] && [ "$(wv 1649 31 "" 0 | cut -c1-2)" = OK ] && [ "$(wv 1650 31 "" 0 | cut -c1-6)" = window ]'
+if [ -n "${HS2_TEST_BIN:-}" ] && [ -x "${HS2_TEST_BIN:-}" ]; then
+  # one rule: the real binary and the shell fallback agree on every 10 s of an hour (several storm/probation/slack)
+  bad=0
+  for c in "::0" "::10" "31::10" ":10s:10" "8:1m:0" "0::10"; do IFS=: read -r sm pr sl <<< "$c"
+    for o in $(seq 0 10 3590) 3595 3599 3439 3440 3449 3450; do
+      a=$(HS2_ZDU_STORM_MIN="$sm" HS2_ZDU_PROBATION="$pr" "$HS2_TEST_BIN" zdu-window $((H0+o)) "$sl" | cut -c1-2)
+      b=$(zdu_window_sh $((H0+o)) "$sm" "$pr" "$sl" | cut -c1-2)
+      [ "$a" = "$b" ] || { bad=$((bad+1)); echo "  window mismatch o=$o $c bin=$a sh=$b"; }
+    done; done
+  check "window: real binary ($HS2_TEST_BIN) == shell fallback on every 10 s of the hour (6 settings)" '[ "$bad" = 0 ]'
+  check "window: real binary lists zdu and zduwin" 'has_feature "$HS2_TEST_BIN" zduwin && has_zdu "$HS2_TEST_BIN"'
+fi
+
 # --- scripts with a fake system (copy whose root_owned_path only needs an absolute executable)
 mkdir -p "$T/z" "$T/bin" "$T/st" "$T/run" "$T/etc" "$T/lock" "$T/proc"
 cp "$ZD"/*.sh "$T/z/"; echo 'root_owned_path(){ case "$1" in /*) [ -f "$1" ] && [ -x "$1" ] && [ ! -L "$1" ];; *) false;; esac; }' >> "$T/z/hs2-zdu-lib.sh"
@@ -69,7 +126,7 @@ esac
 exit 0
 S
 printf '#!/bin/bash\ncat "%s/journal" 2>/dev/null\n' "$T" > "$T/bin/journalctl"; chmod 0755 "$T/bin/"*
-export PATH="$T/bin:$PATH" HS2_ZDU_STATE_DIR="$T/st" HS2_ZDU_RUN_DIR="$T/run" HS2_ZDU_ETC_DIR="$T/etc" HS2_ZDU_LOCK_DIR="$T/lock" HS2_ZDU_PROC="$T/proc" HS2_SD_POLL=0 HS2_SD_STABLE=0 HS2_ZDU_UPGRADE_WAIT=20
+export PATH="$T/bin:$PATH" HS2_ZDU_STATE_DIR="$T/st" HS2_ZDU_RUN_DIR="$T/run" HS2_ZDU_ETC_DIR="$T/etc" HS2_ZDU_LOCK_DIR="$T/lock" HS2_ZDU_PROC="$T/proc" HS2_SD_POLL=0 HS2_SD_STABLE=0 HS2_ZDU_UPGRADE_WAIT=20 HS2_ZDU_PEER_RETRY=1
 bash -c 'trap "" USR2; exec sleep 300' & OP=$!; BG="$BG $OP"; echo $OP > "$T/mainpid"
 mkdir -p "$T/proc/$OP"; ln -s "$T/zdu1" "$T/proc/$OP/exe"; printf 'PATH=/bin\0HS2_ZDU=1\0' > "$T/proc/$OP/environ"
 cp "$T/zdu1" "$T/new"; echo '# new build' >> "$T/new"
@@ -139,6 +196,18 @@ check "upgrade: no UNIT.peers -> REFUSED 4, no UNIT.next, no SIGUSR2" '[ "$rc" =
 reset_unit "$T/zdu1" zdu; echo "ZDU-NO links=200 zdu=150" > "$T/run/hs2.peers"
 rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
 check "upgrade: a peer without ZDU (ZDU-NO) -> REFUSED 4, no UNIT.next" '[ "$rc" = 4 ] && grep -q "^REFUSED peers: ZDU-NO links=200 zdu=150" "$T/st/hs2-zdu-upgrade.hs2.out" && [ ! -e "$T/run/hs2.next" ]'
+check "upgrade b443: ZDU-NO is re-checked once after HS2_ZDU_PEER_RETRY (logged, named in the REFUSED line)" 'grep -q "peers: ZDU-NO links=200 zdu=150: waiting 1s once" "$T/st/hs2-zdu-upgrade.log" && grep -q "re-checked after 1s" "$T/st/hs2-zdu-upgrade.hs2.out"'
+# b443 (lab r443 op3): a link just up has not announced ZDU yet; the next peers file is ZDU-OK -> the handover goes on
+reset_unit "$T/zdu1" zdu; echo "ZDU-NO links=194 zdu=193" > "$T/run/hs2.peers"; ( sleep 0.3; echo "ZDU-OK links=194 zdu=194" > "$T/run/hs2.peers" ) & BG="$BG $!"
+respond "OK 4242"; rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
+check "upgrade b443: ZDU-NO that turns ZDU-OK within the wait -> OK (exit 0)" '[ "$rc" = 0 ] && grep -q "after the wait: going on" "$T/st/hs2-zdu-upgrade.log" && grep -q "^OK " "$T/st/hs2-zdu-upgrade.hs2.out"'
+# b443: the process refuses at SIGUSR2 with peers ZDU-NO -> one SIGUSR2 retry after the wait, then REFUSED
+reset_unit "$T/zdu1" zdu; rm -f "$T/st/hs2-zdu-upgrade.log"; echo "zdu: handover refused: peers: ZDU-NO links=194 zdu=193: a peer without ZDU" > "$T/journal"
+rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
+check "upgrade b443: process ZDU-NO refusal -> one SIGUSR2 retry, then REFUSED 4, no UNIT.next" '[ "$rc" = 4 ] && [ "$(grep -c ": SIGUSR2" "$T/st/hs2-zdu-upgrade.log")" = 2 ] && grep -q "SIGUSR2 (retry)" "$T/st/hs2-zdu-upgrade.log" && grep -q "^REFUSED by pid" "$T/st/hs2-zdu-upgrade.hs2.out" && [ ! -e "$T/run/hs2.next" ]'
+reset_unit "$T/zdu1" zdu; echo "zdu: handover refused: drain running" > "$T/journal"; rm -f "$T/st/hs2-zdu-upgrade.log"
+rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
+check "upgrade b443: any other process refusal -> no retry (one SIGUSR2)" '[ "$rc" = 4 ] && [ "$(grep -c ": SIGUSR2" "$T/st/hs2-zdu-upgrade.log")" = 1 ]'
 reset_unit "$T/zdu1" zdu; touch -d "@$(( $(date +%s) - 120 ))" "$T/run/hs2.peers"
 rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
 check "upgrade: stale UNIT.peers (120 s) -> REFUSED 4" '[ "$rc" = 4 ] && grep -q "hs2.peers is .*s old (stale)" "$T/st/hs2-zdu-upgrade.hs2.out" && [ ! -e "$T/run/hs2.next" ]'
@@ -221,4 +290,36 @@ reset_unit "$T/zdu1" zdu; echo $HN > "$T/mainpid"; echo 1000 > "$T/activating"
 rc=$(HS2_SD_TRIES=5 bash "$T/z/hs2-safe-deploy.sh" hs2 "$T/new" "$(sha "$T/new")" >"$T/out" 2>&1; echo $?)
 check "safe-deploy: never READY (activating) -> bounded poll, REVERTED, revert restart --no-block too" '[ "$rc" = 3 ] && [ "$(grep -c "^restart --no-block hs2" "$T/sd.log")" = 2 ] && grep -q "^ExecStart=$T/zdu1 " "$D/40-tunnel1.conf"'
 check "install: 30-zdu.conf sets TimeoutStartSec=90" 'grep -q "TimeoutStartSec=90.*30-zdu.conf" "$T/z/hs2-zdu-install.sh"'
+# --- b430: the window as the script asks it (fake binaries: zdu1 has no zduwin -> shell rule; zduw answers itself)
+echo $OP > "$T/mainpid"; reset_unit "$T/zdu1" zdu; rm -f "$T/run/hs2.peers"
+rc=$(HS2_ZDU_UPGRADE_FAKE_NOW=$((H0+3439)) UP "$T/new")
+check "upgrade (older binary): HH:57:19 passes the window (stops at the peers gate)" '[ "$rc" = 4 ] && grep -q "^REFUSED no .*hs2.peers" "$T/st/hs2-zdu-upgrade.hs2.out"'
+rc=$(HS2_ZDU_UPGRADE_FAKE_NOW=$((H0+3440)) UP "$T/new")
+check "upgrade (older binary): HH:57:20 refused (150 s span + 10 s slack; the process refuses from HH:57:30)" '[ "$rc" = 4 ] && grep -q "^REFUSED window opens in <= 160s (minute 57)" "$T/st/hs2-zdu-upgrade.hs2.out" && [ ! -e "$T/run/hs2.next" ]'
+mkb zduw 'case "${1:-}" in version) echo "hs2 v3"; [ "${2:-}" = --features ] && echo "features: zdu zduwin";; zdu-window) echo "window from-binary now=$2 slack=$3 sm=$HS2_ZDU_STORM_MIN pr=$HS2_ZDU_PROBATION"; exit 4;; run) exec sleep 300;; esac; exit 0'
+rm -f "$T/proc/$OP/exe"; ln -s "$T/zduw" "$T/proc/$OP/exe"; printf 'PATH=/bin\0HS2_ZDU=1\0HS2_ZDU_STORM_MIN=7\0HS2_ZDU_PROBATION=20s\0' > "$T/proc/$OP/environ"
+reset_unit "$T/zdu1" zdu; echo 'HS2_ZDU=1 HS2_ZDU_STORM_MIN=7 HS2_ZDU_PROBATION=20s' > "$T/unitenv"; rc=$(HS2_ZDU_UPGRADE_FAKE_NOW=$((H0+1800)) UP "$T/new")
+check "upgrade (zduwin binary): the running binary decides, with the process's storm minute + probation, slack 10" '[ "$rc" = 4 ] && grep -q "^REFUSED window from-binary now=$((H0+1800)) slack=10 sm=7 pr=20s" "$T/st/hs2-zdu-upgrade.hs2.out"'
+rm -f "$T/proc/$OP/exe"; ln -s "$T/zdu1" "$T/proc/$OP/exe"; printf 'PATH=/bin\0HS2_ZDU=1\0' > "$T/proc/$OP/environ"
+# --- b430: a refused attempt keeps the previous UNIT.handover marker
+reset_unit "$T/zdu1" zdu; echo "DRAIN-END 999 drained 12 links" > "$T/run/hs2.handover"; echo "zdu: handover refused: busy (draining)" > "$T/journal"
+rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
+check "upgrade: refused by the process -> the previous DRAIN-END marker is still there" '[ "$rc" = 4 ] && grep -q "^REFUSED by pid" "$T/st/hs2-zdu-upgrade.hs2.out" && [ "$(cat "$T/run/hs2.handover")" = "DRAIN-END 999 drained 12 links" ]'
+reset_unit "$T/zdu1" zdu; echo "DRAIN-END 999" > "$T/run/hs2.handover"; respond "OK 4242"
+rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
+check "upgrade: previous DRAIN-END marker, then PROBATION + OK written -> OK 0 (the old marker is not taken as a state)" '[ "$rc" = 0 ] && grep -q "handover: PROBATION 4242" "$T/st/hs2-zdu-upgrade.log"'
+reset_unit "$T/zdu1" zdu; echo "OK 777" > "$T/run/hs2.handover"; printf 'Name:\ths2\nPPid:\t1\n' > "$T/proc/$OP/status"; echo "zdu: handover refused: x" > "$T/journal"
+rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
+check "upgrade: a previous OK marker is not this attempt's OK (refusal seen, exit 4, marker kept)" '[ "$rc" = 4 ] && grep -q "^REFUSED by pid" "$T/st/hs2-zdu-upgrade.hs2.out" && [ "$(cat "$T/run/hs2.handover")" = "OK 777" ]'
+# --- b430: an OK upgrade / safe deploy prunes that unit's old backups of its own kind
+rm -rf "$T/st"/hs2-backup-*
+for i in $(seq 20 31); do d="$T/st/hs2-backup-$(date -d "@$((NOWS-i*86400))" +%Y%m%d-%H%M%S)-pre-zdu-hs2"; mkdir -p "$d"; touch -d "@$((NOWS-i*86400))" "$d"
+  d2="${d%zdu-hs2}safe-hs2"; mkdir -p "$d2"; touch -d "@$((NOWS-i*86400))" "$d2"; done
+reset_unit "$T/zdu1" zdu; respond "OK 4242"; rm -f "$T/st/hs2-zdu-upgrade.hs2.out"
+rc=$(HS2_ZDU_UPGRADE_FAKE_MIN=30 UP "$T/new")
+check "upgrade OK: 12 old zdu backups + the new one -> 10 left (new one kept), safe ones untouched, 3 prunes logged" '[ "$rc" = 0 ] && [ "$(ls -1d "$T/st"/hs2-backup-*-pre-zdu-hs2 | wc -l)" = 10 ] && [ -d "$(grep -o "backup /[^)]*" "$T/st/hs2-zdu-upgrade.hs2.out" | cut -d" " -f2)" ] && [ "$(ls -1d "$T/st"/hs2-backup-*-pre-safe-hs2 | wc -l)" = 12 ] && [ "$(grep -c "pruned $T/st/hs2-backup-" "$T/st/hs2-zdu-upgrade.log")" = 3 ]'
+bash -c "exec -a '$T/new' sleep 300" & HN2=$!; BG="$BG $HN2"
+reset_unit "$T/zdu1" zdu; echo $HN2 > "$T/mainpid"
+rc=$(bash "$T/z/hs2-safe-deploy.sh" hs2 "$T/new" "$(sha "$T/new")" >"$T/out" 2>&1; echo $?)
+check "safe-deploy OK: 12 old safe backups + the new one -> 10 left, zdu ones untouched" '[ "$rc" = 0 ] && [ "$(ls -1d "$T/st"/hs2-backup-*-pre-safe-hs2 | wc -l)" = 10 ] && [ "$(ls -1d "$T/st"/hs2-backup-*-pre-zdu-hs2 | wc -l)" = 10 ]'
 exit $fail

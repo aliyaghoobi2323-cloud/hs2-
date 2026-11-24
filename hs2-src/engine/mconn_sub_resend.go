@@ -155,7 +155,7 @@ func (m *mConn) subKeepRoomLocked(s *msub) bool {
 	if m.stN > 0 || m.callKeepLocked() {
 		return true
 	}
-	if subResendStat.kept.Load() > subKeepGlobalMax {
+	if subResendStat.kept.Load() > subKeepGlobalMax && !m.b449FloorKeepLocked() { // b449c: the floor (mconn_b449_floor.go)
 		subResendStat.capped.Add(1)
 		subGapLocked(s, time.Now())
 		m.keepIdleArmLocked() // r68fix4: a tick heals the gap
@@ -222,6 +222,12 @@ func (m *mConn) subAgeTrimLookLocked(now time.Time, sys bool, look func(*msub) (
 		if now.Sub(oldest) <= age && !sys {
 			continue
 		}
+		if !sys && fx212AgeGap && m.b449FloorHoldsAllLocked() {
+			if len(x.sent) > 0 && now.Sub(x.sent[0].t) > age {
+				b449FloorStat.ageHeld.Add(1) // as the scan would count it
+			}
+			continue // rc14d HS2_B449_FLOORFAST (mconn_b449_floor.go): the floor keeps all
+		}
 		if sys {
 			la, ok := look(x)
 			if ok && la.srtt > 0 {
@@ -242,6 +248,9 @@ func (m *mConn) subAgeTrimLookLocked(now time.Time, sys bool, look func(*msub) (
 		k := 0
 		for k < len(x.sent) && now.Sub(x.sent[k].t) > age {
 			k++
+		}
+		if !sys && fx212AgeGap {
+			k = m.b449FloorTrimLocked(x, k) // b449c: no proof-less drop under the floor (mconn_b449_floor.go)
 		}
 		if k > 0 {
 			if !sys && fx212AgeGap && x.sent[k-1].sub {
@@ -408,14 +417,23 @@ var subLostResets atomic.Uint64
 
 var subResendLogAt atomic.Int64
 
+// subResendLogResets (b437 F3): subLostResets at the last line.
+var subResendLogResets atomic.Uint64
+
 // subResendLog: at most every 10 s, when a resend or a lost-copy reset
 // happened, one process line (both keys' counters, totals).
 func subResendLog() {
 	now := monoNano(time.Now())
 	last := subResendLogAt.Load()
-	if last != 0 && now-last < int64(10*time.Second) || !subResendLogAt.CompareAndSwap(last, now) {
+	// b437 F3: every 60 s; a new lost-copy reset still logs after 10 s.
+	every := int64(60 * time.Second)
+	if r := subLostResets.Load(); r != subResendLogResets.Load() {
+		every = int64(10 * time.Second)
+	}
+	if last != 0 && now-last < every || !subResendLogAt.CompareAndSwap(last, now) {
 		return
 	}
+	subResendLogResets.Store(subLostResets.Load())
 	h := &subResendStat.keptHist
 	log.Printf("mconn sub resend (HS2_MCONN_SUB_RESEND=%v scope=%dK): %d sub deaths survived by a resend · %d call resends · %d lost-copy resets · %d no fresh target (lost %d survived %d) · %d writes not kept (global cap) · %d kept chunks evicted (conn cap) · %d conns over scope · %d sub gaps opened · %d healed · %d deaths with a gap · %d chunks aged out · sub kept now %d KB max %d KB · all kept %d KB · conn kept hist <4K %d <16K %d <64K %d <256K %d more %d · fx212 swept %d (visits %d) dup-skipped %d agegap %d",
 		mconnSubResend.Load(), subResendScope>>10, subResendStat.resends.Load(), callResendStat.Load(), subLostResets.Load(),

@@ -104,8 +104,16 @@ func takeRescueMark(avoid []any) ([]any, bool) {
 // pickRescueLocked (under m.mu): a light link with no call mark, not lowered;
 // nil when there is none.
 func (m *LinkManager) pickRescueLocked(avoid []any, pool *peerInfo) *managedLink {
+	ml, _ := m.pickRescueLockedFP(avoid, pool)
+	return ml
+}
+
+// pickRescueLockedFP is pickRescueLocked returning the fast-path count it
+// ranked the link with (b451 rescfast_b451.go). It only reads the pool (a
+// read lock is enough).
+func (m *LinkManager) pickRescueLockedFP(avoid []any, pool *peerInfo) (*managedLink, int32) {
 	now := time.Now()
-	return m.pickPlaneTiers(planeLight, avoid, pool, func(ml *managedLink) bool {
+	return m.pickPlaneTiersFP(planeLight, avoid, pool, func(ml *managedLink) bool {
 		return !rescueLowKey(ml.link) && !rescueCallLinkOn(ml.mtr, now)
 	})
 }

@@ -50,6 +50,7 @@ func (m *mConn) b274RepairWantLocked(now time.Time) bool {
 		return false
 	}
 	m.callUp = true
+	m.b458Stamp(time.Now())
 	b274Stat.repair.Add(1)
 	m.tr.ev("b274: one-sub call, reopen its second sub")
 	return true

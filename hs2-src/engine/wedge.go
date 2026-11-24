@@ -352,6 +352,7 @@ func relayStreamHC(local, st io.ReadWriteCloser, g *sessGuard, mode hcMode) (res
 	var downHalf, upHalf atomic.Bool
 	go func() {
 		relayCopy(dst, down)
+		closePace() // b450 (closepace_b450.go): a mass close tears down paced
 		if hc && down.state.Load() == relayEndEOF && halfGoneNow(st) {
 			// hc213: the peer dropped the stream (closed it without a
 			// CloseWrite: its user reset, its relay cut): the EOF is a cut,
@@ -369,6 +370,7 @@ func relayStreamHC(local, st io.ReadWriteCloser, g *sessGuard, mode hcMode) (res
 	}()
 	go func() {
 		relayCopy(st, up)
+		closePace() // b450
 		if hc && up.state.Load() == relayEndEOF {
 			if cw, ok := st.(closeWriter); ok && cw.CloseWrite() == nil {
 				upHalf.Store(true)

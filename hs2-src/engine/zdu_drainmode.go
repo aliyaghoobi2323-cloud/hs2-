@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"log"
 	"sync/atomic"
 	"time"
 )
@@ -33,8 +34,16 @@ func ZDUEnterDrain() bool {
 	// otherwise exit at once with downloads in flight).
 	zduL3RxAt.Store(monoNano(time.Now()))
 	zduDraining.Store(true)
+	// b437 F5: every later line of this (old) process reads "[draining] ...",
+	// so its own lb cut/weight lines during the drain are not taken for a
+	// second event next to the new process's (same syslog tag, other pid).
+	log.SetFlags(log.Flags() | log.Lmsgprefix)
+	log.SetPrefix(zduDrainLogPrefix)
 	return true
 }
+
+// zduDrainLogPrefix: the log prefix of a draining old process (b437 F5).
+const zduDrainLogPrefix = "[draining] "
 
 // ZDUDraining reports whether this process is a draining old process.
 func ZDUDraining() bool { return zduDraining.Load() }
