@@ -73,6 +73,7 @@ func TestB469MaxAndOff(t *testing.T) {
 // TestB469StepSmallBatches: HS2_B469_STEP_MS=5 (the default) closes 6034
 // users at the same rate in batches of ~13 (a 25 ms step: ~66).
 func TestB469StepSmallBatches(t *testing.T) {
+	t.Setenv("HS2_B470_PAR", "1") // cur is not atomic
 	for _, c := range []struct {
 		env       string
 		maxBatch  int

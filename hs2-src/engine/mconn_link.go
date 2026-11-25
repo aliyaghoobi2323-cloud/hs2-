@@ -407,6 +407,7 @@ type mconnSub struct {
 	rescue  bool // ... opened with role 3 (HS2_MCONN_RESCUE, mconn_rescue.go)
 	rescRec bool // ... toward an exit announcing capExtMConnRescueRec (er97)
 	closeHS bool // its exit reads CLOSE-REQ (flagMConnCloseHS, mconn_closehs.go)
+	h6      bool // a raw first sub toward an exit announcing capExtLiteH6 (b469n)
 	evacHS  bool // a stripe sub whose exit reads CLOSE-REQ (HS2_MCONN_STRIPE_EVAC_DOWN, mconn_stripe_evac.go)
 	plane   mPlane
 	once    sync.Once
@@ -485,6 +486,8 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 	}
 	avoid, fresh := takeRescueFreshMark(avoid) // er94 (mconn_rescue.go)
 	avoid, rstJ := takeRstJoinMark(avoid)      // rr156 (mconn_rescue_rst.go)
+	avoid, hedgeR := takeHedgeMark(avoid)      // b459 HS2_LITE_HEDGE3 (mconn_b459_hedge3.go)
+	avoid, h6R := takeH6Mark(avoid)            // b469n HS2_LITE_H6 (mconn_b469n_h6wire.go)
 	avoid = e.zduAvoid(avoid)                  // ZDU generation pin (zdu_pin.go)
 	// mem70: the wait counts from the call, not from getting e.mu: an open
 	// queued behind another one's wait is bounded by its own wait too.
@@ -494,7 +497,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 		// b312: a join sub's pick, open and header run without e.mu
 		// (mconn_b312_open.go); only its install takes the lock.
 		e.mu.Unlock()
-		return e.openNoLock(p, avoid, fresh, rstJ, t0)
+		return e.openNoLock(p, avoid, fresh, rstJ, hedgeR, h6R, t0)
 	}
 	defer e.mu.Unlock()
 	b312Open.locked.Add(1)
@@ -550,9 +553,18 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 			if rstJ && e.first && rstLinkOK(l) {
 				role = mconnRoleRstJoin // rr156: the exit answers it, with an RST when it has no conn
 			}
+			if hedgeR && e.first && hedgePeerOK(l) {
+				role = mconnRoleHedge // b459: first-or-join at the exit (rc15: only toward an exit announcing capExtLiteHedge; else a plain join)
+			}
+			if h6R && e.first {
+				role = mconnRoleH6 // b469n: the request copy (mconn_b469n_h6wire.go)
+			}
+			h6 := false
 			if !e.first {
 				role = mconnRoleFirst
-				if raw && rawCapable(st) {
+				// b469n HS2_LITE_H6: the copy needs a raw first sub
+				h6 = raw && rawCapable(st) && h6PeerOK(l)
+				if raw && rawCapable(st) && (!hedgeWantRecords() || !hedgeLinkOK(l) || h6) { // HS2_LITE_HEDGE2: a hedged conn needs records (mconn_b455_hedge.go)
 					role = mconnRoleFirstRaw
 					if rescueOn.Load() && rescuePeerOK(l) {
 						role = mconnRoleFirstRawRescue // HS2_MCONN_RESCUE (mconn_rescue.go)
@@ -560,7 +572,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 				}
 			}
 			if _, err = st.Write(mconnHeader(e.port, e.id, role)); err == nil {
-				if (role == mconnRoleJoin || role == mconnRoleRescueJoin || role == mconnRoleRstJoin) && p == planeLight {
+				if (role == mconnRoleJoin || role == mconnRoleRescueJoin || role == mconnRoleRstJoin || role == mconnRoleHedge || role == mconnRoleH6) && p == planeLight {
 					if cs, ok := st.(*countedStream); ok {
 						cs.markCopy() // a copy of the first sub's bytes: not demand
 					}
@@ -568,6 +580,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 				e.first = true
 				e.zduPinTo(l)
 				s := &mconnSub{stream: st, plane: p, release: rel, raw: role == mconnRoleFirstRaw || role == mconnRoleFirstRawRescue, rescue: role == mconnRoleFirstRawRescue, rescRec: role == mconnRoleFirstRawRescue && rescueRecOn.Load() && rescueRecPeerOK(l), closeHS: peerCloseHS(l), edge: e}
+				s.h6 = h6 && s.raw
 				mconnPlaneGauge(p).Add(1)
 				e.subs = append(e.subs, s)
 				e.opened++
@@ -1052,8 +1065,17 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 		st.Close()
 		return
 	}
+	if role == mconnRoleHedge && !liteHedge3 { // b459: never sent to an exit without the key
+		hedge3Stat.hedgeClose.Add(1)
+		st.Close()
+		return
+	}
+	if role == mconnRoleH6 { // b469n HS2_LITE_H6: the request copy, never written to
+		serveH6Sub(ctx, st, tbl, id)
+		return
+	}
 	switch role {
-	case mconnRoleFirst, mconnRoleFirstRaw, mconnRoleFirstRawRescue, mconnRoleRescueJoin:
+	case mconnRoleFirst, mconnRoleFirstRaw, mconnRoleFirstRawRescue, mconnRoleRescueJoin, mconnRoleHedge:
 		if role == mconnRoleFirstRawRescue && !rescueOn.Load() {
 			st.Close() // never sent to a server not announcing it
 			return
@@ -1077,11 +1099,31 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 			mc.mu.Unlock()
 		}
 		mc.tr.setPort(port)
+		if mc2 := exitHedge8Wait(tbl, id, role, ctx.Done()); mc2 != nil {
+			// b466 HS2_LITE_HEDGE8: the first sub came within the wait
+			mc.Close()
+			attachExitSub(st, mc2, mconnRoleJoin, cfg.traffic, mtr)
+			mc2.exitHedge3Mark(false)
+			return
+		}
 		if !tbl.reserve(id, mc) { // ul173: joins attach only after the first sub (publish below)
 			// mem64: mc's manage goroutine already runs; close it too.
 			// zs291: Close ends it at once (no sub ever joined), raw or not.
 			zsReserveLost[role&7].Add(1)
 			mc.Close()
+			if mc2 := exitHedge3Join(tbl, id, role, ctx.Done()); mc2 != nil {
+				// b459 HS2_LITE_HEDGE3: the other of first/hedge created it
+				if role == mconnRoleFirst {
+					mc2.mu.Lock()
+					mc2.hedge4WantFirstLocked() // b460 HS2_LITE_HEDGE4: it becomes the primary
+					mc2.mu.Unlock()
+				}
+				attachExitSub(st, mc2, mconnRoleJoin, cfg.traffic, mtr)
+				if role == mconnRoleHedge {
+					mc2.exitHedge3Mark(false)
+				}
+				return
+			}
 			if role == mconnRoleRescueJoin {
 				// er94: the first sub came meanwhile: a plain join
 				if mc2 := tbl.join(id, 0, ctx.Done()); mc2 != nil {
@@ -1111,6 +1153,13 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 			if role == mconnRoleFirstRawRescue {
 				mc.rescueEnable() // HS2_MCONN_RESCUE (mconn_rescue.go)
 			}
+		} else if role == mconnRoleHedge {
+			mc.mu.Lock()
+			mc.h4Made = true    // b460
+			mc.b466MadeLocked() // b466 dbg
+			mc.mu.Unlock()
+			attachExitSub(st, mc, mconnRoleFirst, cfg.traffic, mtr)
+			mc.exitHedge3Mark(true) // b459: the hedge sub came first
 		} else {
 			attachExitSub(st, mc, role, cfg.traffic, mtr)
 		}

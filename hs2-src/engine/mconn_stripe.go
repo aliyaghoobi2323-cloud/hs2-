@@ -143,6 +143,12 @@ func infoExt() uint32 {
 	if halfCloseOn.Load() {
 		e |= capExtHalfClose // hc183 (halfclose.go)
 	}
+	if mconnOn.Load() && mconnLite.Load() && liteH6 {
+		e |= capExtLiteH6 // b469n (mconn_b469n_h6wire.go)
+	}
+	if mconnOn.Load() && mconnLite.Load() && liteHedge3 {
+		e |= capExtLiteHedge // rc15 (mconn_rc15_hedgecap.go)
+	}
 	e |= zduInfoExt() // zdu350 (zdu.go): HS2_ZDU=1 only
 	return e
 }
@@ -407,7 +413,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	m.tr.ev("stripe: grow %d -> %d (%.1f Mbit/s)", n, n+1, rate*8/1e6)
 	m.trLocked(trGrow)
 	if dlGo {
-		log.Printf("mconn %x: download stripe at %v (%.0f Mbit/s, chain %d)", m.id&0xffffff, now.Sub(m.rawBorn).Round(time.Millisecond), rate*8/1e6, m.stFastMore) // HS2_MCONN_STRIPE_DL_FAST
+		log.Printf("mconn %x: download stripe at %v (%.0f Mbit/s, chain %d)", m.id&0xffffff, now.Sub(m.stripeDlBornLocked()).Round(time.Millisecond), rate*8/1e6, m.stFastMore) // HS2_MCONN_STRIPE_DL_FAST
 	}
 	return true
 }

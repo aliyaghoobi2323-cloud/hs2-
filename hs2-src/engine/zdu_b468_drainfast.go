@@ -41,7 +41,7 @@ func b468DrainFastOn() bool {
 // closed, the users closed by the pace and the batches used.
 func b468PaceUsers(t *exitTraffic, p *linkPeers, sleep func(time.Duration)) (links, users, batches int) {
 	ls := b468UserKills(t)
-	_, users, batches = zduPaceClose(ls, zduPaceRate, b469Step(), zduPaceMax, sleep)
+	_, users, batches = zduPaceClose(ls, b470Rate(len(ls)), b469Step(), zduPaceMax, sleep)
 	p.mu.Lock()
 	cs := make([]func() error, 0, len(p.m))
 	for m := range p.m {

@@ -25,7 +25,9 @@ package engine
 //	bit 14  capExtMConnXS         mconn_xs261.go
 //	bit 15  capExtZDU             zdu.go (b372, proposals/zdu350.md)
 //	bit 16  capExtMConnHSRescue   b367 (mconn_b367_hsrescue.go, proposals/hsr367.md)
-//	bit 17+ free
+//	bit 17  capExtLiteH6          mconn_b469n_h6wire.go (b469n)
+//	bit 18  capExtLiteHedge       mconn_rc15_hedgecap.go (rc15)
+//	bit 19+ free
 type capExtOwner struct {
 	Bit   uint
 	Name  string
@@ -51,4 +53,6 @@ var capExtOwners = []capExtOwner{
 	{14, "capExtMConnXS", "mconn_xs261.go", true},
 	{15, "capExtZDU", "zdu.go", true},
 	{16, "capExtMConnHSRescue", "b367 mconn_b367_hsrescue.go", false},
+	{17, "capExtLiteH6", "mconn_b469n_h6wire.go", true},
+	{18, "capExtLiteHedge", "mconn_rc15_hedgecap.go", true},
 }

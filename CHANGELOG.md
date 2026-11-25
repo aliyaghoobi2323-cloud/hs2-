@@ -19,6 +19,33 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel69r-rc15 — GitHub release candidate 2026-11-25: rel69r-rc14 + light-user hedge (K4M2, rate-based heavy rule, no-wait hedge open, ext cap bit 18) + call join resend (JOINRES) + on-time ZDU drain end (PACEFIX)
+
+Source = branch rel69r-rc15 `c043866f` (engine code = `93438864`; `c043866f` adds only README rows and lab notes;
+later commits on that branch are lab notes). envdef unchanged (138 keys); the new keys below are read by the engine.
+
+| change | key (default) | side | off |
+|---|---|---|---|
+| b455..b467 **light-user hedge (K4M2)**: a lite connection opens a second (hedge) sub at connect; the exit takes the first of the two or joins them (role 7, HEDGE3), makes Iran's first sub the primary (HEDGE4), and samples a download stripe early (HEDGE7) | `HS2_LITE_HEDGE8` (on) | both (Iran decides) | `=0` |
+| hedge window: early buffer for the join replay and base of the heavy (one-copy) threshold (b464 lab values were 16384 / 400) | `HS2_LITE_HEDGE3_BYTES` (4096), `HS2_LITE_HEDGE3_MS` (200) | both | - |
+| the exit waits this long for a hedged connection's first sub before the hedge sub creates it | `HS2_LITE_HEDGE8_MS` (20) | Kharej | - |
+| rc15 **capability gate**: an exit with the hedge announces ext cap bit 18 (`capExtLiteHedge`); Iran hedges, uses a records first sub and sends role 7 only toward such a link, otherwise the old raw first sub and a plain join | no key | both | - |
+| rc15b **rate-based heavy rule**: a hedged connection goes one copy only after more than HEDGE3_BYTES + 32 KB per second of its age in one direction (downloads and bursts at once; long-lived light connections keep both copies) | `HS2_RC15_HEAVY_KBPS` (32) | both | `=0` (cumulative rule) |
+| rc15b **no-wait hedge open**: the hedge sub never queues for a PICKCAP slot; no slot = no hedge for that connection | `HS2_RC15_HEDGE_NOWAIT` (on) | Iran | `=0` |
+| rc15f **JOINRES**: a fresh light sub joining a call gets the copies stranded on the call's subs that received nothing for >= 400 ms, resent at once; no wire change | `HS2_RC15F_JOINRES` (on) | Kharej | `=0` |
+| b470 **PACEFIX** (ZDU): the drain-end user pace spreads its users over the lead it started with (never above `HS2_ZDU_PACE_RATE`), keeps a debt for close work and oversleep, and closes big batches in parallel, so the old process exits on time at 24k connections | `HS2_B470_PACEFIX` (on) | Kharej | `=0` (rel69r-rc14 pace) |
+| rc15c / rc15d hedge-CPU experiments (burst-only copy, quiet cap, first-N bursts, freshness gate): all failed their A/B | `HS2_RC15C_BURST`, `HS2_RC15C_CAPQUIET_MS`, `HS2_RC15D_HEDGE_BURSTS`, `HS2_RC15D_FRESH_MS` (off) | both | - |
+| b455..b469n lab experiments and debug counters (HEDGE10, H6 on ext cap bit 17, NORAW, DBG, HEDGE2) | `HS2_LITE_HEDGE10`, `HS2_LITE_H6`, `HS2_B463_NORAW`, `HS2_B462_DBG`, `HS2_LITE_HEDGE2` (off) | both | - |
+
+Unchanged from rel69r-rc14 and still on: PICKCAP=2 + CAPLAT, DRAINFAST, DRAINSMOOTH, STEP_MS=5, UPGSAFE, CAPWAIT,
+FLOORFAST and the other b449 fixes.
+
+Installer (`install.sh`, root file == `hs2-src/install/install.sh`): byte-identical to rel69r-rc14 (sha256
+`60404d42…`). `hs2-src/install/install.sh` on the source branch is the same as at rel69r-rc14's build commit and
+lacks the live load-balancing screen, so the published installer is kept, as in the earlier releases.
+
+Binary sha256 `13bca10da170753b82a32a2df56dedfea8e1496f8ea78b9f43ba3aef0e60087f` (`[build rel69r-rc15]`, the exact production bytes). Lab results and rollback: `RELEASE-rel69r15.md`.
+
 ## rel69r-rc14 — GitHub release candidate 2026-11-24: rel69r + heavy-download stall fixes (b449, UPGSAFE) + smooth ZDU drain end (DRAINFAST, STEP_MS, DRAINSMOOTH, PICKCAP=2 + CAPLAT) + close pacing + freebind + certificate hook fix
 
 Source = branch rel69r-rc14 `2b66b136` (the build commit; later commits on that branch are lab notes and the next

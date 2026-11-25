@@ -45,6 +45,8 @@ func TestCapsExtDistinct(t *testing.T) {
 		"capExtMConnXS":                             capExtMConnXS,
 		"capExtZDU":                                 capExtZDU,
 		"capExtMConnHSRescue (b367, reserved here)": 1 << 16,
+		"capExtLiteH6":                              capExtLiteH6,
+		"capExtLiteHedge":                           capExtLiteHedge,
 	}
 	seen := map[uint32]string{}
 	for name, v := range caps {
@@ -75,6 +77,8 @@ func TestCapsExtOwners(t *testing.T) {
 		"capExtHalfClose":      capExtHalfClose,
 		"capExtMConnXS":        capExtMConnXS,
 		"capExtZDU":            capExtZDU,
+		"capExtLiteH6":         capExtLiteH6,
+		"capExtLiteHedge":      capExtLiteHedge,
 	}
 	bits := map[uint]string{}
 	var owned uint32

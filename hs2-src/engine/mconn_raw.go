@@ -80,6 +80,14 @@ type rawState struct {
 	hsTries    int
 	hsKept     bool
 	upgOld     bool
+
+	// b469m H6 (exit, mconn_b469m_h6.go): the hedge sub's copy of the
+	// request prefix merged with the raw stream (nil: off)
+	h6   *h6Recv
+	h6mu sync.Mutex
+	// b469n H6 (Iran, mconn_b469n_h6wire.go): the copy of the raw request
+	// prefix (nil: off); set before the first write
+	h6s *h6Send
 }
 
 // mconnRawSub is a sub the opener marks as a raw first sub.
@@ -124,6 +132,10 @@ func newMConnIranRaw(id uint64, open mOpener, sub mSub, key any) *mConn {
 func newMConnExitRaw(id uint64) *mConn {
 	m := newMConn(id, false, nil)
 	m.rLimit.Store(-1)
+	m.h6ExitInit() // b469n HS2_LITE_H6
+	if b468lDbg {
+		m.b468Born = monoNano(time.Now()) // b468l dbg
+	}
 	return m
 }
 
@@ -161,6 +173,9 @@ func (m *mConn) writeRaw(p []byte) (int, error, bool) {
 	if m.ring.on && n > 0 {
 		m.ring.add(p[:n]) // HS2_MCONN_RESCUE (mconn_rescue.go)
 	}
+	if m.h6s != nil && n > 0 {
+		m.h6s.add(p[:n]) // b469n HS2_LITE_H6: the request copy (mconn_b469n_h6wire.go)
+	}
 	m.wmu.Unlock()
 	if err != nil && m.rscCut.Load() {
 		<-m.rscDone // a rescue took the writer off raw: the rest goes as records
@@ -183,6 +198,14 @@ func (m *mConn) readRaw(p []byte) (int, error, bool) {
 		if !m.rawR.Load() {
 			return 0, nil, false
 		}
+		if m.h6 != nil { // b469m H6: hedge bytes the raw stream has not brought yet
+			m.h6mu.Lock()
+			n := m.h6.fromHedge(p)
+			m.h6mu.Unlock()
+			if n > 0 {
+				return n, nil, true
+			}
+		}
 		m.unkMu.Lock()
 		got, lim := m.rawRecvd.Load(), m.rLimit.Load()
 		want := p
@@ -204,6 +227,14 @@ func (m *mConn) readRaw(p []byte) (int, error, bool) {
 		}
 		if lim < 0 {
 			m.unkMu.Unlock()
+		}
+		if n > 0 && m.h6 != nil { // b469m H6: drop raw bytes the hedge copy already delivered
+			m.h6mu.Lock()
+			n = m.h6.rawGot(want, n)
+			m.h6mu.Unlock()
+			if n == 0 && err == nil {
+				continue
+			}
 		}
 		if n > 0 {
 			return n, nil, true
@@ -238,6 +269,11 @@ func (m *mConn) readRaw(p []byte) (int, error, bool) {
 // switchRead: the raw part of the peer's direction is all read (lim bytes);
 // the first sub's records from here go through reassembly.
 func (m *mConn) switchRead(lim uint64) {
+	if m.h6 != nil { // b469n H6: never below what the user already has
+		m.h6mu.Lock()
+		lim = m.h6.switchNext(lim)
+		m.h6mu.Unlock()
+	}
 	r := &m.r
 	r.mu.Lock()
 	if r.next < lim {

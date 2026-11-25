@@ -88,6 +88,7 @@ func b457PickAcquireDG(ctx context.Context, exempt bool, e *mconnEdge) (rel func
 	default:
 	}
 	b457PickStat.waited.Add(1)
+	rc15cCapWaited() // rc15c HS2_RC15C_CAPQUIET_MS (mconn_rc15c_burst.go)
 	var done <-chan struct{}
 	if ctx != nil {
 		done = ctx.Done()

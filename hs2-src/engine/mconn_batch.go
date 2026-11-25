@@ -28,7 +28,8 @@ var mconnBatch atomic.Bool
 func (s *msub) batchLocked(first []byte) []byte {
 	total := len(first)
 	k := 0
-	for k < len(s.q) && total+len(s.q[k].wire()) <= mRecMax {
+	lim := s.hedge10BatchMax() // b468l HS2_LITE_HEDGE10
+	for k < len(s.q) && total+len(s.q[k].wire()) <= lim {
 		total += len(s.q[k].wire())
 		k++
 	}
@@ -47,6 +48,13 @@ func (s *msub) batchLocked(first []byte) []byte {
 		s.q[i] = nil
 	}
 	s.q = s.q[k:]
+	if cap(b) > cap(s.batch) {
+		s.batch = b // b468l: a grown (big-rule) batch buffer is reused
+	}
+	if lim > mRecMax {
+		hedge10Stat.writes.Add(1)
+		hedge10Stat.recs.Add(uint64(k + 1))
+	}
 	return b
 }
 

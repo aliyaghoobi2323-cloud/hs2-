@@ -11,6 +11,7 @@ import (
 // links close together only after the last user; subs and kill-less conns
 // are left to the link close. Key unset: the b454 link pace as before.
 func TestB468DrainFastUsersFirst(t *testing.T) {
+	t.Setenv("HS2_B470_PACEFIX", "0")  // exact batch count below; b470 is TestB470*
 	t.Setenv("HS2_B469_STEP_MS", "25") // the batch count below is for the 25 ms step (b469Step)
 	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

@@ -67,7 +67,9 @@ func zduPaceRateEnv(env string) int {
 // ZDUDrainEndPaceLead: how long the paced close of users user connections
 // takes (the drain loop starts it that long before its deadline); 0: off.
 func ZDUDrainEndPaceLead(users int) time.Duration {
-	return zduPaceDur(users, zduPaceRate, zduPaceMax)
+	d := zduPaceDur(users, zduPaceRate, zduPaceMax)
+	b470Lead.Store(int64(d))
+	return d
 }
 
 func zduPaceDur(users, rate int, budget time.Duration) time.Duration {
@@ -132,15 +134,34 @@ func zduPaceClose(ls []zduPaceLink, rate int, minStep, budget time.Duration, sle
 	}
 	var batch []zduPaceLink
 	inBatch, owe := 0, 0 // owe: the previous batch's users, not yet waited for
+	fix := b470On()
+	var debt time.Duration // b470: time behind the rate (close work, oversleep)
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
 		if owe > 0 && rate > 0 {
-			sleep(time.Duration(float64(owe) / r * float64(time.Second)))
+			d := time.Duration(float64(owe) / r * float64(time.Second))
+			if fix {
+				d -= debt.Truncate(time.Millisecond)
+				debt -= debt.Truncate(time.Millisecond)
+			}
+			if d > 0 {
+				t0 := zduPaceNow()
+				sleep(d)
+				if fix {
+					debt += max(zduPaceNow().Sub(t0)-d, 0)
+				}
+			} else {
+				debt += -d
+			}
+		}
+		t1 := zduPaceNow()
+		b470CloseAll(batch, fix)
+		if fix {
+			debt += zduPaceNow().Sub(t1)
 		}
 		for _, l := range batch {
-			l.close()
 			links++
 			users += l.users
 		}
@@ -151,7 +172,11 @@ func zduPaceClose(ls []zduPaceLink, rate int, minStep, budget time.Duration, sle
 	for _, l := range ls {
 		batch = append(batch, l)
 		inBatch += l.users
-		if rate > 0 && inBatch >= minUsers {
+		need := minUsers
+		if fix && debt >= time.Millisecond {
+			need = max(need, int(r*debt.Seconds())) // behind: catch up in a bigger batch
+		}
+		if rate > 0 && inBatch >= need {
 			flush()
 		}
 	}

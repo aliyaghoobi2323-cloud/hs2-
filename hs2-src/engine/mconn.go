@@ -713,6 +713,31 @@ type mConn struct {
 	wantBulk     bool // Iran: switch to bulk (own heavy, or WANTBULK)
 	bulkOpening  bool
 	lightOpening bool
+	// b455 HS2_LITE_HEDGE2 (mconn_b455_hedge.go): the hedge sub opened with
+	// the connection, its window's end, and the early buffer.
+	hedgeSub atomic.Pointer[msub]
+	hedgeEnd time.Time
+	early    hedgeEarly
+
+	// b468l HS2_LITE_HEDGE10 (mconn_b468l_hedge10.go): heavy hedged one-copy: big queue + batch;
+	// HS2_B468L_DBG (Kharej): start (monoNano), first Write, bytes, Write time, done
+	h10Big    bool
+	b468Born  int64
+	b468First atomic.Int64
+	b468Sent  atomic.Int64
+	b468Wr    atomic.Int64
+	b468Done  atomic.Bool
+
+	c15Last      time.Time // rc15c HS2_RC15C_BURST: this side's last send on a hedged light conn (mconn_rc15c_burst.go)
+	c15Start     uint64    // rc15c: sendOff at the current burst's start
+	c15dN        uint32    // rc15d HS2_RC15D_HEDGE_BURSTS: bursts this side started (mconn_rc15d_first.go)
+	c15dOne      bool      // rc15d: the current burst goes one copy
+	h3, h3Heavy  bool      // b459 HS2_LITE_HEDGE3: hedged; moved > hedge3Bytes (mconn_b459_hedge3.go)
+	h4Want       bool      // b460 HS2_LITE_HEDGE4 (Kharej): the next sub is Iran's first sub (mconn_b460_hedge4.go)
+	h4Made       bool      // b460 (Kharej): the hedge sub created this conn
+	h4First      *msub     // b460 (Kharej): Iran's first sub of a hedge-created conn
+	h7Born       time.Time // b465 HS2_LITE_HEDGE7 (Iran): a hedged conn's start (mconn_b465_hedge7.go)
+	h8Made       time.Time // b466 (Kharej, HS2_B466_DBG): when the hedge sub created this conn (mconn_b466_hedge8.go)
 	bulkRetryAt  time.Time
 	lightRetryAt time.Time
 	echoAt       time.Time // Iran: the peer echoed BULK
@@ -856,6 +881,9 @@ func newMConnIran(id uint64, open mOpener) (*mConn, error) {
 	}
 	if r, ok := sub.(mconnRawSub); ok && r.mconnRaw() && rawCapable(sub) {
 		m := newMConnIranRaw(id, open, sub, key)
+		m.mu.Lock()
+		m.h6StartLocked(sub, key) // b469n HS2_LITE_H6 (mconn_b469n_h6wire.go)
+		m.mu.Unlock()
 		if rs, ok := sub.(mconnRescueSub); ok && rs.mconnRescue() {
 			m.rescueEnable() // HS2_MCONN_RESCUE (mconn_rescue.go)
 			if rr, ok := sub.(mconnRescueRecSub); ok && rr.mconnRescueRec() {
@@ -869,6 +897,7 @@ func newMConnIran(id uint64, open mOpener) (*mConn, error) {
 	m := newMConn(id, true, open)
 	m.mu.Lock()
 	s := m.addSubLocked(sub, key, false)
+	m.hedgeStartLocked(key) // HS2_LITE_HEDGE2 (mconn_b455_hedge.go)
 	m.mu.Unlock()
 	m.startSub(s)
 	m.kickMgr() // opens the second light sub
@@ -879,6 +908,10 @@ func newMConnIran(id uint64, open mOpener) (*mConn, error) {
 // newMConnExit: Kharej side; subs arrive with attach.
 func newMConnExit(id uint64) *mConn {
 	m := newMConn(id, false, nil)
+	if b468lDbg {
+		m.b468Born = monoNano(time.Now())
+	}
+	m.hedgeExitInit() // HS2_LITE_HEDGE2 (mconn_b455_hedge.go)
 	m.goManage()
 	return m
 }
@@ -933,7 +966,7 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	now := time.Now()
 	s.lastRecv.Store(monoNano(now))
 	s.lastPush = now
-	if m.sendOff > 0 && !bulk {
+	if m.sendOff > 0 && !bulk && !m.earlyReplayLocked(s, now) { // HS2_LITE_HEDGE2: given every byte from 0
 		s.lastHole = now // it lacks what was sent before it joined
 		s.missEnd = m.sendOff
 	}
@@ -948,9 +981,11 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	if !bulk {
 		m.graceFlushLocked(s) // HS2_MCONN_STRIPE_GRACE_MS
 	}
+	m.hedge4AddLocked(s, bulk) // b460 HS2_LITE_HEDGE4: Iran's first sub is the primary
 	m.setPrimaryLocked()
 	m.refreshLiteDualLocked()
 	m.tr.ev("sub+ %d bulk=%v key=%p sendOff=%d subs=%d", s.idx, bulk, key, m.sendOff, len(m.subs))
+	m.rc15fJoinResLocked(s, now) // rc15f HS2_RC15F_JOINRES (mconn_rc15f_joinres.go)
 	return s
 }
 
@@ -1010,7 +1045,7 @@ func (m *mConn) writeErrLocked() error {
 
 // Write queues p; it returns once every chunk of p is queued on at least one
 // sending sub.
-func (m *mConn) Write(p []byte) (int, error) {
+func (m *mConn) write0(p []byte) (int, error) { // b468l: Write is in mconn_b468l_hedge10.go
 	written := 0
 	if m.rawW.Load() {
 		n, err, done := m.writeRaw(p)
@@ -1093,7 +1128,7 @@ func (m *mConn) sendLocked(c *mchunk) error {
 				continue
 			}
 		}
-		if m.dupOff {
+		if m.dupOff || m.hedge3OneCopyLocked() { // b459: a heavy hedged conn sends one copy
 			// One copy when this direction is over mDupMaxRate, and always on
 			// the primary sub: a connection rides one link, never two (spread
 			// over two, the receiver waits for the slower link on every other
@@ -1107,14 +1142,24 @@ func (m *mConn) sendLocked(c *mchunk) error {
 				m.maybeSwitchPrimaryLocked()
 			}
 			p := m.primary.Load()
-			if p == nil || !p.fits(c.n) {
-				m.b449ArmLocked() // b449: watch a primary that stops writing (mconn_b449_pstuck.go)
+			if p == nil || !m.hedge10FitsLocked(p, c.n) {
+				m.b449ArmLocked()    // b449: watch a primary that stops writing (mconn_b449_pstuck.go)
+				m.b466OcWaitLocked() // b466 dbg
 				m.sendCond.Wait()
 				continue
 			}
 			c.setOff(m.sendOff)
 			m.sendOff += uint64(c.n)
+			m.earlyKeepLocked(c) // HS2_LITE_HEDGE2
 			p.push(c)
+			if !m.dupOff && m.h3Heavy {
+				hedge3Stat.oneCopyB.Add(uint64(c.n))
+			} else if !m.dupOff && m.h3 && rc15dBursts > 0 {
+				rc15dStat.oneCopyB.Add(uint64(c.n)) // rc15d: a burst past the first HEDGE_BURSTS
+			} else if !m.dupOff && m.h3 && rc15cBurst {
+				rc15cStat.oneCopyB.Add(uint64(c.n)) // rc15c: past the burst's head
+			}
+			m.hedge4OneCopyLocked(p, c.n) // b460
 			var now time.Time
 			for _, s := range m.subs {
 				if s != p && !s.retired {
@@ -1135,6 +1180,7 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			m.noteQueueLocked()
 			return nil
 		}
+		m.h10Big = false                         // b468l: not the one-copy path
 		if ok, wait := m.callPairLocked(c); ok { // HS2_MCONN_CALL (mconn_call.go)
 			m.noteQueueLocked()
 			return nil
@@ -1185,6 +1231,7 @@ func (m *mConn) sendLocked(c *mchunk) error {
 		}
 		c.setOff(m.sendOff)
 		m.sendOff += uint64(c.n)
+		m.earlyKeepLocked(c) // HS2_LITE_HEDGE2
 		var now time.Time
 		for _, s := range m.subs {
 			if s.retired {
@@ -1203,6 +1250,9 @@ func (m *mConn) sendLocked(c *mchunk) error {
 		}
 		if fit > 1 {
 			obs.mconnDupBytes.Add(uint64(c.n * (fit - 1)))
+			if m.h3 {
+				hedge3Stat.dupB.Add(uint64(c.n * (fit - 1))) // b459
+			}
 		}
 		if m.lite {
 			if now.IsZero() {
@@ -1864,6 +1914,9 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			if m.lite {
 				liteBud.add(time.Now().Unix(), int(end-r.next), 0)
 			}
+			if off == 0 && m.iran {
+				hedgeNoteFirst(m, s) // HS2_LITE_HEDGE2: which sub's copy came first
+			}
 			r.appendReadyLocked(compactRecv(c, r.next, c.buf[r.next-off:n], r.head < len(r.ready)))
 			r.pullLocked()
 			r.lastProgress = time.Now()
@@ -2175,6 +2228,7 @@ func (m *mConn) subGone(s *msub, cause error) {
 	if !resent && len(s.sent) > 0 {
 		m.dropSentLocked(s, len(s.sent))
 	}
+	b462sn := m.b462SnapLocked(s) // b462 HS2_B462_DBG
 	lost := false
 	for _, c := range s.q {
 		if c.seq() {
@@ -2251,6 +2305,7 @@ func (m *mConn) subGone(s *msub, cause error) {
 		}
 		m.noteDeadKeyLocked(s.key)
 	}
+	m.b462SubEndLocked(s, b462sn, cause, endErr, lost, resent) // b462 HS2_B462_DBG
 	m.zsNoteBranchLocked(zsBranchName(len(m.subs), endErr, m.rstHold, !m.graceUntil.IsZero()), cause)
 	if s.noTgt {
 		subNoTargetOutcome(endErr) // b271 Q5 (mconn_sub_resend.go)
@@ -2295,6 +2350,8 @@ func (m *mConn) end(err error, rst bool) {
 		return
 	}
 	m.ended, m.err = true, err
+	m.hedge4EndLocked(err, rst)    // b460
+	m.b461EndLocked(err, rst)      // b461: always-on baseline counter
 	if m.iran && m.rscPhase == 1 { // er94: ended while waiting for the ACK
 		rescueStat.endWait.Add(1)
 		rtrace("%x iran ended waiting for the ACK after %v: %v", m.id, time.Since(m.rscT0).Round(time.Millisecond), err)
@@ -2453,6 +2510,9 @@ func (m *mConn) tick(now time.Time) time.Duration {
 		m.mu.Unlock()
 		return wake
 	}
+	if d := m.earlyTickLocked(now); d > 0 { // HS2_LITE_HEDGE2 (mconn_b455_hedge.go)
+		at(d)
+	}
 	m.stripeStallLogLocked(now)
 	if keepStallOn.Load() {
 		m.keepStallStatsLog(now) // hs115: both sides (the receiver's gap room / fill too)
@@ -2515,7 +2575,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			}
 			m.stripeIdleLocked()
 			if !m.peerFin && !m.wclosed {
-				at(mLitePoll)
+				at(m.hedge7NextLocked(now, mLitePoll)) // b465 HS2_LITE_HEDGE7: the download sampler's step
 			}
 		}
 		m.rescueCensusLocked(live) // diagnostics (lb_rescue_cut.go)
@@ -2555,6 +2615,9 @@ func (m *mConn) tick(now time.Time) time.Duration {
 		case len(live) >= 2:
 			p := m.primary.Load()
 			hs := false
+			if d := m.hedgeTickLocked(now); d > 0 { // HS2_LITE_HEDGE2 (mconn_b455_hedge.go)
+				at(d)
+			}
 			if m.rescueCutDropLocked(live, now) { // HS2_LB_RESCUE_CUT (lb_rescue_cut.go)
 				hs = true
 				p = m.primary.Load()
@@ -2617,7 +2680,17 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				if r := monoTime(s.lastRecv.Load()); r.After(last) {
 					last = r
 				}
-				if idle := now.Sub(last); idle >= mLiteIdle {
+				lim := mLiteIdle
+				if mconnCloseHS.Load() && subCloseHS(s.rw) {
+					lim = m.hedgeIdleLocked(s, now, lim) // HS2_LITE_HEDGE2: a bulky conn's hedge sub goes sooner
+				}
+				lim = m.hedge3IdleLocked(s, lim) // b459 HS2_LITE_HEDGE3: a heavy conn's hedge sub goes at once
+				if idle := now.Sub(last); idle >= lim {
+					if liteHedge3 && m.h3Heavy && s == m.hedgeSub.Load() {
+						hedge3Stat.dropped.Add(1)
+						m.b462DropLocked(s, mconnCloseHS.Load() && subCloseHS(s.rw)) // b462 HS2_B462_DBG
+						m.tr.ev("hedge3: drop hedge sub %d (heavy)", s.idx)
+					}
 					if mconnCloseHS.Load() && subCloseHS(s.rw) {
 						m.closeReqLocked(s) // closed once the peer's CLOSE-ACK is read
 						hs = true
@@ -2627,7 +2700,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					retire = append(retire, s)
 					m.tr.ev("lite: close idle second sub %d (idle %v)", s.idx, idle.Round(time.Second))
 				} else {
-					at(mLiteIdle - idle)
+					at(lim - idle)
 				}
 			}
 			if len(retire) > 0 || hs {
@@ -2648,7 +2721,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					go m.openBulk()
 				}
 			}
-			if !m.wantBulk && !m.peerFin && !m.lightOpening && len(m.subs) < 2 {
+			if !m.wantBulk && !m.peerFin && !m.lightOpening && len(m.subs) < 2 && !m.hedge3NoReopenLocked() {
 				if now.Before(m.lightRetryAt) {
 					at(m.lightRetryAt.Sub(now))
 				} else {

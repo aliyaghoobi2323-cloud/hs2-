@@ -60,12 +60,16 @@ func b312OpenLine() string {
 
 // openNoLock is open for a join sub (e.first already true) without e.mu.
 // The loop is the old one's join branch line for line.
-func (e *mconnEdge) openNoLock(p mPlane, avoid []any, fresh, rstJ bool, t0 time.Time) (mSub, any, error) {
+func (e *mconnEdge) openNoLock(p mPlane, avoid []any, fresh, rstJ, hedgeR, h6R bool, t0 time.Time) (mSub, any, error) {
 	b312Open.nolock.Add(1)
 	deadline := t0.Add(mconnNextWait)
 	lat := e.b458Latency() // b458 (mconn_b458_capstat.go)
-	joined := false
-	defer func() { b458Join(t0, joined, fresh || rstJ, lat) }()
+	joined, skipped := false, false
+	defer func() {
+		if !skipped { // rc15c: a skipped hedge open is not a failed join (b458 joinFail)
+			b458Join(t0, joined, fresh || rstJ, lat)
+		}
+	}()
 	for tries := 0; !e.endedA.Load() && tries < 3; {
 		if e.b460PinDead() { // HS2_B460_DGBATCH (mconn_b460_dgbatch.go): never queue a join of a dead generation
 			b460Stat.fast.Add(1)
@@ -76,7 +80,22 @@ func (e *mconnEdge) openNoLock(p mPlane, avoid []any, fresh, rstJ bool, t0 time.
 			break
 		}
 		// HS2_B457_PICKCAP (mconn_b457_pickcap.go), HS2_B458_CAPLAT
-		capRel, dead := b457PickAcquireDG(e.ctx, lat && b458CapLat.Load(), e)
+		var capRel func()
+		var dead bool
+		if hedgeR && rc15cHedgeQuiet() { // rc15c HS2_RC15C_CAPQUIET_MS (mconn_rc15c_burst.go)
+			skipped = true
+			break
+		}
+		if hedgeR && rc15HedgeNoWait && !(lat && b458CapLat.Load()) { // rc15b (mconn_rc15b_hedgefix.go): a hedge never queues for a slot
+			var ok bool
+			if capRel, ok = b457PickTry(); !ok {
+				rc15bStat.noWait.Add(1)
+				skipped = true
+				break
+			}
+		} else {
+			capRel, dead = b457PickAcquireDG(e.ctx, lat && b458CapLat.Load(), e)
+		}
 		if dead {
 			break
 		}
@@ -99,6 +118,12 @@ func (e *mconnEdge) openNoLock(p mPlane, avoid []any, fresh, rstJ bool, t0 time.
 			}
 			if rstJ && rstLinkOK(l) {
 				role = mconnRoleRstJoin // rr156: the exit answers it, with an RST when it has no conn
+			}
+			if hedgeR && hedgePeerOK(l) {
+				role = mconnRoleHedge // b459 HS2_LITE_HEDGE3: first-or-join at the exit
+			}
+			if h6R {
+				role = mconnRoleH6 // b469n HS2_LITE_H6 (mconn_b469n_h6wire.go)
 			}
 			if _, err = st.Write(mconnHeader(e.port, e.id, role)); err == nil {
 				if p == planeLight {

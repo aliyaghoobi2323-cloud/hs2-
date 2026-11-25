@@ -705,6 +705,11 @@ func (m *mConn) cutRaw() {
 }
 
 func (m *mConn) rescueSwitched(next uint64) {
+	if m.h6 != nil { // b469n H6: the hedge copy may have delivered past Ri
+		m.h6mu.Lock()
+		next = m.h6.switchNext(next)
+		m.h6mu.Unlock()
+	}
 	r := &m.r
 	r.mu.Lock()
 	if r.next < next {

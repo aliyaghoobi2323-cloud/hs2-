@@ -107,7 +107,21 @@ const stripeDlStep = 200 * time.Millisecond
 
 // stripeDlOnLocked: the download sampler applies to this connection now.
 func (m *mConn) stripeDlOnLocked(now time.Time) bool {
-	return stripeDlFast.Load() && m.stK >= 2 && m.stN == 0 && m.rawW.Load() && !m.rawBorn.IsZero() && now.Sub(m.rawBorn) < stripeDlWindow
+	if !stripeDlFast.Load() || m.stK < 2 || m.stN != 0 {
+		return false
+	}
+	if m.rawW.Load() {
+		return !m.rawBorn.IsZero() && now.Sub(m.rawBorn) < stripeDlWindow
+	}
+	return m.hedge7DlOnLocked(now) // b465 HS2_LITE_HEDGE7: a hedged records conn (mconn_b465_hedge7.go)
+}
+
+// stripeDlBornLocked: the start the download sampler's window counts from.
+func (m *mConn) stripeDlBornLocked() time.Time {
+	if m.rawBorn.IsZero() && !m.h7Born.IsZero() {
+		return m.h7Born // b465 HEDGE7
+	}
+	return m.rawBorn
 }
 
 // stripeDlSampleLocked (every raw tick, under m.mu): the download sampler,

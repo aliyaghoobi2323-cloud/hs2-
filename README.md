@@ -865,8 +865,8 @@ systemctl daemon-reload
 `systemd-run`, so a dropped ssh session cannot stop them half-way:
 
 ```bash
-cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r14 && chmod 755 /usr/local/bin/hs2-rel69r14
-systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r14 2f3d34a2
+cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r15 && chmod 755 /usr/local/bin/hs2-rel69r15
+systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r15 13bca10d
 cat /root/hs2-safe-deploy.$U.out                  # OK … or the reason it stopped
 ```
 
@@ -1018,6 +1018,10 @@ Restore the old behaviour:
   since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
   are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
   512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69r-rc15** (light-user hedge, call join resend, on-time ZDU drain end): `Environment=HS2_LITE_HEDGE8=0`
+  (both sides; Iran decides, so the Iran side alone stops new hedges), `HS2_RC15F_JOINRES=0` and `HS2_B470_PACEFIX=0`
+  (Kharej); `HS2_RC15_HEAVY_KBPS` and `HS2_RC15_HEDGE_NOWAIT` act only on hedged connections (see CHANGELOG
+  rel69r-rc15);
 - **before rel69r-rc14** (heavy-download stall fixes, smooth ZDU drain end, close pacing): `Environment=HS2_B449J_UPGSAFE=0`,
   `HS2_B449_PSTUCK=0`, `HS2_B449_TGT_WAIT_MS=0`, `HS2_B449_KEEP_FLOOR_KB=0` (both sides), `HS2_B449_DARKOPEN=0`,
   `HS2_B449_SLOWOPEN_MS=0`, `HS2_B449H_OPENSKIP=0`, `HS2_B469_DRAINSMOOTH=0` (Iran), `HS2_B468_DRAINFAST=0` and
@@ -1423,6 +1427,15 @@ older behaviour.
 | `HS2_RESC_FASTPICK` (b451) | on (`=0` off) | both | rescue placement scans under the read lock with the fast path's compare-and-swap (the same link a serial pick would choose); no writer convoy in open storms |
 | `HS2_ZDU_LBSEED` (b438) | on (`=0` off) | both | the old ZDU process sends its LB judge's per-path state; the new one seeds its judge from it instead of starting with "no reading yet" for 10-16 s |
 | `HS2_B459_DEADGEN` / `HS2_B460_DGBATCH` (b459/b460, lab) | off (`=1` on) | Iran (edge) | joins pinned to a dead old ZDU generation fail at once / in batches (off: ping max +77 ms after the exit in r459) |
+| `HS2_LITE_HEDGE8` (b466/b467 K4M2, rel69r-rc15) | on (`=0` off) | both (Iran decides) | light-user hedge: a lite connection opens a second (hedge) sub at connect, first-or-join at the exit (role 7, HEDGE3), the exit makes Iran's first sub the primary (HEDGE4), an early download stripe sampler (HEDGE7), and the exit waits up to `HS2_LITE_HEDGE8_MS` for the first sub before a hedge sub creates the connection. A connection turns heavy (one copy on the primary, hedge sub dropped) by `HS2_LITE_HEDGE3_BYTES` and `HS2_RC15_HEAVY_KBPS`. Iran hedges only toward an exit that announces ext cap bit 18 (`capExtLiteHedge`): a rel69r-rc14 / rc12 exit gets the old raw first sub and no hedge, so mixed versions work |
+| `HS2_LITE_HEDGE3_BYTES` / `HS2_LITE_HEDGE3_MS` (rel69r-rc15) | 4096 / 200 | both | the hedge window: the early buffer kept for the join replay, and the base of the heavy (one-copy) threshold; `0` is honoured. The b464 lab defaults were 16384 / 400 |
+| `HS2_LITE_HEDGE8_MS` (b466, rel69r-rc15) | 20 | Kharej (exit) | how long the exit waits for a hedged connection's first sub before the hedge sub creates the connection |
+| `HS2_RC15_HEAVY_KBPS` (rc15b, rel69r-rc15) | 32 (`=0` the old cumulative rule) | both | a hedged connection turns heavy only after it moved more than `HS2_LITE_HEDGE3_BYTES` plus this many KB for every second of its age in one direction: downloads and bursts cross it at once, long-lived light connections keep both copies (lab under link kills: crowd p99 3617 -> 173 ms against the cumulative rule) |
+| `HS2_RC15_HEDGE_NOWAIT` (rc15b, rel69r-rc15) | on (`=0` off) | Iran (edge) | the hedge sub open never queues for a `HS2_B457_PICKCAP` slot; no free slot = no hedge for that connection (12k ZDU exit: cap wait back near rel69r-rc14) |
+| `HS2_RC15F_JOINRES` (rc15f, rel69r-rc15) | on (`=0` off) | Kharej (exit) | when a fresh light sub joins a call connection, the copies stranded on the call's subs that received nothing for >= 400 ms are resent on it at once; no wire change (real WAN with partial link faults: longest call stall -4.7 s against rel69r-rc14 in the first 4 pairs) |
+| `HS2_B470_PACEFIX` (b470, rc14j, rel69r-rc15) | on (`=0` the rel69r-rc14 open-loop pace) | Kharej (old ZDU process) | the paced ZDU drain end keeps its deadline: the user pace spreads its users over the lead it started with (never above `HS2_ZDU_PACE_RATE`), keeps a debt for close work and oversleep, and closes big batches in parallel. Lab ZDU exit at 24k connections: the old process exits on time (-0.55 s) instead of 1.7 s late with a hand-off timeout |
+| `HS2_RC15C_BURST`, `HS2_RC15C_CAPQUIET_MS`, `HS2_RC15D_HEDGE_BURSTS`, `HS2_RC15D_FRESH_MS` (rc15c/rc15d, lab) | off / 0 | both | hedge-CPU experiments kept in the tree, not release settings; all failed their A/B |
+| `HS2_LITE_HEDGE10`, `HS2_LITE_H6`, `HS2_B463_NORAW`, `HS2_B462_DBG`, `HS2_LITE_HEDGE2` (b455-b469n, lab) | off | both | experiments and debug counters kept in the tree, not release settings; `HS2_LITE_HEDGE10` and `HS2_LITE_H6` (ext cap bit 17) failed their A/B |
 | `HS2_B340_CUTCLEAR` (b340, rel69p-rc2) | on (`=0` off) | both | the report carries a per-path OK bit (3 clean raw readings in a row while cut); the steering side keeps such a path lowered but no longer cut-marked, so rescue-cut stops dropping copies on a recovered path |
 | `HS2_B405_CMSPREAD` (b405, lab) | off (`=1` on) | Iran (edge) | callmove target spread: a move picks among eligible paths within 0.05 % loss of the best (still `cmDelta` under the source and inside the b338 damper), fewest moves in the last 2 s first; a path that took 2 moves in 2 s is no target; none left: no move this tick (`spread-held` in the callmove log line). sk402: same-tick moves herded onto one path |
 | `HS2_B336_CALLMOVE` lab hook `HS2_B338_CM_HOLD_MS` (lab) | unset | Iran (edge) | a move is not released before it is this old (lab only; not in the table) |
