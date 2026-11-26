@@ -143,6 +143,7 @@ func (m *mConn) callLateLocked(live []*msub, now time.Time) (gave bool, poll tim
 		m.lateLive = append(m.lateLive, avoidKey(s.key))
 	}
 	avoid = append(append(avoid, m.deadAvoidLocked()...), callStuckMark{path: worstP})
+	avoid = l480dCallLive(avoid) // l480d CALLLIVE (mconn_l480d_callpend.go)
 	m.lightOpening = true
 	callLateOpened.Add(1)
 	m.tr.ev("call: late copy on sub %d path %s (srtt %v vs %v): open a fresh sub off it", worst.idx, worstP, worstR, bestR)

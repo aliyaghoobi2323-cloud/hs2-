@@ -234,7 +234,12 @@ var b449DarkSilent = func(s *msub) bool { return cs226Silent(s, ctrlNow()) }
 // connection's live subs. It returns when to look again (0: no need).
 func (m *mConn) b449DarkOpenLocked(live []*msub, now time.Time) time.Duration {
 	if !b449On.Load() || !b449DarkOn.Load() || !m.iran || !m.lite || m.mode != planeLight || m.ended || m.closing ||
-		m.handshaking || m.peerFin || len(live) == 0 || len(live) > 2 {
+		m.handshaking || m.peerFin || len(live) == 0 || len(live) > 3 {
+		return 0
+	}
+	// l478 HS2_L478_FASTOPEN (mconn_l478_fastopen.go): non-call lite only
+	fast := l478FastOpen.Load() && m.callLikeAt.IsZero() && !m.dcIsCallLocked(now)
+	if len(live) > 2 && !fast {
 		return 0
 	}
 	var last int64
@@ -253,7 +258,11 @@ func (m *mConn) b449DarkOpenLocked(live []*msub, now time.Time) time.Duration {
 		return 0
 	}
 	sil := now.Sub(monoTime(last))
-	if sil < darkcallAfter()/2 || sil > b449DarkRecent {
+	minSil := darkcallAfter() / 2
+	if fast {
+		minSil = l478SilMin / 2
+	}
+	if sil < minSil || sil > b449DarkRecent {
 		return 0
 	}
 	// poll fast only while a link waits for an answer (a lite conn idle
@@ -264,7 +273,7 @@ func (m *mConn) b449DarkOpenLocked(live []*msub, now time.Time) time.Duration {
 		if s.dead {
 			continue
 		}
-		if b449DarkSilent(s) {
+		if b449DarkSilent(s) || fast && l478Silent(s, nowc) {
 			pend = true
 		} else {
 			dark = false
@@ -277,13 +286,31 @@ func (m *mConn) b449DarkOpenLocked(live []*msub, now time.Time) time.Duration {
 		}
 		return 0
 	}
+	second := false
 	if m.b449DarkRx == last {
-		return 0 // one open per silence (an older exit never moves to it)
+		// one open per silence (an older exit never moves to it); l478: one
+		// more once the fresh sub's own link is silent too (dark above)
+		if !fast || m.l478N >= l478MaxOpens {
+			return 0
+		}
+		second = true
+	} else {
+		m.l478N = 0
 	}
 	if m.lightOpening || m.stOpening || now.Before(m.lightRetryAt) {
 		return b449DarkFast
 	}
+	if fast && !l478OpenOK() {
+		return b449DarkFast
+	}
 	m.b449DarkRx = last
+	if fast {
+		m.l478N++
+		l478Stat.opens.Add(1)
+		if second {
+			l478Stat.second.Add(1)
+		}
+	}
 	m.lightOpening = true
 	b449Stat.darkOpens.Add(1)
 	m.tr.ev("b449: receive silent %v, every sub's link dark: open one", sil.Round(time.Millisecond))
@@ -292,7 +319,12 @@ func (m *mConn) b449DarkOpenLocked(live []*msub, now time.Time) time.Duration {
 		avoid = append(avoid, avoidKey(s.key))
 	}
 	avoid = append(avoid, m.deadAvoidLocked()...)
-	go m.openLight(avoid)
+	if fast {
+		avoid = l480WithLive(avoid) // l480 LIVEPICK (mconn_l480_stick.go)
+		go func() { m.openLight(avoid); l478OpenDone() }()
+	} else {
+		go m.openLight(avoid)
+	}
 	b449Log()
 	return b449DarkFast
 }

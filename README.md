@@ -865,8 +865,8 @@ systemctl daemon-reload
 `systemd-run`, so a dropped ssh session cannot stop them half-way:
 
 ```bash
-cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r15 && chmod 755 /usr/local/bin/hs2-rel69r15
-systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r15 13bca10d
+cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r15p1 && chmod 755 /usr/local/bin/hs2-rel69r15p1
+systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r15p1 74f24c53
 cat /root/hs2-safe-deploy.$U.out                  # OK … or the reason it stopped
 ```
 
@@ -1018,6 +1018,10 @@ Restore the old behaviour:
   since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
   are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
   512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69r-rc15p1** (sticky primary, live-link picks, fast reopen with tail resend, call open fixes):
+  `Environment=HS2_L480=0` and `HS2_L485_CALLOPEN=0` (both sides; no wire change, either side alone is fine);
+  `HS2_L480=0` turns off STICK, LIVEPICK, NEWPICK, FASTOPEN, TAILRES and PAIRSK at once (see CHANGELOG
+  rel69r-rc15p1);
 - **before rel69r-rc15** (light-user hedge, call join resend, on-time ZDU drain end): `Environment=HS2_LITE_HEDGE8=0`
   (both sides; Iran decides, so the Iran side alone stops new hedges), `HS2_RC15F_JOINRES=0` and `HS2_B470_PACEFIX=0`
   (Kharej); `HS2_RC15_HEAVY_KBPS` and `HS2_RC15_HEDGE_NOWAIT` act only on hedged connections (see CHANGELOG
@@ -1436,6 +1440,13 @@ older behaviour.
 | `HS2_B470_PACEFIX` (b470, rc14j, rel69r-rc15) | on (`=0` the rel69r-rc14 open-loop pace) | Kharej (old ZDU process) | the paced ZDU drain end keeps its deadline: the user pace spreads its users over the lead it started with (never above `HS2_ZDU_PACE_RATE`), keeps a debt for close work and oversleep, and closes big batches in parallel. Lab ZDU exit at 24k connections: the old process exits on time (-0.55 s) instead of 1.7 s late with a hand-off timeout |
 | `HS2_RC15C_BURST`, `HS2_RC15C_CAPQUIET_MS`, `HS2_RC15D_HEDGE_BURSTS`, `HS2_RC15D_FRESH_MS` (rc15c/rc15d, lab) | off / 0 | both | hedge-CPU experiments kept in the tree, not release settings; all failed their A/B |
 | `HS2_LITE_HEDGE10`, `HS2_LITE_H6`, `HS2_B463_NORAW`, `HS2_B462_DBG`, `HS2_LITE_HEDGE2` (b455-b469n, lab) | off | both | experiments and debug counters kept in the tree, not release settings; `HS2_LITE_HEDGE10` and `HS2_LITE_H6` (ext cap bit 17) failed their A/B |
+| `HS2_L480` (l480b, rel69r-rc15p1) | on (`=0` turns the whole family off) | both | master key: turns on `HS2_L480_STICK`, `HS2_L480_LIVEPICK`, `HS2_L480_NEWPICK`, `HS2_L478_FASTOPEN`, `HS2_L477_TAILRES` and `HS2_L480D_PAIRSK` at once (with the master `0`, STICK / LIVEPICK / NEWPICK / FASTOPEN / TAILRES can still be turned on one by one with `=1`; PAIRSK needs the master); no wire change, mixed versions safe |
+| `HS2_L480_STICK` / `HS2_L480_HOLD_MS` (l480, rel69r-rc15p1) | on with `HS2_L480` / 3000 | both | after a lite connection's dark primary moves to a live sub, the old sub is not made primary again and gets no duplicate copies until its link reads again plus `HOLD_MS` |
+| `HS2_L480_LIVEPICK` / `HS2_L480_NEWPICK` (l480/l480b, rel69r-rc15p1) | on with `HS2_L480` | both | opens for a dark connection pick only links that read within 400 ms (pool-wide; none = the pick is unchanged); a new connection's first sub and hedge sub leave out links that are silent while they have opens pending |
+| `HS2_L478_FASTOPEN`, `HS2_L478_GLOBAL`, `HS2_L477_TAILRES` (l477/l478, rel69r-rc15p1) | on with `HS2_L480` / 256 | both | a lite connection whose primary went silent opens a fresh sub at once (at most `GLOBAL` such opens in flight per process), moves the primary to it and resends the silent episode's tail on it |
+| `HS2_L480D_PAIRSK` (l480d, rel69r-rc15p1) | on with `HS2_L480` | both | while a STICK holds, a call pair is still placed (the old stuck sub left out) instead of falling back to the plain duplicating path (real WAN: calls stuck > 3 s back to rel69r-rc15) |
+| `HS2_L485_CALLOPEN` (l485, rel69r-rc15p1) | on (`=0` off) | both | one slow second open (b449e) per pending open, the LIVEPICK mark on every call open, and no new call / slow-open sub while a connection has 3 fresh (< 2 s) subs that received nothing; no wire change (lab: call p99 3838 -> 854 ms, longest call stall -4.5 s, nothing worse) |
+| `HS2_L480D_CALLPEND`, `HS2_L480D_CALLLIVE`, `HS2_L476_JOINRES`, `HS2_L476_JOINPRIM`, `HS2_L480C_DBG` (l476-l480d, lab) | off | both | experiments and a debug trace kept in the tree, not release settings (CALLPEND / CALLLIVE failed their A/B) |
 | `HS2_B340_CUTCLEAR` (b340, rel69p-rc2) | on (`=0` off) | both | the report carries a per-path OK bit (3 clean raw readings in a row while cut); the steering side keeps such a path lowered but no longer cut-marked, so rescue-cut stops dropping copies on a recovered path |
 | `HS2_B405_CMSPREAD` (b405, lab) | off (`=1` on) | Iran (edge) | callmove target spread: a move picks among eligible paths within 0.05 % loss of the best (still `cmDelta` under the source and inside the b338 damper), fewest moves in the last 2 s first; a path that took 2 moves in 2 s is no target; none left: no move this tick (`spread-held` in the callmove log line). sk402: same-tick moves herded onto one path |
 | `HS2_B336_CALLMOVE` lab hook `HS2_B338_CM_HOLD_MS` (lab) | unset | Iran (edge) | a move is not released before it is this old (lab only; not in the table) |

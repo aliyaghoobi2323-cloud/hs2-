@@ -19,6 +19,33 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel69r-rc15p1 — GitHub release 2026-11-26: rel69r-rc15 + sticky primary and live-link picks for light users (HS2_L480 family: STICK, LIVEPICK, NEWPICK, FASTOPEN, TAILRES, PAIRSK) + call open fixes (CALLOPEN)
+
+Source = branch l485 `f3739759` (executable code = `151807c0`; `1c02ff8f` adds README rows and `f3739759` adds only
+`TestRC15p1Defaults`). envdef unchanged (138 keys); the new keys below are read by the engine. No wire change: no new
+record type, header or capability bit, so mixed versions with rel69r-rc15 / rc14 are safe in either direction.
+
+| change | key (default) | side | off |
+|---|---|---|---|
+| l480b **master key** for the family below (STICK, LIVEPICK, NEWPICK, FASTOPEN, TAILRES, PAIRSK) | `HS2_L480` (on) | both | `=0` (members can still be turned on one by one with `=1`; PAIRSK needs the master) |
+| l480 **STICK**: after a lite connection's dark primary moves to a live sub, the old sub is not made primary again and gets no duplicate copies until its link reads again plus the hold | `HS2_L480_STICK` (on with the master), `HS2_L480_HOLD_MS` (3000) | both | `HS2_L480=0` |
+| l480 **LIVEPICK**: opens for a dark connection pick only links that read within 400 ms (pool-wide; none = pick unchanged) | `HS2_L480_LIVEPICK` (on with the master) | both | `HS2_L480=0` |
+| l480b/l480c **NEWPICK**: a new connection's first sub and hedge sub leave out links that are silent while they have opens pending | `HS2_L480_NEWPICK` (on with the master) | both | `HS2_L480=0` |
+| l477/l478 **FASTOPEN + TAILRES**: a lite connection whose primary went silent opens a fresh sub at once (at most `HS2_L478_GLOBAL` in flight per process), moves the primary to it and resends the silent episode's tail on it | `HS2_L478_FASTOPEN`, `HS2_L477_TAILRES` (on with the master), `HS2_L478_GLOBAL` (256) | both | `HS2_L480=0` |
+| l480d **PAIRSK**: while a STICK holds, a call pair is still placed with the old stuck sub left out, instead of the plain duplicating path | `HS2_L480D_PAIRSK` (on with the master) | both | `HS2_L480D_PAIRSK=0` or `HS2_L480=0` |
+| l485 **CALLOPEN**: one slow second open (b449e) per pending open (it used to start a fresh one on every manager tick while the first open hung on a dead link: storms of 35..60 subs in ~1 s), the LIVEPICK mark on every call open, and no new call / slow-open sub while a connection has 3 fresh (< 2 s) subs that received nothing | `HS2_L485_CALLOPEN` (on) | both | `=0` |
+| l476..l480d experiments and a debug trace (CALLPEND and CALLLIVE failed their A/B) | `HS2_L480D_CALLPEND`, `HS2_L480D_CALLLIVE`, `HS2_L476_JOINRES`, `HS2_L476_JOINPRIM`, `HS2_L480C_DBG` (off) | both | - |
+| open-path trace (lab, only with `HS2_MCONN_TRACE`) | no key | both | - |
+
+Unchanged from rel69r-rc15 and still on: the light-user hedge (HEDGE8, HEAVY_KBPS=32, HEDGE_NOWAIT), JOINRES, PACEFIX,
+PICKCAP=2 + CAPLAT, DRAINFAST, DRAINSMOOTH, UPGSAFE and the other b449 fixes.
+
+Installer (`install.sh`, root file == `hs2-src/install/install.sh`): byte-identical to rel69r-rc15 / rc14 (sha256
+`60404d42…`). `hs2-src/install/install.sh` on the source branch did not change between `c043866f` and `f3739759`, so
+the published installer is kept.
+
+Binary sha256 `74f24c5337f87481b0d2ecd3dc6c9443de7dde6eb76c0e6f5eaf76eae93cd58e` (`[build rel69r-rc15p1]`, the exact production bytes). Lab results and rollback: `RELEASE-rel69r15p1.md`.
+
 ## rel69r-rc15 — GitHub release candidate 2026-11-25: rel69r-rc14 + light-user hedge (K4M2, rate-based heavy rule, no-wait hedge open, ext cap bit 18) + call join resend (JOINRES) + on-time ZDU drain end (PACEFIX)
 
 Source = branch rel69r-rc15 `c043866f` (engine code = `93438864`; `c043866f` adds only README rows and lab notes;

@@ -63,6 +63,16 @@ func (m *mConn) b449SlowOpenTickLocked(now time.Time) time.Duration {
 	if w := so - el; w > 0 {
 		return w
 	}
+	if l485CallOpen.Load() { // l485 CALLOPEN (mconn_l485_callopen.go): one second open per pending open
+		if m.l485SoT0.Equal(m.lightOpenT0) {
+			l485Stat.soDup.Add(1)
+			return 0
+		}
+		if m.l485FreshCapLocked(now) {
+			return 200 * time.Millisecond
+		}
+		m.l485SoT0 = m.lightOpenT0
+	}
 	m.lightOpen2 = true
 	b449SlowOpenStat.opens.Add(1)
 	avoid := make([]any, 0, len(m.subs)+len(m.deadKeys))
@@ -70,6 +80,7 @@ func (m *mConn) b449SlowOpenTickLocked(now time.Time) time.Duration {
 		avoid = append(avoid, avoidKey(s.key))
 	}
 	avoid = append(avoid, m.deadAvoidLocked()...)
+	avoid = l485Live(avoid) // l485 CALLOPEN
 	go m.openLight2(avoid)
 	return 0
 }

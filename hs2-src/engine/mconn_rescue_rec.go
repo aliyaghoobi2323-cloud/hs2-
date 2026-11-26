@@ -357,6 +357,7 @@ func (m *mConn) rrStart() {
 		}
 	}
 	avoid = rescueJoinAvoid(avoid, left, silent) // rs145
+	avoid = l480dCallLive(l480dCallPend(avoid))  // l480d CALLPEND + CALLLIVE (mconn_l480d_callpend.go)
 	m.mu.Unlock()
 	sub, key, err := m.open(planeLight, avoid)
 	m.mu.Lock()

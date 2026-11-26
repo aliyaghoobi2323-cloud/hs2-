@@ -266,6 +266,7 @@ func (m *mConn) callStuckLocked(live []*msub, now time.Time) (gave bool, poll ti
 		avoid = append(avoid, avoidKey(s.key))
 	}
 	avoid = append(append(avoid, m.deadAvoidLocked()...), callStuckMark{path: path})
+	avoid = l480dCallLive(avoid) // l480d CALLLIVE (mconn_l480d_callpend.go)
 	m.lightOpening = true
 	callStuckOpened.Add(1)
 	m.tr.ev("call: stuck on path %s (gap %v busy %v): open a fresh sub off it", path, gap, busy)

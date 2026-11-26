@@ -100,6 +100,7 @@ func (m *mConn) callRescueLocked(live []*msub, now time.Time) bool {
 			avoid = append(avoid, avoidKey(s.key))
 		}
 		avoid = append(append(avoid, m.deadAvoidLocked()...), callRescueMark{})
+		avoid = l480dCallLive(l480dCallPend(avoid)) // l480d CALLPEND + CALLLIVE (mconn_l480d_callpend.go)
 		callRescueOpened.Add(1)
 		m.tr.ev("call: every sub on a lowered path: open a fresh sub off it")
 		go m.openLight(avoid)

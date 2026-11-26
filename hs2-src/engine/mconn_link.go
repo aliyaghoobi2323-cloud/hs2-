@@ -612,6 +612,7 @@ func (e *mconnEdge) pickFirstLite(p mPlane, avoid []any) (Link, func(), bool, bo
 	if !ok {
 		return nil, nil, false, false
 	}
+	l, rel = e.l480FirstPick(l, rel) // l480b NEWPICK (mconn_l480_stick.go)
 	if zduOn.Load() {
 		// ZDU (zdu_pin.go): pickWait knows no pin; a link of another
 		// instance gives way to the pinned placement
@@ -761,6 +762,11 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 	}
 	obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
 	mc.tr.setPort(port)
+	if mtracePort != 0 { // l478 trace: map a client port to the conn id
+		if c, ok := user.(interface{ RemoteAddr() net.Addr }); ok {
+			mc.tr.ev("l478: user %v", c.RemoteAddr())
+		}
+	}
 	mc.cp331SetPort(user) // HS2_CALLPATH_LOG (mconn_cp331.go)
 	// HS2_MCONN_STRIPE needs HS2_MCONN_DEADLINE_FIX: it upgrades raw
 	// connections at full rate, where the stale wake deadline reset 4 of ~30

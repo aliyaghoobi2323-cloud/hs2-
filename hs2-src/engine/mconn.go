@@ -444,6 +444,10 @@ type msub struct {
 	dcB342No   bool          // b342: a fast-switch no-candidate episode counted (under m.mu)
 	b270ResAt  time.Time     // b270: last txDark resend look (mconn_b270.go)
 	b270End    uint64        // b270: end of the chunks a txDark resend already covered
+	l477Rd     int64         // l477: the link's lastRd when a tail resend of this dark episode went (0: none)
+	l485Join   int64         // l485: lastRecv at the join (monoNano); equal to lastRecv while nothing was received
+	l480RxN    int           // l480 trace: chunks traced on this sub (l480RxTraceLocked)
+	l477End    uint64        // l477: end of what this episode's tails covered
 	b270Trig   bool          // b270: half dead at the last visit
 	wrLo, wrHi uint64        // b262: the newest contiguous DATA range its writer handed to its stream (mconn_b262.go)
 	// under m.r.mu (hs119, HS2_MCONN_STRIPE_KEEPSTALL): bytes this sub put
@@ -673,6 +677,7 @@ type mConn struct {
 	b449TwUntil time.Time
 	lightOpenT0 time.Time    // b449e: when the pending light open started (mconn_b449_slowopen.go)
 	lightOpen2  bool         // b449e: the slow open's second open is pending
+	l485SoT0    time.Time    // l485: the lightOpenT0 the slow open already doubled
 	b449capW    atomic.Int32 // b449e CAPWAIT: picks of this conn waiting for a b457 cap slot now
 	b449capEnd  atomic.Int64 // b449e CAPWAIT: monoNano when the last such wait ended
 
@@ -699,6 +704,12 @@ type mConn struct {
 	b449P       *msub
 	b449Cnt     uint32
 	b449At      time.Time
+	l478N       int   // l478: dark opens in the current silence (b449DarkOpenLocked)
+	l480Old     *msub // l480 STICK: the dark primary l478 moved off (mconn_l480_stick.go)
+	l480New     *msub // ... and the live sub that took its place
+	l480Rd      int64 // ... the old link's lastRd at the move
+	l480TrN     int   // l480 trace: sends still to trace after a move
+	l480ReAt    int64 // l480 STICK: when the old link read again (ctrlNow; 0: not yet)
 	b449DarkRx  int64 // Iran: the receive time whose silence had its dark open (b449DarkOpenLocked)
 	lastPSwitch time.Time
 	dc          dcConn    // HS2_MCONN_DARKCALL (mconn_darkcall.go), under mu
@@ -965,6 +976,7 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	s.bulk.Store(bulk)
 	now := time.Now()
 	s.lastRecv.Store(monoNano(now))
+	s.l485Join = s.lastRecv.Load() // l485 CALLOPEN (mconn_l485_callopen.go)
 	s.lastPush = now
 	if m.sendOff > 0 && !bulk && !m.earlyReplayLocked(s, now) { // HS2_LITE_HEDGE2: given every byte from 0
 		s.lastHole = now // it lacks what was sent before it joined
@@ -985,7 +997,12 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	m.setPrimaryLocked()
 	m.refreshLiteDualLocked()
 	m.tr.ev("sub+ %d bulk=%v key=%p sendOff=%d subs=%d", s.idx, bulk, key, m.sendOff, len(m.subs))
-	m.rc15fJoinResLocked(s, now) // rc15f HS2_RC15F_JOINRES (mconn_rc15f_joinres.go)
+	m.l485TraceOpenLocked(s, key) // l485 trace (mconn_l485_trace.go)
+	m.rc15fJoinResLocked(s, now)  // rc15f HS2_RC15F_JOINRES (mconn_rc15f_joinres.go)
+	m.l476JoinResLocked(s, now)   // l476 HS2_L476_JOINRES (mconn_l476_joinres.go)
+	if !bulk {
+		m.l477TailResLocked(s, now, ctrlNow()) // l477 HS2_L477_TAILRES (mconn_l477_tailres.go)
+	}
 	return s
 }
 
@@ -1000,6 +1017,11 @@ func (m *mConn) removeSubLocked(s *msub) {
 }
 
 func (m *mConn) setPrimaryLocked() {
+	m.setPrimary0Locked()
+	m.l480StickPrimaryLocked() // l480 HS2_L480_STICK (mconn_l480_stick.go)
+}
+
+func (m *mConn) setPrimary0Locked() {
 	if pp := m.prefPrimary; pp != nil {
 		if !pp.retired && !pp.bulk.Load() && slices.Contains(m.subs, pp) {
 			m.primary.Store(pp)
@@ -1152,6 +1174,9 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			m.sendOff += uint64(c.n)
 			m.earlyKeepLocked(c) // HS2_LITE_HEDGE2
 			p.push(c)
+			if m.tr != nil && m.l480TrN > 0 {
+				m.l480TxTraceLocked(c, "one-copy")
+			}
 			if !m.dupOff && m.h3Heavy {
 				hedge3Stat.oneCopyB.Add(uint64(c.n))
 			} else if !m.dupOff && m.h3 && rc15dBursts > 0 {
@@ -1195,8 +1220,9 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			cold = time.Now().Add(-mLiteIdle / 2)
 		}
 		p := m.primary.Load()
+		sk := m.l480SkipSubLocked() // l480 STICK: no copies on the dark old primary
 		for _, s := range m.subs {
-			if s.retired {
+			if s.retired || s == sk {
 				continue
 			}
 			dark := b262DarkLocked(s)
@@ -1237,7 +1263,7 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			if s.retired {
 				continue
 			}
-			if s.fits(c.n) {
+			if s != sk && s.fits(c.n) {
 				s.push(c)
 				continue
 			}
@@ -1247,6 +1273,9 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			s.lastHole = now      // a full queue misses this copy
 			s.noteMiss(m.sendOff) // cs221
 			obs.mconnMissed.Add(1)
+		}
+		if m.tr != nil && m.l480TrN > 0 {
+			m.l480TxTraceLocked(c, "dup")
 		}
 		if fit > 1 {
 			obs.mconnDupBytes.Add(uint64(c.n * (fit - 1)))
@@ -1902,6 +1931,10 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 		}
 		if end <= r.next || r.coveredLocked(off, end) {
 			m.traceDupLocked(s, off, end, n)
+			if m.tr != nil && s.idx >= 2 && s.l480RxN < 30 {
+				s.l480RxN++
+				m.tr.ev("l480 rx: dup [%d,%d) on sub %d (next %d)", off, end, s.idx, r.next)
+			}
 			r.mu.Unlock()
 			putChunk(c) // the other copy came first
 			return
@@ -1917,8 +1950,12 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			if off == 0 && m.iran {
 				hedgeNoteFirst(m, s) // HS2_LITE_HEDGE2: which sub's copy came first
 			}
+			hadGap, next0 := len(r.ooo) > 0, r.next
 			r.appendReadyLocked(compactRecv(c, r.next, c.buf[r.next-off:n], r.head < len(r.ready)))
 			r.pullLocked()
+			if m.tr != nil {
+				m.l480RxTraceLocked(s, off, end, next0, hadGap, true) // l480 trace (mconn_l480_stick.go)
+			}
 			r.lastProgress = time.Now()
 			r.cond.Broadcast()
 			m.traceFirstLocked(s, end, n)
@@ -1949,6 +1986,9 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			liteBud.add(time.Now().Unix(), n, 0)
 		}
 		r.insertLocked(compactRecv(c, off, c.buf[:n], len(r.ooo) > 0))
+		if m.tr != nil {
+			m.l480RxTraceLocked(s, off, end, r.next, !wasEmpty, false) // l480 trace (mconn_l480_stick.go)
+		}
 		m.traceFirstLocked(s, end, n)
 		m.traceRecvLocked(s, n)
 		r.mu.Unlock()
@@ -2297,7 +2337,8 @@ func (m *mConn) subGone(s *msub, cause error) {
 			break
 		}
 		endErr, rst = errMConnLost, true
-		subLostResets.Add(1) // r68fix2 (mconn_sub_resend.go)
+		subLostResets.Add(1)                     // r68fix2 (mconn_sub_resend.go)
+		m.l480cLostLocked(s, "sub", cause, lost) // l480c HS2_L480C_DBG
 		subResendLog()
 	default:
 		if !m.peerFin && !m.closing {
@@ -2608,6 +2649,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					avoid = m.callAvoidLocked(append(avoid, m.deadAvoidLocked()...)) // HS2_MCONN_CALL_AVOID
 					avoid = m.rescueAvoidLocked(avoid, live[0].key)                  // HS2_LB_RESCUE_CALLFREE
 					avoid = m.callRescueAvoidLocked(avoid, now)                      // HS2_LB_CALL_RESCUE
+					avoid = l480dCallLive(l480dCallPend(avoid))                      // l480d CALLPEND (mconn_l480d_callpend.go)
 					go m.openLight(avoid)
 				}
 			}
@@ -2731,6 +2773,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 						avoid = append(avoid, avoidKey(s.key))
 					}
 					avoid = append(avoid, m.deadAvoidLocked()...)
+					avoid = l480dCallLive(l480dCallPend(avoid)) // l480d CALLPEND (mconn_l480d_callpend.go)
 					go m.openLight(avoid)
 				}
 			}

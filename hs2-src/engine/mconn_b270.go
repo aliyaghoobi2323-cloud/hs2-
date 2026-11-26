@@ -115,7 +115,16 @@ func (m *mConn) b270HalfDeadLocked(s *msub, now time.Time, nowc int64) bool {
 // same bytes every b270TxResEvery when b's delivery is unknown
 // (cs223SkipDelivered keeps everything then).
 func (m *mConn) b270ResendLocked(s, b *msub, rep bool, now time.Time) int {
-	if !cs223CallResend.Load() || !stripeResend.Load() || m.stN != 0 || !m.callKeepLocked() || m.ended {
+	if !m.callKeepLocked() {
+		return 0
+	}
+	return m.b270ResendKeptLocked(s, b, rep, now)
+}
+
+// b270ResendKeptLocked: b270ResendLocked's resend without its call gate (l476
+// gates on any kept lite conn).
+func (m *mConn) b270ResendKeptLocked(s, b *msub, rep bool, now time.Time) int {
+	if !cs223CallResend.Load() || !stripeResend.Load() || m.stN != 0 || m.ended {
 		return 0
 	}
 	all := b270SeqChunks(s, now)

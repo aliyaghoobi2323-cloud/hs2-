@@ -93,6 +93,7 @@ func (m *mConn) hedgeStartLocked(firstKey any) {
 		}
 		avoid = append(avoid, hedgeMark{})
 	}
+	avoid = l480WithPend(avoid) // l480b NEWPICK (mconn_l480_stick.go)
 	go m.openHedge(avoid)
 }
 

@@ -325,9 +325,19 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 	if !mconnCall.Load() || !m.lite {
 		return false, false
 	}
+	var sk *msub
+	if m.l480Old != nil {
+		if sk = m.l480SkipSubLocked(); sk != nil && !l480dPairSk.Load() {
+			l480Stat.nopair.Add(1)
+			return false, false // l480 STICK: no pair on the dark old subs (mconn_l480_stick.go)
+		}
+	}
 	var live [mCallSubsMax + 2]*msub
 	n, nLate := 0, 0
 	for _, s := range m.subs {
+		if s == sk { // l480d PAIRSK: the pair goes on, the stuck old sub left out (mconn_l480d_callpend.go)
+			continue
+		}
 		if !s.retired && !s.dead && n < len(live) {
 			live[n] = s
 			n++
@@ -348,8 +358,11 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 			}
 		}
 		cand, n = on[:k], k
-	} else if n < 3 {
+	} else if n < 3 && (sk == nil || n < 2) {
 		return false, false
+	}
+	if sk != nil {
+		l480dStat.pairSk.Add(1)
 	}
 	var pick [2]*msub
 	k := 0
@@ -376,6 +389,9 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 		if s != pick[0] && (k < 2 || s != pick[1]) {
 			s.noteMiss(m.sendOff)
 		}
+	}
+	if sk != nil {
+		sk.noteMiss(m.sendOff) // l480d PAIRSK: the stuck old sub lacks c too
 	}
 	if k < 2 {
 		for _, s := range all {
@@ -404,12 +420,16 @@ func (m *mConn) callMoreSubsLocked(live []*msub) time.Duration {
 	if d := time.Until(m.lightRetryAt); d > 0 {
 		return d
 	}
+	if m.l485FreshCapLocked(time.Now()) { // l485 CALLOPEN (mconn_l485_callopen.go)
+		return 200 * time.Millisecond
+	}
 	m.lightOpening = true
 	avoid := make([]any, 0, len(live)+len(m.deadKeys))
 	for _, s := range live {
 		avoid = append(avoid, avoidKey(s.key))
 	}
 	avoid = m.callAvoidLocked(append(avoid, m.deadAvoidLocked()...))
+	avoid = l480dCallLive(l480dCallPend(avoid)) // l480d CALLPEND + CALLLIVE (mconn_l480d_callpend.go)
 	m.tr.ev("call: open pair sub %d", len(live)+1)
 	go m.openLight(avoid)
 	return 200 * time.Millisecond
@@ -553,6 +573,8 @@ func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) 
 
 // pickPlaneCallSkip is pickPlaneCall without the ZDU check.
 func (m *LinkManager) pickPlaneCallSkip(p mPlane, avoid []any) (Link, func(), bool) {
+	avoid = m.l480LiveAvoid(avoid) // l480 LIVEPICK (mconn_l480_stick.go)
+	avoid = m.l480PendAvoid(avoid) // l480b NEWPICK (mconn_l480_stick.go)
 	if skipCutOn(p) && !hasSkipCutMark(avoid) {
 		if l, rel, ok := m.pickPlaneCallOne(p, withSkipCut(avoid)); ok {
 			b340Note(p, l, true)

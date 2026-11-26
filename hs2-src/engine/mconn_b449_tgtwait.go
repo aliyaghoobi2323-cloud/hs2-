@@ -156,6 +156,7 @@ func (m *mConn) b449TwTickLocked(now time.Time) (over bool, d time.Duration) {
 		m.b449TwDead = nil
 		b449TwStat.expired.Add(1)
 		subLostResets.Add(1)
+		m.l480cLostLocked(nil, "tw", nil, true) // l480c HS2_L480C_DBG
 		b449Log()
 		return true, 0
 	}
