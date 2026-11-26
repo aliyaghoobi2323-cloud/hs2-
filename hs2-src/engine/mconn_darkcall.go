@@ -120,7 +120,7 @@ func darkcallLogLine() string {
 		s.switched.Load(), s.covered.Load(), s.short.Load(), s.noCand.Load(), s.rrec.Load(), s.rrRx.Load(), s.rrNo.Load(), s.rearm.Load(),
 		s.okAfter.Load(), s.badAfter.Load(), s.capped.Load(), s.resent.Load()>>10, s.moved.Load()>>10, s.again.Load(), s.uncapAll.Load(),
 		cs221Stat.held.Load(), cs221Stat.heldB.Load()>>10, cs221Stat.skipQ.Load(), cs221Stat.rxLive.Load(), cs221Stat.samePair.Load(), dcOverLog.drop.Load()) +
-		cs223LogPart() + cs224LogPart() + cs226LogPart() + dc254LogPart() + xs261LogPart() + b262LogPart() + b262RepLogPart() + b270LogPart() + rc15fLogPart() + l476LogPart() + l477LogPart() + l478LogPart() + l480LogPart() + l480NewLogPart() + b274LogPart() + b296LogPart() + b342LogPart()
+		cs223LogPart() + cs224LogPart() + cs226LogPart() + dc254LogPart() + xs261LogPart() + b262LogPart() + b262RepLogPart() + b270LogPart() + rc15fLogPart() + l476LogPart() + l477LogPart() + l478LogPart() + l480LogPart() + l480NewLogPart() + b274LogPart() + b296LogPart() + b342LogPart() + l487LogPart() + l488LogPart()
 }
 
 // dcSub: a sub's link evidence (under m.mu).
@@ -264,6 +264,7 @@ func darkcallTick(now time.Time, nowc int64) {
 		}
 		return true
 	})
+	l487Tick(now, nowc) // l487 HS2_L487_CALLDETECT
 }
 
 func (m *mConn) dcIsCallLocked(now time.Time) bool {
@@ -439,6 +440,7 @@ func (m *mConn) darkcallLiteLocked(now time.Time, nowc int64, lite bool) bool {
 			return false
 		}
 		darkcallStat.noCand.Add(1)
+		m.l487NoCandLocked(lite) // l487
 		if lite {
 			cs226Stat.noCand.Add(1)
 		}

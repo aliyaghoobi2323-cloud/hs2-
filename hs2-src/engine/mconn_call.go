@@ -89,6 +89,7 @@ type callState struct {
 	txRecvd  uint64 // receive offset at the window start
 
 	callLikeAt   time.Time // the last call-like send window (HS2_LB_CALL_RESCUE)
+	l487Reg      bool      // l487 HS2_L487_CALLDETECT: in l487Conns (mconn_l487_calldetect.go)
 	callRescueAt time.Time // no fresh call-rescue sub before (lb_call_rescue.go)
 
 	// HS2_LB_CALL_STUCK (lb_call_stuck.go)
@@ -225,7 +226,9 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 	if like {
 		m.callLikeAt = now
 		m.b458Stamp(now)
+		m.l487RegLocked() // l487 HS2_L487_CALLDETECT
 	}
+	m.l487DbgRollLocked(now, w, sent, got, like) // l487 lab trace
 	was := m.callOn
 	if !like && m.dc254CopyHoldLocked(now, w, sent, was) {
 		like = true // dc254: a stall does not drop a copying call to one copy

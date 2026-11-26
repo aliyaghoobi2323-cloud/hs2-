@@ -136,7 +136,11 @@ type linkMeter struct {
 	// pendSince: ctrlNow of the first write after the last read (bytes sent
 	// that nothing has answered since).
 	pendSince atomic.Int64
-	stalls    atomic.Uint64 // write errors / timeouts
+	// l488 FRESHBACK (mconn_l488_freshback.go): ctrlNow of the read that
+	// ended a pending silence (0: not recovering), and the edge link's socket.
+	l488Rec atomic.Int64
+	l488Tcp *net.TCPConn
+	stalls  atomic.Uint64 // write errors / timeouts
 	// users: user connections riding this link on the exit; the LB
 	// rebalance retires only a link with none (lb_auto.go, lbRetirable).
 	users atomic.Int32
@@ -253,7 +257,9 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 	if n > 0 {
 		c.m.rdBytes.Add(uint64(n))
 		if rescueOn.Load() {
-			c.m.lastRd.Store(ctrlNow())
+			now := ctrlNow()
+			l488OnRead(c.m, now)
+			c.m.lastRd.Store(now)
 		}
 	}
 	return n, err

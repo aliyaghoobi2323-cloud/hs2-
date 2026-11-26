@@ -331,7 +331,7 @@ func (m *LinkManager) l480PendAvoid(avoid []any) []any {
 		if skip[k] {
 			continue
 		}
-		if l480LinkSilent(ml.mtr, nowc) {
+		if l488Avoid(ml.mtr, nowc) {
 			add = append(add, k)
 		} else {
 			other++
@@ -352,13 +352,13 @@ func (m *LinkManager) l480PendAvoid(avoid []any) []any {
 // kept returning another silent, lightly loaded link); with no other link
 // (or the pick still silent), the first pick is kept.
 func (e *mconnEdge) l480FirstPick(l Link, rel func()) (Link, func()) {
-	if !l480NewPick.Load() || !l480LinkSilent(linkMeterOf(l), ctrlNow()) {
+	if !l480NewPick.Load() || !l488Avoid(linkMeterOf(l), ctrlNow()) {
 		return l, rel
 	}
 	skip := append(slices.Clip(e.failed), l)
 	skip = append(skip, e.lm.l480SilentLinks(skip)...)
 	if ol, orel, ok := e.lm.pickSkip(skip); ok {
-		if !l480LinkSilent(linkMeterOf(ol), ctrlNow()) {
+		if !l488Avoid(linkMeterOf(ol), ctrlNow()) {
 			rel()
 			l480NewStat.first.Add(1)
 			return ol, orel
@@ -375,7 +375,7 @@ func (m *LinkManager) l480SilentLinks(skip []Link) []Link {
 	var out []Link
 	m.mu.RLock()
 	for _, ml := range m.links {
-		if ml.aliveCheap() && !slices.Contains(skip, ml.link) && l480LinkSilent(ml.mtr, nowc) {
+		if ml.aliveCheap() && !slices.Contains(skip, ml.link) && l488Avoid(ml.mtr, nowc) {
 			out = append(out, ml.link)
 		}
 	}

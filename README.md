@@ -865,8 +865,8 @@ systemctl daemon-reload
 `systemd-run`, so a dropped ssh session cannot stop them half-way:
 
 ```bash
-cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r15p1 && chmod 755 /usr/local/bin/hs2-rel69r15p1
-systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r15p1 74f24c53
+cp hs2-linux-amd64 /usr/local/bin/hs2-rel69r15p3 && chmod 755 /usr/local/bin/hs2-rel69r15p3
+systemd-run --collect --unit=hs2zduinst /root/zdu/hs2-zdu-install.sh $U /usr/local/bin/hs2-rel69r15p3 e67e050a
 cat /root/hs2-safe-deploy.$U.out                  # OK … or the reason it stopped
 ```
 
@@ -1018,6 +1018,9 @@ Restore the old behaviour:
   since hs133 the receiver's hole rooms open only toward a peer announcing keepstall (kindInfo ext bit10) and
   are capped (`HS2_MCONN_HOLE_ROOM_MB`, default 256 MiB per connection; `HS2_MCONN_HOLE_ROOM_GLOBAL_MB`, default
   512 MiB per process), so a rel63 side next to an older one stays memory-bounded in the dark;
+- **before rel69r-rc15p3** (darkcall visits every call-like connection, recovering links left out of new light
+  picks): `Environment=HS2_L487_CALLDETECT=0` and `HS2_L488_FRESHBACK=0` (both sides; no wire change, either side
+  alone is fine; see CHANGELOG rel69r-rc15p3);
 - **before rel69r-rc15p1** (sticky primary, live-link picks, fast reopen with tail resend, call open fixes):
   `Environment=HS2_L480=0` and `HS2_L485_CALLOPEN=0` (both sides; no wire change, either side alone is fine);
   `HS2_L480=0` turns off STICK, LIVEPICK, NEWPICK, FASTOPEN, TAILRES and PAIRSK at once (see CHANGELOG
@@ -1447,6 +1450,9 @@ older behaviour.
 | `HS2_L480D_PAIRSK` (l480d, rel69r-rc15p1) | on with `HS2_L480` | both | while a STICK holds, a call pair is still placed (the old stuck sub left out) instead of falling back to the plain duplicating path (real WAN: calls stuck > 3 s back to rel69r-rc15) |
 | `HS2_L485_CALLOPEN` (l485, rel69r-rc15p1) | on (`=0` off) | both | one slow second open (b449e) per pending open, the LIVEPICK mark on every call open, and no new call / slow-open sub while a connection has 3 fresh (< 2 s) subs that received nothing; no wire change (lab: call p99 3838 -> 854 ms, longest call stall -4.5 s, nothing worse) |
 | `HS2_L480D_CALLPEND`, `HS2_L480D_CALLLIVE`, `HS2_L476_JOINRES`, `HS2_L476_JOINPRIM`, `HS2_L480C_DBG` (l476-l480d, lab) | off | both | experiments and a debug trace kept in the tree, not release settings (CALLPEND / CALLLIVE failed their A/B) |
+| `HS2_L487_CALLDETECT` (l487, rel69r-rc15p3) | on (`=0` off) | both | a call-like connection that is not rescue-capable (its first sub opened hedged, non-raw) is registered for darkcall too, so its dark primary is proven, switched to a live sub, and a fresh sub is asked for when no live candidate is left; finished connections leave the list; no wire change (lab: call samples > 3 s -176 a run, call freeze episodes > 3 s -2.3 a run, longest call stall -1316 ms, light p99 -170 ms) |
+| `HS2_L487_DBG` (l487, lab) | off | both | darkcall registration / kick trace, not a release setting |
+| `HS2_L488_FRESHBACK`, `HS2_L488_REC_MAX_MS`, `HS2_L488_REC_NOTCP_MS` (l488, rel69r-rc15p3) | on (`=0` off) / 5000 / 1500 | both (picks on Iran) | a link whose read resumes after >= 600 ms of pending silence is "recovering" until its TCP_INFO shows no retransmit backoff (at most 5 s; 1.5 s without a socket); a new light connection's first sub and hedge sub leave it out (none left = pick unchanged); no wire change (lab: light p99.9 2874 -> 188 ms, light samples > 2 s 32 -> 3) |
 | `HS2_B340_CUTCLEAR` (b340, rel69p-rc2) | on (`=0` off) | both | the report carries a per-path OK bit (3 clean raw readings in a row while cut); the steering side keeps such a path lowered but no longer cut-marked, so rescue-cut stops dropping copies on a recovered path |
 | `HS2_B405_CMSPREAD` (b405, lab) | off (`=1` on) | Iran (edge) | callmove target spread: a move picks among eligible paths within 0.05 % loss of the best (still `cmDelta` under the source and inside the b338 damper), fewest moves in the last 2 s first; a path that took 2 moves in 2 s is no target; none left: no move this tick (`spread-held` in the callmove log line). sk402: same-tick moves herded onto one path |
 | `HS2_B336_CALLMOVE` lab hook `HS2_B338_CM_HOLD_MS` (lab) | unset | Iran (edge) | a move is not released before it is this old (lab only; not in the table) |

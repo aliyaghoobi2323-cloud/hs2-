@@ -380,7 +380,7 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 // because the edge's smux role is the same either way — only who established the
 // TLS connection differs.
 func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLink, error) {
-	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}
+	mtr := &linkMeter{statsPoll: make(chan struct{}, 1), l488Tcp: car.TCPConn()}
 	sess, why, err := newSession(car.RawConn(), false, sampler, mtr)
 	if err != nil {
 		car.Close()

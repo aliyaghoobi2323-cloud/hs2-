@@ -19,6 +19,28 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel69r-rc15p3 — GitHub release 2026-11-26: rel69r-rc15p1 + darkcall for every call-like connection (CALLDETECT, rc15p2) + recovering links left out of new light picks (FRESHBACK)
+
+Source = branch l488 `5a481ff2` (= rel69r-rc15p1 `f3739759` + l487 CALLDETECT + l488 FRESHBACK; `5a481ff2` itself is
+gofmt only; the release gate commit `36a5168c` adds only lab notes). rel69r-rc15p2 (= rc15p1 + CALLDETECT) was not
+published on its own; this release covers it. envdef unchanged; the new keys are read by the engine. No wire change:
+no new record type, header or capability bit, so mixed versions with rel69r-rc15p1 / rc15 are safe either way.
+
+| change | key (default) | side | off |
+|---|---|---|---|
+| l487 **CALLDETECT**: a call-like connection that is not rescue-capable (first sub opened hedged, non-raw, so it was never on darkcall's list) is registered for darkcall too: its dark primary is proven and switched to a live sub, and a fresh sub is asked for when no live candidate is left; finished connections leave the list | `HS2_L487_CALLDETECT` (on) | both | `=0` |
+| l488 **FRESHBACK**: a link whose read resumes after >= 600 ms of pending silence is "recovering" until its TCP_INFO shows no retransmit backoff (at most `REC_MAX_MS`; `REC_NOTCP_MS` without a socket); a new light connection's first sub and hedge sub leave it out (none left = pick unchanged) | `HS2_L488_FRESHBACK` (on), `HS2_L488_REC_MAX_MS` (5000), `HS2_L488_REC_NOTCP_MS` (1500) | both (picks on Iran) | `=0` |
+| l487 darkcall registration / kick trace (lab) | `HS2_L487_DBG` (off) | both | - |
+
+Unchanged from rel69r-rc15p1 and still on: the HS2_L480 family (STICK, LIVEPICK, NEWPICK, FASTOPEN, TAILRES,
+PAIRSK), CALLOPEN, the light-user hedge, JOINRES, PACEFIX, PICKCAP=2 + CAPLAT, DRAINFAST, DRAINSMOOTH, UPGSAFE.
+
+Installer (`install.sh`, root file == `hs2-src/install/install.sh`): byte-identical to rel69r-rc15p1 / rc15 (sha256
+`60404d42…`). `hs2-src/install/install.sh` on the source branch did not change between `f3739759` and `5a481ff2`,
+so the published installer is kept.
+
+Binary sha256 `e67e050a3a42e3fef8f8d29d2f61e788f4fc6f45af3227f64f26a104954935b0` (`[build rel69r-rc15p3]`, the exact production bytes). Lab results (lab only; no WAN lab any more) and rollback: `RELEASE-rel69r15p3.md`.
+
 ## rel69r-rc15p1 — GitHub release 2026-11-26: rel69r-rc15 + sticky primary and live-link picks for light users (HS2_L480 family: STICK, LIVEPICK, NEWPICK, FASTOPEN, TAILRES, PAIRSK) + call open fixes (CALLOPEN)
 
 Source = branch l485 `f3739759` (executable code = `151807c0`; `1c02ff8f` adds README rows and `f3739759` adds only
